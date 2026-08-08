@@ -5,7 +5,6 @@ import type {
   RuntimeDaemonRollbackInput,
   RuntimeDaemonRollbackResult,
   RuntimeIntegrationDomainStatus,
-  RuntimeSubscription,
 } from '../sdk-runtime.js';
 import type { RuntimeDaemonMethod } from './protocol.js';
 import {
@@ -45,7 +44,6 @@ export function createRuntimeDaemonManagementController(input: {
 
 class DaemonManagementController implements RuntimeDaemonManagementController {
   private readonly clients = new Set<string>();
-  private readonly runtimeEvents: RuntimeSubscription;
   private revision = 0;
   private activeMutations = 0;
   private readonly activeMutationMethods = new Map<RuntimeDaemonMethod, number>();
@@ -65,9 +63,6 @@ class DaemonManagementController implements RuntimeDaemonManagementController {
     readonly orphanExitMs?: number;
     readonly integrationStatuses?: () => readonly RuntimeIntegrationDomainStatus[];
   }) {
-    this.runtimeEvents = input.runtime.events.subscribe({}, () => {
-      this.revision += 1;
-    });
   }
 
   armOrphanExitAfterReady(): void {
@@ -197,7 +192,6 @@ class DaemonManagementController implements RuntimeDaemonManagementController {
     if (this.closed) return;
     this.closed = true;
     this.cancelOrphanExitCheck();
-    this.runtimeEvents.close();
     this.clients.clear();
   }
 

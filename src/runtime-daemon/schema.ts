@@ -313,7 +313,7 @@ export const RUNTIME_DAEMON_METHOD_SCHEMAS = {
     params: objectSchema({ requestId: stringSchema }, ['requestId']),
     result: okSchema,
   },
-  'event.subscribe': { params: filterParamsSchema(eventFilterSchema()), result: subscriptionSchema() },
+  'event.subscribe': { params: filterParamsSchema(eventFilterSchema(), true), result: subscriptionSchema() },
   'event.unsubscribe': {
     params: objectSchema({ subscriptionId: stringSchema }, ['subscriptionId']),
     result: okSchema,
@@ -805,8 +805,11 @@ function runIdParamsSchema(): RuntimeDaemonJsonSchema {
   return objectSchema({ runId: stringSchema }, ['runId']);
 }
 
-function filterParamsSchema(filter: RuntimeDaemonJsonSchema): RuntimeDaemonJsonSchema {
-  return objectSchema({ filter });
+function filterParamsSchema(
+  filter: RuntimeDaemonJsonSchema,
+  required = false,
+): RuntimeDaemonJsonSchema {
+  return objectSchema({ filter }, required ? ['filter'] : []);
 }
 
 function diagnosticParamsSchema(): RuntimeDaemonJsonSchema {
@@ -1275,7 +1278,7 @@ function sessionDiagnosticsSchema(): RuntimeDaemonJsonSchema {
     runtimeMode: { enum: ['embedded', 'daemon'] },
     sessionId: stringSchema,
     observation: objectSchema({
-      cursor: integerSchema,
+      cursor: runtimeSessionCursorSchema(),
       transcriptRevision: stringSchema,
     }, ['cursor', 'transcriptRevision']),
     run: diagnosticRun,
@@ -1405,34 +1408,55 @@ function runStageSchema(): RuntimeDaemonJsonSchema {
 }
 
 function eventFilterSchema(): RuntimeDaemonJsonSchema {
-  return objectSchema({
-    sessionId: stringSchema,
-    runId: stringSchema,
-    type: {
-      oneOf: [stringSchema, arraySchema(stringSchema)],
-    },
-  });
+  return scopedEventFilterSchema();
 }
 
 function eventReplayFilterSchema(): RuntimeDaemonJsonSchema {
-  return objectSchema({
-    ...(eventFilterSchema().properties ?? {}),
-    sinceSeq: integerSchema,
+  return scopedEventFilterSchema({
+    after: runtimeSessionCursorSchema(),
     limit: integerSchema,
   });
+}
+
+function scopedEventFilterSchema(
+  extra: Readonly<Record<string, RuntimeDaemonJsonSchema>> = {},
+): RuntimeDaemonJsonSchema {
+  const common = {
+    type: { oneOf: [stringSchema, arraySchema(stringSchema)] },
+    ...extra,
+  };
+  return {
+    oneOf: [
+      objectSchema({ ...common, sessionId: stringSchema }, ['sessionId']),
+      objectSchema({ ...common, runId: stringSchema }, ['runId']),
+      objectSchema(
+        { ...common, sessionId: stringSchema, runId: stringSchema },
+        ['sessionId', 'runId'],
+      ),
+    ],
+  };
 }
 
 function runtimeEventSchema(): RuntimeDaemonJsonSchema {
   return objectSchema({
     id: stringSchema,
     seq: integerSchema,
+    cursor: runtimeSessionCursorSchema(),
     time: stringSchema,
     sessionId: stringSchema,
     runId: stringSchema,
     turnId: stringSchema,
     type: stringSchema,
     payload: {},
-  }, ['id', 'seq', 'time', 'sessionId', 'runId', 'type', 'payload'], true);
+  }, ['id', 'seq', 'cursor', 'time', 'sessionId', 'runId', 'type', 'payload'], true);
+}
+
+function runtimeSessionCursorSchema(): RuntimeDaemonJsonSchema {
+  return objectSchema({
+    sessionId: stringSchema,
+    journalEpoch: stringSchema,
+    seq: integerSchema,
+  }, ['sessionId', 'journalEpoch', 'seq']);
 }
 
 function permissionFilterSchema(): RuntimeDaemonJsonSchema {

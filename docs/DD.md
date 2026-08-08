@@ -176,6 +176,30 @@ being established. Non-terminal persisted runs become `interrupted` after an
 owner restart. Reconnection is explicit; automatic replay of an unknown
 in-flight operation is forbidden.
 
+Runtime event persistence is Session-owned. Each Session has an independent
+`sequence`, `sequence.lock`, and journal epoch under
+`.kodax/runtime/session-events/<encoded-session-id>/`; Run event bodies remain
+in their bounded `events.jsonl` files. A cursor is the complete
+`{ sessionId, journalEpoch, seq }` tuple and is comparable only within that
+Session journal. Public event subscriptions/replay require a `sessionId` or
+`runId`; a Run scope resolves its owning Session before cursor validation.
+Internal Run diagnostics may merge root and managed-child Session events by
+timestamp, but that aggregate has no resumable numeric order. Retention
+watermarks are keyed by both Session and journal epoch; legacy numeric or
+Session-only watermarks cannot invalidate a new journal. Every Run also keeps
+a durable journal-identity index, so a corrupted watermark remains attributable
+after all managed-child event rows have been trimmed and cannot poison an
+unrelated Session when that index is valid. If the index is absent or corrupt,
+non-membership is unknowable and cursor replay conservatively requires resync.
+Deleting a Session rotates its journal before the same ID can be reused. A
+persistence failure is latched only for the affected Session, so a blocked
+writer cannot poison other Session queues in the same process.
+There is no numeric-cursor compatibility path because it cannot detect journal
+replacement. Legacy Runtime-global event files are left untouched for audit
+and ignored by live replay. Inline, Worker, and daemon owners share this code,
+while `sessionEventJournal:1` prevents a new client from attaching to an old
+daemon with different ordering semantics.
+
 #### 3.1.1 Shared Coder daemon consistency (FEATURE_269)
 
 `sessions.observe(sessionId, listener)` installs a server subscription first,
@@ -718,6 +742,11 @@ A2A lives under `src/a2a` and is published through `@kodax-ai/kodax/a2a`:
   admitted handlers on close, and enforces fixed per-task/per-server/per-stream
   SSE limits. Its loopback listener rejects explicit Fetch-blocked ports and
   retries ephemeral allocation until the returned URL is Fetch-compatible.
+- Each Task owns one Runtime Session. High-frequency Runtime progress updates a
+  small per-Task cursor checkpoint under `runtime-cursors/`; semantic Task
+  transitions still atomically rewrite `tasks.json`. Restart overlays the
+  checkpoint before replay, avoiding full-store writes for every token/tool
+  event without weakening recovery.
 
 The external-Agent plane persists an internal immutable registration snapshot
 for each admitted route. It is not part of the public task DTO and contains no

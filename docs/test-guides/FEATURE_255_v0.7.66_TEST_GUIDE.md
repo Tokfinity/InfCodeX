@@ -81,15 +81,15 @@ try {
     clientInfo: { name: 'consumer-b', version: '0.7.66' },
     capabilities,
   });
+  const session = await first.sessions.create({ title: '0.7.66 consumer smoke', projectPath: homeDir });
   const events = [];
-  second.events.subscribe({}, (event) => {
+  second.events.subscribe({ sessionId: session.id }, (event) => {
     events.push(event.type);
     if (event.type !== 'permission.requested') return;
     const payload = event.payload;
     if (!payload || typeof payload !== 'object' || typeof payload.id !== 'string') return;
     void second.permissions.respond(payload.id, { type: 'allow_once' }, { runId: payload.runId });
   });
-  const session = await first.sessions.create({ title: '0.7.66 consumer smoke', projectPath: homeDir });
   const decision = await first.permissions.request({
     sessionId: session.id,
     runId: 'consumer-permission-run',
@@ -251,8 +251,12 @@ try {
     clientInfo: { name: 'kodax-space', title: 'KodaX Space', version: '0.1.29' },
     capabilities,
   });
+  const session = await repl.sessions.create({
+    sessionId: 'space-smoke-session',
+    title: 'Space shared Runtime smoke',
+  });
   const events = [];
-  space.events.subscribe({}, (event) => {
+  space.events.subscribe({ sessionId: session.id }, (event) => {
     events.push(event.type);
     if (event.type !== 'permission.requested') return;
     const payload = event.payload;

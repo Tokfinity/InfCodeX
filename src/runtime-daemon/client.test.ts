@@ -510,6 +510,7 @@ describe('runtime daemon client proxy', () => {
     const event: RuntimeEvent = {
       id: 'evt-1',
       seq: 1,
+      cursor: { sessionId: 'session-1', journalEpoch: 'epoch-session-1', seq: 1 },
       time: '2026-07-09T00:00:00.000Z',
       sessionId: 'session-1',
       runId: 'run-1',
@@ -541,7 +542,7 @@ describe('runtime daemon client proxy', () => {
       transport,
     });
     const seen: RuntimeEvent[] = [];
-    client.events.subscribe({}, (event) => seen.push(event));
+    client.events.subscribe({ sessionId: 'session-1' }, (event) => seen.push(event));
     await Promise.resolve();
 
     transport.emit(createRuntimeDaemonNotification('event', {
@@ -551,6 +552,7 @@ describe('runtime daemon client proxy', () => {
     const valid: RuntimeEvent = {
       id: 'evt-valid',
       seq: 2,
+      cursor: { sessionId: 'session-1', journalEpoch: 'epoch-session-1', seq: 2 },
       time: '2026-07-09T00:00:00.000Z',
       sessionId: 'session-1',
       runId: 'run-1',
@@ -571,6 +573,7 @@ describe('runtime daemon client proxy', () => {
     const valid: RuntimeEvent = {
       id: 'evt-replay-valid',
       seq: 2,
+      cursor: { sessionId: 'session-1', journalEpoch: 'epoch-session-1', seq: 2 },
       time: '2026-07-09T00:00:00.000Z',
       sessionId: 'session-1',
       runId: 'run-1',
@@ -591,7 +594,7 @@ describe('runtime daemon client proxy', () => {
       transport,
     });
 
-    await expect(client.events.replay()).resolves.toEqual([valid]);
+    await expect(client.events.replay({ sessionId: 'session-1' })).resolves.toEqual([valid]);
     await client.close();
   });
 
@@ -600,6 +603,7 @@ describe('runtime daemon client proxy', () => {
     const event: RuntimeEvent = {
       id: 'evt-early',
       seq: 1,
+      cursor: { sessionId: 'session-1', journalEpoch: 'epoch-session-1', seq: 1 },
       time: '2026-07-09T00:00:00.000Z',
       sessionId: 'session-1',
       runId: 'run-1',
@@ -624,7 +628,7 @@ describe('runtime daemon client proxy', () => {
     });
     const seen: RuntimeEvent[] = [];
 
-    client.events.subscribe({}, (item) => seen.push(item));
+    client.events.subscribe({ sessionId: 'session-1' }, (item) => seen.push(item));
     await flushAsyncNotifications();
 
     expect(seen).toEqual([event]);
@@ -654,6 +658,11 @@ describe('runtime daemon client proxy', () => {
         event: {
           id: `evt-unrelated-${seq}`,
           seq,
+          cursor: {
+            sessionId: 'session-unrelated',
+            journalEpoch: 'epoch-session-unrelated',
+            seq,
+          },
           time: '2026-07-09T00:00:00.000Z',
           sessionId: 'session-unrelated',
           runId: 'run-unrelated',
@@ -666,7 +675,7 @@ describe('runtime daemon client proxy', () => {
       subscriptionId: 'observe-target',
       snapshot: {
         runtimeId: 'runtime-client',
-        cursor: 0,
+        cursor: { sessionId: 'session-target', journalEpoch: 'epoch-session-target', seq: 0 },
         transcriptRevision: 'sha256:test',
         session: { id: 'session-target', title: 'Target' },
         transcript: null,
@@ -710,6 +719,7 @@ describe('runtime daemon client proxy', () => {
     const event: RuntimeEvent = {
       id: 'evt-after-snapshot',
       seq: 1,
+      cursor: { sessionId: 'session-1', journalEpoch: 'epoch-session-1', seq: 1 },
       time: '2026-07-09T00:00:01.000Z',
       sessionId: 'session-1',
       runId: 'run-1',
@@ -774,7 +784,7 @@ describe('runtime daemon client proxy', () => {
       subscriptionId: 'observe-sub-invalidated',
       snapshot: {
         runtimeId: 'runtime-daemon',
-        cursor: 0,
+        cursor: { sessionId: 'session-1', journalEpoch: 'epoch-session-1', seq: 0 },
         transcriptRevision: 'sha256:test',
         session: { id: 'session-1', title: 'Session' },
         transcript: null,
@@ -844,7 +854,7 @@ describe('runtime daemon client proxy', () => {
       subscriptionId: 'observe-sub-1',
       snapshot: {
         runtimeId: 'runtime-daemon',
-        cursor: 0,
+        cursor: { sessionId: 'session-1', journalEpoch: 'epoch-session-1', seq: 0 },
         transcriptRevision: 'sha256:test',
         session: { id: 'session-1', title: 'Session' },
         transcript: null,
@@ -891,7 +901,12 @@ describe('runtime daemon client proxy', () => {
       subscriptionId: 'observe-sub-1',
       event: {
         id: 'evt-terminal-listener-failure',
-        seq: observation.snapshot.cursor + 1,
+        seq: observation.snapshot.cursor.seq + 1,
+        cursor: {
+          sessionId: 'session-1',
+          journalEpoch: observation.snapshot.cursor.journalEpoch,
+          seq: observation.snapshot.cursor.seq + 1,
+        },
         time: '2026-07-09T00:00:01.000Z',
         sessionId: 'session-1',
         runId: 'run-1',
@@ -1157,7 +1172,7 @@ describe('runtime daemon client proxy', () => {
       transport,
     });
 
-    const subscription = client.events.subscribe({}, () => undefined);
+    const subscription = client.events.subscribe({ sessionId: 'session-1' }, () => undefined);
     subscription.close();
     resolveSubscribe({ subscriptionId: 'late-event-sub' });
     await flushAsyncNotifications();
@@ -1217,7 +1232,7 @@ describe('runtime daemon client proxy', () => {
       transport,
     });
 
-    const subscription = client.events.subscribe({}, () => undefined);
+    const subscription = client.events.subscribe({ sessionId: 'session-1' }, () => undefined);
     await expect(subscription.ready).rejects.toThrow('subscribe failed');
 
     // The persistent reverse-capability listener remains; the failed event
@@ -1879,7 +1894,7 @@ function fakeTransport(
           subscriptionId: 'observe-sub-1',
           snapshot: {
             runtimeId: 'runtime-client',
-            cursor: 0,
+            cursor: { sessionId: 'session-1', journalEpoch: 'epoch-session-1', seq: 0 },
             transcriptRevision: 'sha256:test',
             session: { id: 'session-1', title: 'Session' },
             transcript: null,
@@ -2028,7 +2043,7 @@ function fakeTransport(
           runtimeMode: 'embedded',
           sessionId: 'session-1',
           observation: {
-            cursor: 0,
+            cursor: { sessionId: 'session-1', journalEpoch: 'epoch-session-1', seq: 0 },
             transcriptRevision: 'sha256:test',
           },
           run: {

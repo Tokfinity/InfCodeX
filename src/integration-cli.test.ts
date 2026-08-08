@@ -87,7 +87,6 @@ function legacyTaskRecord(
     createdAt: timestamp,
     updatedAt: timestamp,
     eventSeq: 1,
-    lastRuntimeEventSeq: 0,
     runtimeEventCount: 0,
     runtimeEventBytes: 0,
   };

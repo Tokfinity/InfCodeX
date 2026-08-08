@@ -55,7 +55,6 @@ describe('A2AFileTaskStore durability and lock ownership', () => {
       createdAt: timestamp,
       updatedAt: timestamp,
       eventSeq: 0,
-      lastRuntimeEventSeq: 0,
       runtimeEventCount: 0,
       runtimeEventBytes: 0,
     };
@@ -65,6 +64,58 @@ describe('A2AFileTaskStore durability and lock ownership', () => {
       expect(store.all()).toEqual([]);
     } finally {
       store.close();
+    }
+  });
+
+  it('checkpoints Runtime progress without rewriting the full task store', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-a2a-cursor-'));
+    roots.push(root);
+    const timestamp = '2026-07-17T00:00:00.000Z';
+    const message = {
+      messageId: 'cursor-message', contextId: 'cursor-context',
+      role: 'ROLE_USER' as const, parts: [{ text: 'checkpoint' }],
+    };
+    const record: A2AServerTaskRecord = {
+      taskId: 'cursor-task',
+      contextId: message.contextId,
+      principalKey: 'principal-key',
+      runtimeIdentity: 'runtime',
+      sessionId: 'cursor-session',
+      messageDigests: { [message.messageId]: 'digest' },
+      runIds: [],
+      task: {
+        id: 'cursor-task', contextId: message.contextId,
+        status: { state: 'TASK_STATE_SUBMITTED', timestamp },
+        history: [message],
+      },
+      history: [message],
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      eventSeq: 0,
+      runtimeEventCount: 0,
+      runtimeEventBytes: 0,
+    };
+    const first = new A2AFileTaskStore(root);
+    first.save(record);
+    const taskFile = path.join(root, 'tasks.json');
+    const before = fs.readFileSync(taskFile, 'utf8');
+    first.checkpointRuntimeCursor(record.taskId, {
+      sessionId: record.sessionId,
+      journalEpoch: 'cursor-epoch',
+      seq: 42,
+    });
+    expect(fs.readFileSync(taskFile, 'utf8')).toBe(before);
+    first.close();
+
+    const second = new A2AFileTaskStore(root);
+    try {
+      expect(second.get(record.taskId)?.runtimeSessionCursor).toEqual({
+        sessionId: record.sessionId,
+        journalEpoch: 'cursor-epoch',
+        seq: 42,
+      });
+    } finally {
+      second.close();
     }
   });
 });

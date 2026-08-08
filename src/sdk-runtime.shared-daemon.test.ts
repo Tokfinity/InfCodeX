@@ -195,7 +195,7 @@ describe('F269 shared Runtime contracts', () => {
     expect(new Set(received).size).toBe(received.length);
     expect((await runtime.events.replay({
       sessionId: session.id,
-      sinceSeq: observation.snapshot.cursor,
+      after: observation.snapshot.cursor,
     })).map((event) => event.id)).toEqual(received);
 
     observation.close();

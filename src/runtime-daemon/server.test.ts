@@ -1888,6 +1888,43 @@ describe('runtime daemon dispatcher', () => {
     expect(notifications[0]?.params).toMatchObject({ event });
   });
 
+  it('admits a run-only event scope from persisted events when Run status is absent', async () => {
+    const runtime = makeRuntime();
+    runtime.emit({
+      id: 'evt-synthetic-run',
+      seq: 1,
+      cursor: {
+        sessionId: 'session-1',
+        journalEpoch: 'epoch-session-1',
+        seq: 1,
+      },
+      time: '2026-07-09T00:00:00.000Z',
+      sessionId: 'session-1',
+      runId: 'synthetic-run',
+      type: 'session.created',
+      payload: {},
+    });
+    vi.spyOn(runtime.runs, 'get').mockRejectedValue(
+      Object.assign(new Error('Run not found'), { code: 'not_found' as const }),
+    );
+    const dispatcher = createRuntimeDaemonDispatcher({ runtime });
+    await initializeDispatcher(dispatcher);
+
+    const replay = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-synthetic-run',
+      'event.replay',
+      { runId: 'synthetic-run' },
+    ));
+
+    expect(isRuntimeDaemonSuccessResponse(replay)).toBe(true);
+    if (isRuntimeDaemonSuccessResponse(replay)) {
+      expect(replay.result).toEqual([
+        expect.objectContaining({ id: 'evt-synthetic-run' }),
+      ]);
+    }
+    dispatcher.close();
+  });
+
   it('forwards session observation invalidation as a daemon notification', async () => {
     const runtime = makeRuntime();
     let invalidateObservation:
@@ -2035,6 +2072,7 @@ describe('runtime daemon dispatcher', () => {
     const event: RuntimeEvent = {
       id: 'evt-sync',
       seq: 1,
+      cursor: { sessionId: 'session-1', journalEpoch: 'epoch-session-1', seq: 1 },
       time: '2026-07-09T00:00:00.000Z',
       sessionId: 'session-1',
       runId: 'run-1',
@@ -2055,7 +2093,7 @@ describe('runtime daemon dispatcher', () => {
     const subscribed = await dispatcher.handle(createRuntimeDaemonRequest(
       'req-sub-sync',
       'event.subscribe',
-      { filter: {} },
+      { filter: { sessionId: 'session-1' } },
     ));
 
     expect(isRuntimeDaemonSuccessResponse(subscribed)).toBe(true);
@@ -2425,7 +2463,11 @@ describe('runtime daemon dispatcher', () => {
 
     const basic = createRuntimeDaemonDispatcher({ runtime });
     await initializeDispatcher(basic, {});
-    const basicReplay = await basic.handle(createRuntimeDaemonRequest('req-basic-replay', 'event.replay'));
+    const basicReplay = await basic.handle(createRuntimeDaemonRequest(
+      'req-basic-replay',
+      'event.replay',
+      { sessionId: 'session-1' },
+    ));
     const basicBudget = await basic.handle(createRuntimeDaemonRequest('req-basic-budget', 'context.budget.get', {
       sessionId: 'session-1',
       runId: 'run-1',
@@ -2456,6 +2498,7 @@ describe('runtime daemon dispatcher', () => {
     const diagnosticReplay = await diagnostic.handle(createRuntimeDaemonRequest(
       'req-diagnostic-replay',
       'event.replay',
+      { sessionId: 'session-1' },
     ));
     const diagnosticBudget = await diagnostic.handle(createRuntimeDaemonRequest(
       'req-diagnostic-budget',
@@ -3077,7 +3120,11 @@ function makeRuntime(): KodaXRuntime & { emit(event: RuntimeEvent): void } {
           runtimeMode: 'embedded',
           sessionId: input.sessionId,
           observation: {
-            cursor: 0,
+            cursor: {
+              sessionId: input.sessionId,
+              journalEpoch: `epoch-${input.sessionId}`,
+              seq: 0,
+            },
             transcriptRevision: 'sha256:test',
           },
           run: {
@@ -3559,22 +3606,32 @@ function makeRuntime(): KodaXRuntime & { emit(event: RuntimeEvent): void } {
       },
     },
     diagnostics: {
-      async latestContextBudget() {
-        return null;
+      async latestContextBudget(filter) {
+        return latestTestDiagnostic(eventLog, 'context.budget.snapshot', filter);
       },
-      async latestToolExposure() {
-        return null;
+      async latestToolExposure(filter) {
+        return latestTestDiagnostic(eventLog, 'tool.exposure.planned', filter);
       },
-      async latestProviderCacheDiagnostic() {
-        return null;
+      async latestProviderCacheDiagnostic(filter) {
+        return latestTestDiagnostic(eventLog, 'provider.cache.diagnostics', filter);
       },
     },
     async close() {},
     emit(event) {
-      eventLog.push(event);
+      const normalized = event.cursor === undefined
+        ? {
+            ...event,
+            cursor: {
+              sessionId: event.sessionId,
+              journalEpoch: `epoch-${event.sessionId}`,
+              seq: event.seq,
+            },
+          }
+        : event;
+      eventLog.push(normalized);
       for (const entry of listeners) {
-        if (entry.filter.sessionId && entry.filter.sessionId !== event.sessionId) continue;
-        entry.listener(event);
+        if (entry.filter.sessionId && entry.filter.sessionId !== normalized.sessionId) continue;
+        entry.listener(normalized);
       }
     },
   };
@@ -3615,7 +3672,7 @@ function createTestObservation(sessionId: string) {
   return {
     snapshot: {
       runtimeId: 'runtime-test',
-      cursor: 0,
+      cursor: { sessionId, journalEpoch: `epoch-${sessionId}`, seq: 0 },
       transcriptRevision: 'sha256:test',
       session: { id: sessionId, title: 'Test Session' },
       transcript: null,
@@ -3635,6 +3692,52 @@ function createTestObservation(sessionId: string) {
   };
 }
 
+function latestTestDiagnostic(
+  events: readonly RuntimeEvent[],
+  type: RuntimeEvent['type'],
+  filter: {
+    readonly sessionId?: string;
+    readonly runId?: string;
+    readonly contextKind?: 'root' | 'child';
+    readonly agentId?: string;
+  } | undefined,
+): unknown {
+  const requestedContextKind = filter?.contextKind
+    ?? (filter?.agentId === undefined ? 'root' : undefined);
+  const requestsChildContext = requestedContextKind === 'child'
+    || filter?.agentId !== undefined;
+  const matching = [...events].reverse().find((event) => {
+    if (event.type !== type) return false;
+    if (filter?.runId !== undefined && event.runId !== filter.runId) return false;
+    if (
+      !requestsChildContext
+      && filter?.sessionId !== undefined
+      && event.sessionId !== filter.sessionId
+    ) return false;
+    if (!isTestRecord(event.payload)) {
+      return filter?.contextKind === undefined && filter?.agentId === undefined;
+    }
+    const actualContextKind = event.payload.contextKind === 'child' ? 'child' : 'root';
+    if (requestedContextKind !== undefined && actualContextKind !== requestedContextKind) {
+      return false;
+    }
+    if (filter?.agentId !== undefined && event.payload.agentId !== filter.agentId) {
+      return false;
+    }
+    if (!requestsChildContext || filter?.sessionId === undefined) return true;
+    const expectedPrefix = `${filter.sessionId}/agent/`;
+    if (typeof event.payload.contextId !== 'string') return false;
+    return filter.agentId === undefined
+      ? event.payload.contextId.startsWith(expectedPrefix)
+      : event.payload.contextId === `${expectedPrefix}${encodeURIComponent(filter.agentId)}`;
+  });
+  return matching?.payload ?? null;
+}
+
+function isTestRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
 function eventMatchesReplayFilter(
   event: RuntimeEvent,
   filter: RuntimeEventReplayFilter | undefined,
@@ -3646,6 +3749,6 @@ function eventMatchesReplayFilter(
     const types = Array.isArray(filter.type) ? filter.type : [filter.type];
     if (!types.includes(event.type)) return false;
   }
-  if (filter.sinceSeq !== undefined && event.seq <= filter.sinceSeq) return false;
+  if (filter.after !== undefined && event.seq <= filter.after.seq) return false;
   return true;
 }

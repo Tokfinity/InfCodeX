@@ -47,7 +47,6 @@ function record(taskId: string, principalKey: string): Readonly<Record<string, u
     createdAt: timestamp,
     updatedAt: timestamp,
     eventSeq: 1,
-    lastRuntimeEventSeq: 0,
     runtimeEventCount: 0,
     runtimeEventBytes: 0,
   };

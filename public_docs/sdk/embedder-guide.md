@@ -2946,6 +2946,47 @@ const result = await handle.result;
 sub.close();
 ```
 
+### Session-scoped event cursors
+
+Runtime event order is defined inside one Session, not across the Runtime.
+Every event exposes a cursor:
+
+```ts
+type RuntimeSessionCursor = {
+  sessionId: string;
+  journalEpoch: string;
+  seq: number;
+};
+```
+
+Persist the whole cursor and resume in the same Session or Run scope:
+
+```ts
+const page = await runtime.events.replay({ sessionId: session.id });
+const after = page.at(-1)?.cursor;
+const next = await runtime.events.replay({
+  sessionId: session.id,
+  ...(after ? { after } : {}),
+});
+```
+
+This is a breaking replacement for unscoped `events.subscribe()` /
+`events.replay()` and numeric `sinceSeq`. A scope is always required. Cursors
+from another Session or an earlier journal epoch return `resync_required`; get
+a fresh Session observation/replay instead. Separate Sessions may both contain
+`seq: 1`, which is intentional and removes cross-Session lock contention.
+Supplying both `sessionId` and `runId` validates their ownership before either
+subscribe or replay, even when the Run has no retained event rows. Malformed
+cursors return `invalid_argument`. Reusing a deleted Session ID starts
+a new epoch and invalidates the earlier cursor. Persistence backpressure is
+also isolated per Session, so a blocked Session journal does not stop unrelated
+Sessions using the same embedded Runtime or home directory. Runs retain a small
+journal-identity index independently of bounded event rows; if a retention
+watermark becomes unreadable after child rows are trimmed, only cursors for a
+journal known to that Run are forced to resync when the index is valid. A
+missing or corrupt index cannot prove that an old trimmed journal is unrelated,
+so that ambiguous migration case also requires a fresh snapshot.
+
 ### Run options across Worker/daemon boundaries
 
 `runs.start({ options })` is a DTO boundary in Worker and daemon forms. Do not
@@ -2986,7 +3027,9 @@ Space-style client can subscribe to permission events and answer a request
 created by a REPL-style client.
 
 ```ts
-const sub = runtime.events.subscribe({ type: 'permission.requested' }, (event) => {
+const sub = runtime.events.subscribe(
+  { sessionId: session.id, type: 'permission.requested' },
+  (event) => {
   const payload = event.payload;
   if (!payload || typeof payload !== 'object' || typeof payload.id !== 'string') {
     return;
@@ -2996,7 +3039,8 @@ const sub = runtime.events.subscribe({ type: 'permission.requested' }, (event) =
     { type: 'allow_once' },
     { runId: payload.runId },
   );
-});
+  },
+);
 await sub.ready;
 ```
 

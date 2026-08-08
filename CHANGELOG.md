@@ -6,7 +6,27 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-No changes yet.
+### Changed
+
+- Runtime event ordering is now Session-scoped. Every event carries a
+  `{ sessionId, journalEpoch, seq }` cursor; public subscribe/replay calls must
+  specify `sessionId` or `runId`, and replay resumes from `after` rather than a
+  Runtime-global numeric sequence. Independent Sessions no longer contend on
+  one `event-sequence.lock`.
+- A2A assigns one Runtime Session to each A2A Task and persists that Session
+  cursor in a small progress checkpoint for recovery, avoiding a full
+  `tasks.json` rewrite per micro-event. Only semantic task-state transitions
+  are projected to the A2A stream; token/tool progress remains Runtime telemetry.
+- Daemon clients require the `sessionEventJournal:1` capability. Legacy global
+  Runtime event logs remain on disk for audit but are not mixed into live
+  Session replay.
+- Session failure latches and retention watermarks are journal-scoped. Reusing
+  a deleted Session ID rotates the epoch, ambiguous Windows path components remain
+  distinct, malformed cursors and mismatched Session/Run scopes fail closed,
+  legacy watermarks without an epoch cannot poison new replay, and a durable
+  per-Run journal index keeps fully trimmed child journals attributable if a
+  watermark is later corrupted. Missing or corrupt index evidence fails closed
+  instead of treating an ambiguous trimmed journal as unrelated.
 
 ---
 

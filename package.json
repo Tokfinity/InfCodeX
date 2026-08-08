@@ -10,7 +10,8 @@
   "kodaxRuntimeContracts": {
     "daemonShutdownVerification": 1,
     "integrationConfigResilience": 1,
-    "managedRunDurability": 1
+    "managedRunDurability": 1,
+    "sessionEventJournal": 1
   },
   "workspaces": [
     "packages/*"

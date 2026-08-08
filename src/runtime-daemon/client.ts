@@ -51,6 +51,7 @@ import type {
   RuntimeSessionDiagnostics,
   RuntimeSessionObservation,
   RuntimeSessionObservationSnapshot,
+  RuntimeSessionCursor,
   RuntimeSessionSettings,
   RuntimeSessionStatus,
   RuntimeSessionSummary,
@@ -1206,7 +1207,7 @@ async function observeDaemonSession(
   let live = false;
   let remoteSubscriptionId: string | undefined;
   let bufferOverflowed = false;
-  let cursor: number | undefined;
+  let cursor: RuntimeSessionCursor | undefined;
   let invalidated = false;
   let connectionId: string | undefined;
   let resolveInvalidated:
@@ -1270,17 +1271,31 @@ async function observeDaemonSession(
       );
       return;
     }
-    if (cursor !== undefined && event.seq < cursor) {
-      if (!live) return;
+    if (
+      cursor !== undefined
+      && (
+        event.cursor.sessionId !== cursor.sessionId
+        || event.cursor.journalEpoch !== cursor.journalEpoch
+      )
+    ) {
       invalidate(
-        'event_order',
-        `Runtime observation event order regressed from ${cursor} to ${event.seq}.`,
+        'runtime_changed',
+        'Runtime Session event journal changed; full resync is required.',
         runtimeId,
       );
       return;
     }
-    if (cursor !== undefined && event.seq === cursor) return;
-    cursor = event.seq;
+    if (cursor !== undefined && event.seq < cursor.seq) {
+      if (!live) return;
+      invalidate(
+        'event_order',
+        `Runtime observation event order regressed from ${cursor.seq} to ${event.seq}.`,
+        runtimeId,
+      );
+      return;
+    }
+    if (cursor !== undefined && event.seq === cursor.seq) return;
+    cursor = event.cursor;
     try {
       listener(event);
     } catch (error: unknown) {

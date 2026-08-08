@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -94,6 +94,11 @@ function fakeRuntime(
               entry.listener({
                 id: `event-${runId}`,
                 seq: 1,
+                cursor: {
+                  sessionId: input.sessionId,
+                  journalEpoch: `epoch-${input.sessionId}`,
+                  seq: 1,
+                },
                 time: new Date().toISOString(),
                 sessionId: input.sessionId,
                 runId,
@@ -163,6 +168,11 @@ function interactiveRuntime(): {
           for (const listener of listeners) {
             listener({
               id: 'event-input', seq: 1, time: new Date().toISOString(),
+              cursor: {
+                sessionId: 'session-interactive',
+                journalEpoch: 'epoch-interactive',
+                seq: 1,
+              },
               sessionId: 'session-interactive', runId: 'run-interactive',
               type: 'user_input.requested',
               payload: {
@@ -271,6 +281,8 @@ function pendingRuntime(): {
   readonly runtime: KodaXRuntime;
   complete(output?: string): void;
   emitProgress(seq: number, time?: string): void;
+  emitInputRequired(seq: number, time?: string): void;
+  emitRunStarted(seq: number, time?: string): void;
   listenerCount(): number;
 } {
   let resolveResult: ((result: RuntimeRunResult) => void) | undefined;
@@ -313,7 +325,27 @@ function pendingRuntime(): {
       for (const listener of [...listeners]) {
         listener({
           id: `event-progress-${seq}`, seq, time,
+          cursor: { sessionId: 'session-pending', journalEpoch: 'epoch-pending', seq },
           sessionId: 'session-pending', runId: 'run-pending', type: 'run.progress', payload: {},
+        });
+      }
+    },
+    emitInputRequired(seq: number, time = new Date().toISOString()) {
+      for (const listener of [...listeners]) {
+        listener({ ...pendingInputEvent(seq), time });
+      }
+    },
+    emitRunStarted(seq: number, time = new Date().toISOString()) {
+      for (const listener of [...listeners]) {
+        listener({
+          id: `event-started-${seq}`,
+          seq,
+          cursor: { sessionId: 'session-pending', journalEpoch: 'epoch-pending', seq },
+          time,
+          sessionId: 'session-pending',
+          runId: 'run-pending',
+          type: 'run.started',
+          payload: {},
         });
       }
     },
@@ -322,6 +354,7 @@ function pendingRuntime(): {
       for (const listener of listeners) {
         listener({
           id: 'event-complete', seq: 1, time: new Date().toISOString(),
+          cursor: { sessionId: 'session-pending', journalEpoch: 'epoch-pending', seq: 1 },
           sessionId: 'session-pending', runId: 'run-pending', type: 'run.completed', payload: {},
         });
       }
@@ -337,6 +370,7 @@ function pendingInputEvent(seq = 1): RuntimeEvent {
   return {
     id: `event-input-${seq}`,
     seq,
+    cursor: { sessionId: 'session-pending', journalEpoch: 'epoch-pending', seq },
     time: new Date(seq * 1_000).toISOString(),
     sessionId: 'session-pending',
     runId: 'run-pending',
@@ -852,6 +886,107 @@ describe('FEATURE_267 bidirectional A2A', () => {
       expect(completed.output).toContain('A2A completed');
       await plane.close();
     } finally {
+      await server.close();
+    }
+  });
+
+  it('uses a dedicated Runtime Session for each A2A Task in the same context', async () => {
+    const dataDir = temporaryRoot();
+    const server = createKodaXA2AServer(serverOptions(fakeRuntime(), dataDir));
+    await server.whenReady();
+    try {
+      for (const messageId of ['same-context-first', 'same-context-second']) {
+        const response = await server.handle(directRpcRequest('SendMessage', {
+          message: {
+            messageId,
+            contextId: 'shared-a2a-context',
+            role: 'ROLE_USER',
+            parts: [{ text: messageId }],
+          },
+        }, messageId));
+        expect(response.status).toBe(200);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    } finally {
+      await server.close();
+    }
+
+    const records = JSON.parse(
+      readFileSync(path.join(dataDir, 'tasks.json'), 'utf8'),
+    ) as Array<{ readonly contextId: string; readonly sessionId: string }>;
+    expect(records).toHaveLength(2);
+    expect(records.every((record) => record.contextId === 'shared-a2a-context')).toBe(true);
+    expect(new Set(records.map((record) => record.sessionId)).size).toBe(2);
+  });
+
+  it('does not publish Runtime progress micro-events as A2A task updates', async () => {
+    const dataDir = temporaryRoot();
+    const controlled = pendingRuntime();
+    const base = serverOptions(controlled.runtime, dataDir);
+    const server = createKodaXA2AServer({
+      ...base,
+      limits: { ...base.limits, maxTaskWaitMs: 1 },
+    });
+    await server.whenReady();
+    try {
+      await startPendingTask(server, 'micro-event-boundary');
+      const taskFile = path.join(dataDir, 'tasks.json');
+      const before = readFileSync(taskFile, 'utf8');
+      controlled.emitProgress(1);
+      expect(readFileSync(taskFile, 'utf8')).toBe(before);
+      expect(readdirSync(path.join(dataDir, 'runtime-cursors'))).toHaveLength(1);
+    } finally {
+      controlled.complete();
+      await server.close();
+    }
+  });
+
+  it('poisons Runtime projection after a semantic Task save failure without advancing its cursor', async () => {
+    const dataDir = temporaryRoot();
+    const controlled = pendingRuntime();
+    const base = serverOptions(controlled.runtime, dataDir);
+    const server = createKodaXA2AServer({
+      ...base,
+      limits: { ...base.limits, maxTaskWaitMs: 1 },
+    });
+    await server.whenReady();
+    const taskFile = path.join(dataDir, 'tasks.json');
+    const backupFile = path.join(dataDir, 'tasks.backup.json');
+    let sabotaged = false;
+    try {
+      await startPendingTask(server, 'semantic-save-failure');
+      controlled.emitProgress(1);
+      const [cursorName] = readdirSync(path.join(dataDir, 'runtime-cursors'));
+      expect(cursorName).toBeDefined();
+      const cursorFile = path.join(dataDir, 'runtime-cursors', cursorName!);
+      const beforeFailure = readFileSync(cursorFile, 'utf8');
+
+      renameSync(taskFile, backupFile);
+      mkdirSync(taskFile);
+      sabotaged = true;
+      expect(() => controlled.emitInputRequired(2)).toThrow();
+      expect(controlled.listenerCount()).toBe(0);
+      controlled.emitProgress(3);
+      expect(readFileSync(cursorFile, 'utf8')).toBe(beforeFailure);
+      expect(JSON.parse(beforeFailure)).toMatchObject({ seq: 1 });
+      rmSync(taskFile, { recursive: true, force: true });
+      renameSync(backupFile, taskFile);
+      sabotaged = false;
+      controlled.complete('must wait for semantic replay');
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(JSON.parse(readFileSync(taskFile, 'utf8'))).toEqual([
+        expect.objectContaining({
+          task: expect.objectContaining({
+            status: expect.objectContaining({ state: 'TASK_STATE_WORKING' }),
+          }),
+        }),
+      ]);
+    } finally {
+      if (sabotaged) {
+        rmSync(taskFile, { recursive: true, force: true });
+        renameSync(backupFile, taskFile);
+      }
+      controlled.complete();
       await server.close();
     }
   });
@@ -1691,9 +1826,9 @@ describe('FEATURE_267 bidirectional A2A', () => {
 
       const firstLargeTimestamp = 'a'.repeat(13 * 1024 * 1024);
       const secondLargeTimestamp = 'b'.repeat(13 * 1024 * 1024);
-      controlled.emitProgress(1, firstLargeTimestamp);
+      controlled.emitRunStarted(1, firstLargeTimestamp);
       expect(subscriptions.active()).toBe(1);
-      controlled.emitProgress(2, secondLargeTimestamp);
+      controlled.emitRunStarted(2, secondLargeTimestamp);
       expect(subscriptions.active()).toBe(0);
 
       await expect(slow.text()).rejects.toThrow(/buffer budget/i);

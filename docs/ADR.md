@@ -4857,3 +4857,57 @@ user-facing semantics, a separately versioned capability, and evidence that it
 cannot broaden authority after infrastructure failure. Moving containment
 above permission requires a threat-model update and cross-platform proof that
 containment state cannot act as authorization.
+
+---
+
+## ADR-061: Runtime Event Order Belongs to the Session
+
+**Status**: Accepted (2026-08-08)
+
+**Driver**: `FEATURE_291`, concurrent SDK/CLI Sessions sharing one Runtime home
+
+**Context**: Runtime events were persisted per Run but numbered through one
+Runtime-home sequence and lock. The total order had no consumer-level meaning:
+observations, recovery, permissions, and A2A all operate on a Session or Run.
+It did, however, couple unrelated processes and allowed one stale lock to fail
+another Session.
+
+**Decision**:
+
+1. A Session journal is the sole event-order authority. Public Run replay is
+   bound to its owning Session; internal diagnostics may merge managed-child
+   Session events by timestamp without claiming a resumable aggregate order.
+   Different Sessions are intentionally incomparable.
+2. The resumable cursor is `{ sessionId, journalEpoch, seq }`. The epoch fences
+   replacement/reinitialization; a bare sequence is insufficient.
+3. Public event access must identify a Session or Run. Run-scoped replay first
+   resolves its Session and validates the cursor and any supplied Session.
+4. Storage retains per-Run event bodies but moves sequence state and locking to
+   an encoded per-Session directory. No Runtime-global allocator remains.
+5. Legacy global journals are retained as audit artifacts but never merged into
+   new live Session replay. Migration starts a fresh journal explicitly.
+6. Daemons advertise `sessionEventJournal:1`; incompatible daemons fail
+   capability negotiation.
+7. Each A2A Task owns one Runtime Session and stores its full cursor. A2A
+   projects semantic task lifecycle only, not high-frequency Runtime telemetry.
+8. Failure latches, pending batches, retention watermarks, and replacement
+   epochs are Session-scoped. A failed Session cannot block another Session;
+   deleting and recreating an ID starts a fresh epoch, and legacy watermarks
+   without an epoch are ignored.
+9. Each Run durably indexes every `{ sessionId, journalEpoch }` that has written
+   to it. Retention-watermark corruption can therefore fail closed for a fully
+   trimmed managed-child journal without blocking Sessions a valid index proves
+   unrelated. A missing or corrupt index cannot prove non-membership and fails
+   closed during migration instead of silently skipping lost events.
+
+**Consequences**: independent Sessions no longer contend or share a failure
+domain. Same-Session writers still serialize, and SDK consumers must migrate
+unscoped/numeric replay code. Cross-Session aggregation, when a host wants it,
+is a UI merge by timestamp/arrival and is not presented as durable causal
+order.
+
+**Rejected alternatives**: retaining the global sequence with a more tolerant
+lock, allocating process-sized global ranges, treating Run as the journal
+authority, or accepting numeric cursors during a compatibility window. Each
+either preserves the wrong coupling or loses Session-wide recovery/epoch
+validation.

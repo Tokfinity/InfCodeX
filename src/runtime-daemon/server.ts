@@ -22,6 +22,7 @@ import type {
   RuntimeCreateSessionInput,
   RuntimeDaemonPreflight,
   RuntimeDaemonRollbackInput,
+  RuntimeDiagnosticFilter,
   RuntimeEvent,
   RuntimeEventFilter,
   RuntimeEventReplayFilter,
@@ -1685,10 +1686,10 @@ async function dispatchRuntimeDaemonRequest(
       const params = optionalRecord(request.params) ?? {};
       const filter = optionalRecord(params.filter) as
         RuntimeEventFilter | undefined;
-      await assertAdmittedSessionId(runtime, filter?.sessionId);
+      await assertAdmittedEventScope(runtime, filter);
       const subscriptionId = createSubscriptionId();
       const subscription = runtime.events.subscribe(
-        filter ?? {},
+        filter as RuntimeEventFilter,
         (event: RuntimeEvent) => {
           notify(
             subscriptionId,
@@ -1708,9 +1709,9 @@ async function dispatchRuntimeDaemonRequest(
     case "event.replay": {
       const filter = optionalRecord(request.params) as
         RuntimeEventReplayFilter | undefined;
-      await assertAdmittedSessionId(runtime, filter?.sessionId);
+      await assertAdmittedEventScope(runtime, filter);
       return filterReplayForClientCapabilities(
-        await runtime.events.replay(filter),
+        await runtime.events.replay(filter as RuntimeEventReplayFilter),
         getClientCapabilities(),
       ).map((event) =>
         augmentRuntimeEventRequirements(event, runRequirementSource),
@@ -2140,6 +2141,7 @@ function runtimeDaemonCapabilities(
   delete safeOverrides.actorControlPlane;
   delete safeOverrides.integrationConfigResilience;
   delete safeOverrides.managedRunDurability;
+  delete safeOverrides.sessionEventJournal;
   delete safeOverrides.daemonOrphanExit;
   delete safeOverrides.daemonShutdownVerification;
   delete safeOverrides.runtimeEventCoalescing;
@@ -2169,6 +2171,12 @@ function runtimeDaemonCapabilities(
       completedTurnBeforeEvent: true,
       deliveredInputBeforeEvent: true,
       persistenceFailure: "fail_closed",
+    },
+    sessionEventJournal: {
+      version: 1,
+      sequenceScope: "session",
+      cursor: "session_epoch_sequence",
+      scopedAccessRequired: true,
     },
     ...(runtimeEventCoalescing
       ? { runtimeEventCoalescing: { version: 1 } }
@@ -2423,6 +2431,34 @@ async function assertAdmittedSessionId(
   if (sessionId !== undefined) await runtime.sessions.transcript(sessionId);
 }
 
+async function assertAdmittedEventScope(
+  runtime: KodaXRuntime,
+  filter: RuntimeEventFilter | RuntimeEventReplayFilter | undefined,
+): Promise<void> {
+  if (filter?.sessionId !== undefined) {
+    await assertAdmittedSessionId(runtime, filter.sessionId);
+    if (filter.runId !== undefined) {
+      await runtime.events.replay({
+        sessionId: filter.sessionId,
+        runId: filter.runId,
+        limit: 1,
+      });
+    }
+    return;
+  }
+  if (filter?.runId !== undefined) {
+    const [event] = await runtime.events.replay({ runId: filter.runId, limit: 1 });
+    const sessionId = event?.sessionId
+      ?? (await runtime.runs.get(filter.runId)).sessionId;
+    await assertAdmittedSessionId(runtime, sessionId);
+    return;
+  }
+  throw daemonError(
+    "invalid_request",
+    "Runtime event access must specify a Session or Run scope.",
+  );
+}
+
 function augmentObservationRunRequirements(
   snapshot: RuntimeSessionObservationSnapshot,
   source: RuntimeRunRequirementSource | undefined,
@@ -2545,66 +2581,17 @@ async function latestRuntimeDiagnosticPayload(
   type: RuntimeEventType,
   params: Record<string, unknown> | undefined,
 ): Promise<unknown> {
-  const filter = params ?? {};
-  const requestedContextKind =
-    filter.contextKind === "root" || filter.contextKind === "child"
-      ? filter.contextKind
-      : typeof filter.agentId === "string"
-        ? undefined
-        : "root";
-  const requestedAgentId =
-    typeof filter.agentId === "string" ? filter.agentId : undefined;
-  const requestsChildContext =
-    requestedContextKind === "child" || requestedAgentId !== undefined;
-  const replayFilter: RuntimeEventReplayFilter = {
-    type,
-    ...(!requestsChildContext && typeof filter.sessionId === "string"
-      ? { sessionId: filter.sessionId }
-      : {}),
-    ...(typeof filter.runId === "string" ? { runId: filter.runId } : {}),
-  };
-  const events = await runtime.events.replay(replayFilter);
-  const matching = [...events].reverse().find((event) => {
-    const payload = event.payload;
-    if (
-      payload === null ||
-      typeof payload !== "object" ||
-      Array.isArray(payload)
-    ) {
-      return (
-        requestedContextKind === undefined && requestedAgentId === undefined
-      );
-    }
-    const diagnostic = payload as {
-      readonly contextId?: unknown;
-      readonly contextKind?: unknown;
-      readonly agentId?: unknown;
-    };
-    const actualContextKind =
-      diagnostic.contextKind === "child" ? "child" : "root";
-    if (
-      requestedContextKind !== undefined &&
-      actualContextKind !== requestedContextKind
-    ) {
-      return false;
-    }
-    if (
-      requestedAgentId !== undefined &&
-      diagnostic.agentId !== requestedAgentId
-    ) {
-      return false;
-    }
-    if (!requestsChildContext || typeof filter.sessionId !== "string") {
-      return true;
-    }
-    const expectedPrefix = `${filter.sessionId}/agent/`;
-    if (typeof diagnostic.contextId !== "string") return false;
-    return requestedAgentId === undefined
-      ? diagnostic.contextId.startsWith(expectedPrefix)
-      : diagnostic.contextId ===
-          `${expectedPrefix}${encodeURIComponent(requestedAgentId)}`;
-  });
-  return matching?.payload ?? null;
+  const filter = (params ?? {}) as RuntimeDiagnosticFilter;
+  if (type === "context.budget.snapshot") {
+    return runtime.diagnostics.latestContextBudget(filter);
+  }
+  if (type === "tool.exposure.planned") {
+    return runtime.diagnostics.latestToolExposure(filter);
+  }
+  if (type === "provider.cache.diagnostics") {
+    return runtime.diagnostics.latestProviderCacheDiagnostic(filter);
+  }
+  return null;
 }
 
 async function setRunModel(

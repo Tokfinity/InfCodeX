@@ -545,6 +545,7 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
   readonly #store: A2AFileTaskStore;
   readonly #now: () => Date;
   readonly #runtimeSubscriptions = new Map<string, { close(): void }>();
+  readonly #runtimeProjectionFailures = new Set<string>();
   readonly #streamClosers = new Set<() => void>();
   readonly #taskStreamCounts = new Map<string, number>();
   readonly #messageTails = new Map<string, Promise<void>>();
@@ -695,6 +696,7 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
       try { subscription.close(); } catch (error: unknown) { errors.push(error); }
     }
     this.#runtimeSubscriptions.clear();
+    this.#runtimeProjectionFailures.clear();
     try { await serverClosed; } catch (error: unknown) { errors.push(error); }
     try { this.#store.close(); } catch (error: unknown) { errors.push(error); }
     try { await this.options.preparedExecution?.close(); } catch (error: unknown) { errors.push(error); }
@@ -1002,9 +1004,7 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
     const contextKey = sha256(`${key}\0${contextId}`);
     const workspaceRoot = related?.workspaceRoot
       ?? await options.preparedExecution?.prepareWorkspace(contextKey);
-    const session = related
-      ? { id: related.sessionId }
-      : await options.runtime.sessions.create({
+    const session = await options.runtime.sessions.create({
           title: `A2A: ${options.agent.name}`,
           surface: 'a2a',
           ...(options.execution?.profileId || options.agent.profileId
@@ -1041,7 +1041,6 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
       createdAt: timestamp,
       updatedAt: timestamp,
       eventSeq: 1,
-      lastRuntimeEventSeq: 0,
       runtimeEventCount: 0,
       runtimeEventBytes: 0,
       ...(acceptedOutputModes ? { acceptedOutputModes } : {}),
@@ -1163,7 +1162,7 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
     const buffered: RuntimeEvent[] = [];
     let replaying = true;
     const subscription = options.runtime.events.subscribe(
-      { runId },
+      { sessionId: record.sessionId, runId },
       (event) => {
         if (replaying) buffered.push(event);
         else this.onRuntimeEvent(record.taskId, event, options);
@@ -1172,8 +1171,11 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
     this.#runtimeSubscriptions.set(record.taskId, subscription);
     try {
       const replayed = await options.runtime.events.replay({
+        sessionId: record.sessionId,
         runId,
-        sinceSeq: record.lastRuntimeEventSeq,
+        ...(record.runtimeSessionCursor !== undefined
+          ? { after: record.runtimeSessionCursor }
+          : {}),
       });
       const ordered = [...replayed, ...buffered].sort((left, right) => (
         left.seq - right.seq
@@ -1197,10 +1199,48 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
     event: RuntimeEvent,
     options: PreparedA2AServerOptions,
   ): void {
+    if (this.#runtimeProjectionFailures.has(taskId)) return;
+    try {
+      this.consumeRuntimeEvent(taskId, event, options);
+    } catch (error: unknown) {
+      this.#runtimeProjectionFailures.add(taskId);
+      this.#runtimeSubscriptions.get(taskId)?.close();
+      this.#runtimeSubscriptions.delete(taskId);
+      throw error;
+    }
+  }
+
+  private consumeRuntimeEvent(
+    taskId: string,
+    event: RuntimeEvent,
+    options: PreparedA2AServerOptions,
+  ): void {
     if (this.#closed) return;
     const record = this.#store.get(taskId);
-    if (!record || TERMINAL_STATES.has(record.task.status.state)
-      || event.seq <= record.lastRuntimeEventSeq) return;
+    if (!record || TERMINAL_STATES.has(record.task.status.state)) return;
+    const eventCursor = event.cursor;
+    if (
+      eventCursor.sessionId !== record.sessionId
+      || (
+        record.runtimeSessionCursor !== undefined
+        && eventCursor.journalEpoch !== record.runtimeSessionCursor.journalEpoch
+      )
+    ) {
+      this.failTask(taskId, 'Runtime Session event journal changed; task resync is required.', options);
+      return;
+    }
+    if (
+      record.runtimeSessionCursor !== undefined
+      && eventCursor.seq <= record.runtimeSessionCursor.seq
+    ) return;
+    if (
+      event.type !== 'user_input.requested'
+      && event.type !== 'user_input.resolved'
+      && event.type !== 'run.started'
+    ) {
+      this.#store.checkpointRuntimeCursor(taskId, eventCursor);
+      return;
+    }
     const eventBytes = Buffer.byteLength(JSON.stringify(event));
     const runtimeEventCount = record.runtimeEventCount + 1;
     const runtimeEventBytes = record.runtimeEventBytes + eventBytes;
@@ -1211,7 +1251,9 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
       this.failTask(taskId, 'A2A task event quota exceeded.', options);
       return;
     }
-    const state = event.type === 'user_input.requested' ? 'TASK_STATE_INPUT_REQUIRED' : record.task.status.state;
+    const state = event.type === 'user_input.requested'
+      ? 'TASK_STATE_INPUT_REQUIRED'
+      : 'TASK_STATE_WORKING';
     const interactionMessage = event.type === 'user_input.requested'
       ? pendingInputMessage(taskId, record.contextId, event)
       : undefined;
@@ -1232,16 +1274,16 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
       task: {
         ...record.task,
         status: {
-          ...record.task.status,
           state,
           ...(interactionMessage ? { message: interactionMessage } : {}),
           timestamp: event.time,
         },
       },
       ...(pending ? { pendingUserInput: pending } : {}),
+      ...(event.type === 'user_input.resolved' ? { pendingUserInput: undefined } : {}),
       updatedAt: event.time,
       eventSeq: record.eventSeq + 1,
-      lastRuntimeEventSeq: Math.max(record.lastRuntimeEventSeq, event.seq),
+      runtimeSessionCursor: eventCursor,
       runtimeEventCount,
       runtimeEventBytes,
     });
@@ -1249,6 +1291,7 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
 
   private finishRun(taskId: string, result: RuntimeRunResult, options = this.options): void {
     if (this.#closed) return;
+    if (this.#runtimeProjectionFailures.has(taskId)) return;
     const record = this.#store.get(taskId);
     if (!record || TERMINAL_STATES.has(record.task.status.state)) return;
     const state = statusState(result.phase);
@@ -1567,6 +1610,7 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
             this.failTask(record.taskId, 'Runtime execution failed during A2A recovery.', options);
           });
         } else {
+          await this.attachRuntimeEvents(record, runId, options);
           this.finishRun(record.taskId, { runId, sessionId: record.sessionId, phase: status.phase }, options);
         }
       } catch (error: unknown) {
