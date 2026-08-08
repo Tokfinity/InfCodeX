@@ -14,12 +14,12 @@
 | Current released version | `v0.7.84` (Git tag / GitHub Release) |
 | Current package version | `@kodax-ai/kodax@0.7.84` release (npm publication remains manual) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
-| Total tracked features | `72` |
+| Total tracked features | `74` |
 | InProgress | `1` |
-| Planned | `16` |
+| Planned | `18` |
 | Completed | `49` |
 | Reviewed out of active roadmap | `6` (`108, 231, 232, 235, 238, 244`) |
-| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 279, 280, 281, 282, 283, 284, 285, 286, 287, 288` |
+| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 279, 280, 281, 282, 283, 284, 285, 286, 287, 288, 289, 290` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
 ### 一览表
@@ -27,10 +27,10 @@
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
 | Completed | 49 | `286, 284, 281, 277, 276, 263, 275, 274, 273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `286`, `284`, and `281` shipped in v0.7.79; `263`, `276`, and `277` shipped in v0.7.78. v0.7.84 is the current Git/GitHub release and remains a feature-free Actor settlement-recovery hardening patch; npm publication remains manual. |
-| InProgress | 1 | `225` | `225` remains the bounded v0.7.105 cleanup. |
-| Planned, near-term | 10 | `288, 287, 278, 279, 282, 283, 285, 280, 265, 105` | `v0.7.90` -> `v0.7.91` -> `v0.7.93` -> `v0.7.94` -> `v0.7.95` -> `v0.7.100` |
-| Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
-| Planned, v0.9.x | 1 | `262` | `v0.9.0` |
+| InProgress | 1 | `225` | `225` remains the bounded v0.8.15 cleanup (moved from v0.7.105 on 2026-08-08). |
+| Planned, near-term | 2 | `290, 289` | `v0.7.85` (F289 stays in 0.7.x; all v0.7.89+ features slid to 0.8.x on 2026-08-08). |
+| Planned, 0.8.x | 10 | `278, 279, 282, 283, 285, 280, 287, 288, 265, 105` | `v0.8.0` -> `v0.8.1` -> `v0.8.3` -> `v0.8.4` -> `v0.8.5` -> `v0.8.10` -> `v0.8.15` |
+| Planned, 0.9.x | 6 | `007, 030, 093, 113, 139, 262` | `v0.9.0` -> `v0.9.5` -> `v0.9.7` -> `v0.9.25` |
 | Reviewed out, 2026-07-12 | 6 | `244, 231, 235, 238, 232, 108` | Shelved, deferred, absorbed, or cancelled after the post-v0.7.70 roadmap review; F105 was restored by the 2026-07-29 MoA redesign. |
 
 > v0.7.49 / v0.7.50 workflow split：`FEATURE_217` remains the human-facing workflow mode. Manual testing reopened required UI/UX and reliability deltas inside [v0.7.49](features/v0.7.49.md#13-v0749-completion-delta): bounded live progress with phase index / running 智能体 wording / preserved progress row / elapsed time / completed-child token usage, localized assistant-style launch notes, result-bearing child-agent digests or folded long-report notices, non-`info` agentic transcript, clear separation between `finished/spawned` progress and lifetime `maxAgents` cap, final synthesis, generated final-result contract lint, implicit `tokenBudget` stripping, generated task-command crash hardening, tighter AMAW invocation policy, wait timeout propagation, no default total workflow wall-clock timeout, terminal cleanup for un-awaited children, accurate template read/write metadata, capsule min-version preflight, manual run cleanup controls, and the closed minimal saved-workflow named reuse delta (`/workflow <savedName>` plus `/workflow rerun <runId|savedName>` with help/completion). `FEATURE_229` in v0.7.50 is the platform layer: it standardizes the same process as agent-layer snapshot/events, SDK subscription/polling, Space-style host policy and lifecycle controls, terminal-state helpers, workflow identity/lifecycle controls beyond named reuse (`display name | revise | rename | revision provenance`), REPL-as-consumer rendering, conservative retention, and durable source/provenance/resultSummary persistence; it is not the first implementation of the user-visible UX.
@@ -68,21 +68,28 @@
 | `v0.7.82` | `0` |
 | `v0.7.83` | `0` |
 | `v0.7.84` | `0` |
-| `v0.7.85` | `0` |
+| `v0.7.85` | `2` |
 | `v0.7.86` | `0` |
 | `v0.7.88` | `0` |
 | `v0.7.89` | `0` |
-| `v0.7.90` | `5` |
-| `v0.7.91` | `1` |
-| `v0.7.93` | `1` |
-| `v0.7.94` | `1` |
-| `v0.7.95` | `1` |
-| `v0.7.100` | `1` |
-| `v0.7.105` | `1` |
-| `v0.8.5` | `3` |
-| `v0.8.7` | `1` |
-| `v0.8.25` | `1` |
+| `v0.7.90` | `0` |
+| `v0.7.91` | `0` |
+| `v0.7.93` | `0` |
+| `v0.7.94` | `0` |
+| `v0.7.95` | `0` |
+| `v0.7.100` | `0` |
+| `v0.7.105` | `0` |
+| `v0.8.0` | `5` |
+| `v0.8.1` | `1` |
+| `v0.8.3` | `1` |
+| `v0.8.4` | `1` |
+| `v0.8.5` | `1` |
+| `v0.8.10` | `1` |
+| `v0.8.15` | `1` |
 | `v0.9.0` | `1` |
+| `v0.9.5` | `3` |
+| `v0.9.7` | `1` |
+| `v0.9.25` | `1` |
 
 > Release cadence rule: every `v0.7.x` feature-bearing release normally leaves
 > the next two patch versions for debug/patch releases. `v0.7.55` is intentionally
@@ -705,6 +712,48 @@ Issue 256 remains scheduled for `v0.7.85` (bug fix, not a feature).
 
 ---
 
+## 2026-08-07 FEATURE_289 Addition
+
+`FEATURE_289` (Memory Review Drain Reliability + Pipeline Observability, `v0.7.85`,
+design in [v0.7.85](features/v0.7.85.md#feature_289-memory-review-drain-reliability--pipeline-observability))
+was added at explicit user direction after a multi-agent adversarial audit of the
+governed memory pipeline found that episode review has never completed since
+v0.7.68: on a real machine 1377 review jobs accumulated (1312 pending with zero
+provider attempts, 64 completed all eligibility discards, zero `decision.json`)
+because drains are fire-and-forget and short-lived processes exit before the
+LLM judge returns. `v0.7.85` therefore carries one feature alongside Issue 256
+instead of remaining a pure debug/patch slot. Scope is the P0 reliability and
+observability package only; review-admission widening and lifecycle-command
+wiring were explicitly deferred pending user review.
+
+---
+
+## 2026-08-08 FEATURE_290 Addition + FEATURE_289 P2-a Merge
+
+`FEATURE_290` (Memory Lesson and Verdict Production + failedWithLesson
+Admission, `v0.7.85`, design in
+[v0.7.85](features/v0.7.85.md#feature_290-memory-lesson-and-verdict-production--failedwithlesson-admission))
+was added at explicit user direction as the improved replacement for the
+deferred P1 "review-admission widening" proposal. A replay-dataset probe
+over the 1332 real pending review jobs showed admission was never the
+bottleneck (lesson rate 3.1%; zero verdicts in 1333 evidence entries), so
+F290 fixes lesson/verdict production structurally, admits `failedWithLesson`
+additively, keeps failedWithLesson-derived proposals in the human approval
+queue deterministically, and validates with an offline replay eval instead
+of a multi-week production baseline. It shares `v0.7.85` with FEATURE_289
+and Issue 256. The same day, P2-a (dead review-inbox rewind/fence removal)
+was merged into FEATURE_289 as its §3.8; the remaining P2 dead-code cleanup
+(`truncate.ts` / `memory-section.ts` / `purgeRef` deprecation) and
+`/memory forget|archive` wiring stay deferred.
+
+Note: the uncommitted "v0.7.89+ roadmap slide into 0.8.x" in
+`docs/features/` (mapping `v0.7.(90+n) -> v0.8.n`; F265 -> `v0.8.5`,
+F280 -> `v0.8.1`, old `v0.8.5` -> `v0.9.5`) does not cover `v0.7.85`;
+F289/F290 stay at `v0.7.85`. The broader FEATURE_LIST sync for that slide
+(F265/F280/F105/F225/007/030/093 rows, the near-term chain, and the
+per-version distribution) remains pending with the slide itself.
+---
+
 ## v0.7.78 Release Record
 
 `FEATURE_263` now implements the full evidence-gated background Skill Learning
@@ -1117,21 +1166,23 @@ fixed GitHub binary archive sidecar omission before tagging.
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `287` | Advisor Mode Virtual Provider | Enhancement / LLM Provider + Session Quality | High | `v0.7.93` | [v0.7.88](features/v0.7.88.md#feature_287-advisor-mode-virtual-provider) |
-| `288` | CLI-Space Daemon Profile Alignment | Enhancement / Runtime + Multi-Client UX | High | `v0.7.94` | [v0.7.89](features/v0.7.89.md#feature_288-cli-space-daemon-profile-alignment) |
-| `278` | Durable AskUser History Projection + Compact SDK/REPL Visualization | Enhancement / SDK + Session UX | High | `v0.7.90` | [v0.7.80](features/v0.7.80.md#feature_278-durable-askuser-history-projection--compact-sdkrepl-visualization) |
-| `279` | Same-Runtime Root Task Messaging + Durable Safe-Boundary Inbox | Enhancement / Runtime + Agent Collaboration | High | `v0.7.90` | [v0.7.80](features/v0.7.80.md#feature_279-same-runtime-root-task-messaging--durable-safe-boundary-inbox) |
-| `282` | Bounded Active Query Recovery + Durable Physical-Capacity Emergency Compaction | Core / Context Management + Reliability | Critical | `v0.7.90` | [v0.7.80](features/v0.7.80.md#feature_282-bounded-active-query-recovery--durable-physical-capacity-emergency-compaction) |
-| `283` | Local Hybrid Session History Retrieval + Builtin Adaptive LLM Rerank | Enhancement / Session Retrieval + LLM | High | `v0.7.90` | [v0.7.80](features/v0.7.80.md#feature_283-local-hybrid-session-history-retrieval--builtin-adaptive-llm-rerank) |
-| `285` | Capability-Aware Auto Classifier Model Selection | Enhancement / LLM Provider + Auto Permission Reliability | High | `v0.7.90` | [v0.7.80](features/v0.7.80.md#feature_285-capability-aware-auto-classifier-model-selection) |
-| `280` | Cache-Stable Prompt and Tool Surface Optimization | Internal / LLM Cost + Tool Reliability | High | `v0.7.91` | [v0.7.79](features/v0.7.79.md#feature_280-cache-stable-prompt-and-tool-surface-optimization) |
-| `265` | Work Fast Path + Coding Assurance Budget | Core / Performance + Agent Quality | High | `v0.7.95` | [v0.7.85](features/v0.7.85.md#feature_265-work-fast-path--coding-assurance-budget) |
-| `105` | Mixture-of-Agents Virtual Provider (MoA mode, reuses F287 skeleton) | Core / LLM Provider + Test-Time Scaling | High | `v0.7.100` | [v0.7.90](features/v0.7.90.md#feature_105-mixture-of-agents-virtual-provider) |
-| `007` | Theme System Consolidation | Enhancement | Medium | `v0.8.5` | [v0.8.5](features/v0.8.5.md#feature_007-theme-system-consolidation) |
-| `030` | Multi-Surface Delivery | Enhancement | High | `v0.8.5` | [v0.8.5](features/v0.8.5.md#feature_030-multi-surface-delivery) |
-| `093` | Coding and REPL Internal Circular Dependency Decoupling | Internal | Medium | `v0.8.5` | [v0.8.5](features/v0.8.5.md#feature_093-coding-and-repl-internal-circular-dependency-decoupling) |
-| `113` | TodoList JSON / CLI Surface | Enhancement | Medium | `v0.8.7` | [v0.8.7](features/v0.8.7.md#feature_113-todolist-json--cli-surface) |
-| `139` | NotebookEdit Tool | Enhancement / Tool | Low | `v0.8.25` | [v0.8.25](features/v0.8.25.md#feature_139-notebookedit-tool--jupyter-cell-level-crud) |
+| `289` | Memory Review Drain Reliability + Pipeline Observability | Core / Memory Reliability + Observability | High | `v0.7.85` | [v0.7.85](features/v0.7.85.md#feature_289-memory-review-drain-reliability--pipeline-observability) |
+| `290` | Memory Lesson and Verdict Production + failedWithLesson Admission | Core / Memory Production Quality | High | `v0.7.85` | [v0.7.85](features/v0.7.85.md#feature_290-memory-lesson-and-verdict-production--failedwithlesson-admission) |
+| `287` | Advisor Mode Virtual Provider | Enhancement / LLM Provider + Session Quality | High | `v0.8.3` | [v0.8.3](features/v0.8.3.md#feature_287-advisor-mode-virtual-provider) |
+| `288` | CLI-Space Daemon Profile Alignment | Enhancement / Runtime + Multi-Client UX | High | `v0.8.4` | [v0.8.4](features/v0.8.4.md#feature_288-cli-space-daemon-profile-alignment) |
+| `278` | Durable AskUser History Projection + Compact SDK/REPL Visualization | Enhancement / SDK + Session UX | High | `v0.8.0` | [v0.8.0](features/v0.8.0.md#feature_278-durable-askuser-history-projection--compact-sdkrepl-visualization) |
+| `279` | Same-Runtime Root Task Messaging + Durable Safe-Boundary Inbox | Enhancement / Runtime + Agent Collaboration | High | `v0.8.0` | [v0.8.0](features/v0.8.0.md#feature_279-same-runtime-root-task-messaging--durable-safe-boundary-inbox) |
+| `282` | Bounded Active Query Recovery + Durable Physical-Capacity Emergency Compaction | Core / Context Management + Reliability | Critical | `v0.8.0` | [v0.8.0](features/v0.8.0.md#feature_282-bounded-active-query-recovery--durable-physical-capacity-emergency-compaction) |
+| `283` | Local Hybrid Session History Retrieval + Builtin Adaptive LLM Rerank | Enhancement / Session Retrieval + LLM | High | `v0.8.0` | [v0.8.0](features/v0.8.0.md#feature_283-local-hybrid-session-history-retrieval--builtin-adaptive-llm-rerank) |
+| `285` | Capability-Aware Auto Classifier Model Selection | Enhancement / LLM Provider + Auto Permission Reliability | High | `v0.8.0` | [v0.8.0](features/v0.8.0.md#feature_285-capability-aware-auto-classifier-model-selection) |
+| `280` | Cache-Stable Prompt and Tool Surface Optimization | Internal / LLM Cost + Tool Reliability | High | `v0.8.1` | [v0.8.1](features/v0.8.1.md#feature_280-cache-stable-prompt-and-tool-surface-optimization) |
+| `265` | Work Fast Path + Coding Assurance Budget | Core / Performance + Agent Quality | High | `v0.8.5` | [v0.8.5](features/v0.8.5.md#feature_265-work-fast-path--coding-assurance-budget) |
+| `105` | Mixture-of-Agents Virtual Provider (MoA mode, reuses F287 skeleton) | Core / LLM Provider + Test-Time Scaling | High | `v0.8.10` | [v0.8.10](features/v0.8.10.md#feature_105-mixture-of-agents-virtual-provider) |
+| `007` | Theme System Consolidation | Enhancement | Medium | `v0.9.5` | [v0.9.5](features/v0.9.5.md#feature_007-theme-system-consolidation) |
+| `030` | Multi-Surface Delivery | Enhancement | High | `v0.9.5` | [v0.9.5](features/v0.9.5.md#feature_030-multi-surface-delivery) |
+| `093` | Coding and REPL Internal Circular Dependency Decoupling | Internal | Medium | `v0.9.5` | [v0.9.5](features/v0.9.5.md#feature_093-coding-and-repl-internal-circular-dependency-decoupling) |
+| `113` | TodoList JSON / CLI Surface | Enhancement | Medium | `v0.9.7` | [v0.9.7](features/v0.9.7.md#feature_113-todolist-json--cli-surface) |
+| `139` | NotebookEdit Tool | Enhancement / Tool | Low | `v0.9.25` | [v0.9.25](features/v0.9.25.md#feature_139-notebookedit-tool--jupyter-cell-level-crud) |
 | `262` | npm 12 Install-Time Security + Trusted Publishing Migration | Internal / Supply Chain Security | High | `v0.9.0` | [v0.9.0](features/v0.9.0.md#feature_262-npm-12-install-time-security--trusted-publishing-migration) |
 
 ---
@@ -1225,3 +1276,33 @@ fixed GitHub binary archive sidecar omission before tagging.
 - [Detailed Design](DD.md)
 - [Archived Features](FEATURES_ARCHIVED.md)
 - [Known Issues](KNOWN_ISSUES.md)
+
+---
+
+## 2026-08-08 v0.7.89+ Roadmap Slide to 0.8.x / 0.9.x
+
+At explicit user direction, every planned `v0.7.x` feature at `v0.7.89` and later
+moves out of `0.7.x` into `0.8.x`, and the original `0.8.x` features slide to `0.9.x`.
+`v0.7.90`-`v0.7.105` return to debug/patch slots; Issue 256 (v0.7.85 bug fix) and
+FEATURE_289 (v0.7.85) are below the cutoff and are unchanged. FEATURE_262 (v0.9.0)
+is also unchanged.
+
+- `FEATURE_278`, `FEATURE_279`, `FEATURE_282`, `FEATURE_283`, `FEATURE_285`:
+  `v0.7.90` -> `v0.8.0`.
+- `FEATURE_280`: `v0.7.91` -> `v0.8.1`.
+- `FEATURE_287`: `v0.7.93` -> `v0.8.3`.
+- `FEATURE_288`: `v0.7.94` -> `v0.8.4`.
+- `FEATURE_265`: `v0.7.95` -> `v0.8.5`.
+- `FEATURE_105`: `v0.7.100` -> `v0.8.10`.
+- `FEATURE_225` (InProgress): `v0.7.105` -> `v0.8.15`.
+- `FEATURE_007`, `FEATURE_030`, `FEATURE_093`: `v0.8.5` -> `v0.9.5`.
+- `FEATURE_113`: `v0.8.7` -> `v0.9.7`.
+- `FEATURE_139`: `v0.8.25` -> `v0.9.25`.
+
+Design documents relocated to their new version homes
+(`docs/features/v0.8.x.md`, `v0.9.x.md`) with updated Status/Target fields; the prior
+version files retain their headers and historical content with a relocation pointer.
+The `v0.8.5.md` vision document (F007/030/093) slid wholesale to `v0.9.5.md`; the
+`v0.8.5.md` filename is now the FEATURE_265 home. Displaced tombstones (`v0.9.5`
+archived staging, `v0.8.15` cancelled FEATURE_125 design) were preserved verbatim in
+`FEATURES_ARCHIVED.md`.
