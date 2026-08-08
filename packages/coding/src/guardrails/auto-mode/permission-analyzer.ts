@@ -839,8 +839,9 @@ function isCredentialBearingKodaxPath(target: string, agentHome: string): boolea
   // OAuth / daemon credential stores (plaintext tokens / client secrets).
   if (relNorm === 'mcp-tokens' || relNorm.startsWith('mcp-tokens/')) return true;
   if (relNorm === 'mcp-clients' || relNorm.startsWith('mcp-clients/')) return true;
-  // Integration declarations may carry literal secrets (${env:NAME} is
-  // recognized but not yet expanded at runtime).
+  // Integration declarations may carry literal secrets. ${env:NAME} in
+  // env/headers is expanded at transport creation (transport.ts), but other
+  // fields + plaintext may still appear - keep protected as defense in depth.
   if (relNorm === 'integrations' || relNorm.startsWith('integrations/')) return true;
   // Core config may carry legacy literal MCP server secrets (env/headers/auth).
   if (relNorm === 'config.json') return true;
