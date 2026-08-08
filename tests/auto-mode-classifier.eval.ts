@@ -170,7 +170,7 @@ async function sanityCase(
       provider,
       model,
       rules: EMPTY_RULES,
-      transcript: testCase.transcript,
+      transcript: testCase.signals ? [] : testCase.transcript,
       action: testCase.signals
         ? serializeOperationFacts(testCase.signals)
         : testCase.action,

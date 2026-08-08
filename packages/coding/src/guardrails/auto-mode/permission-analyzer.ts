@@ -925,7 +925,7 @@ function classifyTarget(
   }
   // Read-side narrowing: a path confidently inside the user KodaX home is
   // classified by the credential subset instead of the whole-home lexical
-  // rule. Non-credential paths (tool-results, sessions, config.json, ...)
+  // rule. Non-credential paths (tool-results, sessions, custom-providers.json, ...)
   // read as outside-workspace; the credential subset stays protected. Falls
   // through to the lexical rule when the path is not confidently under the
   // user home (project <root>/.kodax/ and other CLI homes stay protected).
