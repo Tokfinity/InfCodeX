@@ -25,6 +25,8 @@ export interface RuntimeDaemonJsonSchema {
   readonly items?: RuntimeDaemonJsonSchema;
   readonly oneOf?: readonly RuntimeDaemonJsonSchema[];
   readonly maxLength?: number;
+  readonly maximum?: number;
+  readonly minimum?: number;
 }
 
 export interface RuntimeDaemonMethodSchema {
@@ -704,6 +706,12 @@ export function validateRuntimeDaemonJsonSchema(
 
   if (typeof value === 'string' && schema.maxLength !== undefined && value.length > schema.maxLength) {
     return [`${path} must have at most ${schema.maxLength} characters.`];
+  }
+  if (typeof value === 'number' && schema.minimum !== undefined && value < schema.minimum) {
+    return [`${path} must be at least ${schema.minimum}.`];
+  }
+  if (typeof value === 'number' && schema.maximum !== undefined && value > schema.maximum) {
+    return [`${path} must be at most ${schema.maximum}.`];
   }
 
   if (Array.isArray(value)) {
@@ -1414,7 +1422,11 @@ function eventFilterSchema(): RuntimeDaemonJsonSchema {
 function eventReplayFilterSchema(): RuntimeDaemonJsonSchema {
   return scopedEventFilterSchema({
     after: runtimeSessionCursorSchema(),
-    limit: integerSchema,
+    limit: {
+      type: 'integer',
+      minimum: 1,
+      maximum: Number.MAX_SAFE_INTEGER,
+    },
   });
 }
 

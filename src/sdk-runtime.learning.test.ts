@@ -253,6 +253,7 @@ describe('runtime.learning inline facade', () => {
             },
             capabilities: {
               learningCenter: { version: 1 },
+              sessionEventJournal: { version: 1 },
               skillLearningLoop: {
                 version: 1,
                 activation: 'project_scoped_canary',

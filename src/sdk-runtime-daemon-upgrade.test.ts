@@ -295,12 +295,13 @@ describe('Runtime daemon capability upgrade', () => {
     },
   );
 
-  it('publishes pre-spawn managed durability, event coalescing, and orphan-exit capabilities', () => {
+  it('publishes the required pre-spawn daemon capabilities', () => {
     expect(KODAX_RUNTIME_SDK_CAPABILITIES).toEqual({
       daemonOrphanExit: 1,
       daemonShutdownVerification: 1,
       managedRunDurability: 1,
       runtimeEventCoalescing: 1,
+      sessionEventJournal: 1,
     });
   });
 
@@ -535,6 +536,7 @@ function createLegacyTransport(input: {
           RUNTIME_ID,
           {
             managedRunDurability: { version: 1 },
+            sessionEventJournal: { version: 1 },
             ...(input.capabilities ?? {
               daemonManagement: { version: 1 },
               runtimeAutoModeGuardrail: { version: 1, owner: 'session-runtime' },
@@ -582,6 +584,7 @@ function createCurrentTransport(
       }
       return initializeResult('runtime_current', {
         managedRunDurability: { version: 1 },
+        sessionEventJournal: { version: 1 },
         runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
         runtimeEventCoalescing: { version: 1 },
         ...(process.platform === 'win32'

@@ -2314,6 +2314,7 @@ export type RuntimeEventFilter = RuntimeEventFilterFields & (
 
 export type RuntimeEventReplayFilter = RuntimeEventFilter & {
   readonly after?: RuntimeSessionCursor;
+  /** Positive safe-integer result bound. */
   readonly limit?: number;
 };
 
@@ -11177,7 +11178,9 @@ function createRuntimeEventBus(persistence: RuntimePersistence) {
         .sort((a, b) => compareRuntimeReplayEvents(a, b, filter));
       return filter?.limit === undefined
         ? matched
-        : matched.slice(-filter.limit);
+        : filter.after === undefined
+          ? matched.slice(-filter.limit)
+          : matched.slice(0, filter.limit);
     },
   };
 
@@ -11187,8 +11190,9 @@ function createRuntimeEventBus(persistence: RuntimePersistence) {
       return service.subscribe({ ...filter, sessionId }, listener);
     },
     async replay(filter) {
+      assertRuntimeEventReplayLimit(filter?.limit);
       const sessionId = resolveRuntimeEventScope(filter, persistence);
-      assertRuntimeEventCursorArgument(filter.after);
+      assertRuntimeEventCursorArgument(filter?.after);
       return service.replay({ ...filter, sessionId });
     },
   };
@@ -11762,15 +11766,30 @@ function createRuntimePersistence(
     if (!fs.existsSync(file)) return undefined;
     try {
       const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf-8"));
-      return isRecord(parsed)
+      if (
+        isRecord(parsed)
         && parsed.version === 1
         && parsed.sessionId === sessionId
-        && parsed.retired !== true
         && typeof parsed.journalEpoch === "string"
         && parsed.journalEpoch.length > 0
-        ? parsed.journalEpoch
-        : undefined;
-    } catch {
+        && (parsed.retired === undefined || parsed.retired === true)
+      ) {
+        return parsed.retired === true ? undefined : parsed.journalEpoch;
+      }
+      emitKodaXDiagnostic({
+        source: "runtime.persistence",
+        level: "warn",
+        message: `Invalid active Session event journal metadata for ${sessionId}; excluding it from aggregate event replay`,
+        detail: { file },
+      });
+      return undefined;
+    } catch (error: unknown) {
+      emitKodaXDiagnostic({
+        source: "runtime.persistence",
+        level: "warn",
+        message: `Failed to read active Session event journal metadata for ${sessionId}; excluding it from aggregate event replay`,
+        detail: { file, error: normalizeError(error) },
+      });
       return undefined;
     }
   };
@@ -12830,7 +12849,13 @@ function createRuntimePersistence(
                 let persisted: PersistedRuntimeRunStatus | undefined;
                 try {
                   persisted = readPersistedRuntimeRunStatus(statusFile(runId));
-                } catch {
+                } catch (error: unknown) {
+                  emitKodaXDiagnostic({
+                    source: "runtime.persistence",
+                    level: "warn",
+                    message: `Failed to read Runtime status for aggregate event replay: ${runId}`,
+                    detail: normalizeError(error),
+                  });
                   return false;
                 }
                 const retainedRootEvidence = currentGenerationEvents.some((event) => (
@@ -12892,6 +12917,11 @@ function createRuntimePersistence(
         if (current?.journalEpoch !== filter.after.journalEpoch) {
           throw createRuntimeResyncError(
             "Runtime Session event journal changed; request a fresh snapshot",
+          );
+        }
+        if (filter.after.seq > current.seq) {
+          throw createRuntimeResyncError(
+            "Runtime event cursor is ahead of the current Session journal; request a fresh snapshot",
           );
         }
       }
@@ -14253,6 +14283,21 @@ function assertRuntimeEventCursorArgument(
   ) return;
   throw Object.assign(
     new Error("Runtime event cursor is invalid"),
+    { code: "invalid_argument" as const },
+  );
+}
+
+function assertRuntimeEventReplayLimit(limit: unknown): void {
+  if (
+    limit === undefined
+    || (
+      typeof limit === "number"
+      && Number.isSafeInteger(limit)
+      && limit > 0
+    )
+  ) return;
+  throw Object.assign(
+    new Error("Runtime event replay limit must be a positive safe integer"),
     { code: "invalid_argument" as const },
   );
 }

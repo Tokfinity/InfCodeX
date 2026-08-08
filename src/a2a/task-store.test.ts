@@ -118,4 +118,47 @@ describe('A2AFileTaskStore durability and lock ownership', () => {
       second.close();
     }
   });
+
+  it('loads a legacy numeric Runtime cursor without treating it as a Session cursor', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-a2a-legacy-cursor-'));
+    roots.push(root);
+    const timestamp = '2026-07-17T00:00:00.000Z';
+    const message = {
+      messageId: 'legacy-cursor-message', contextId: 'legacy-cursor-context',
+      role: 'ROLE_USER' as const, parts: [{ text: 'resume safely' }],
+    };
+    fs.writeFileSync(path.join(root, 'tasks.json'), `${JSON.stringify([{
+      taskId: 'legacy-cursor-task',
+      contextId: message.contextId,
+      principalKey: 'principal-key',
+      runtimeIdentity: 'runtime',
+      sessionId: 'legacy-cursor-session',
+      messageDigests: { [message.messageId]: 'digest' },
+      runIds: ['legacy-cursor-run'],
+      task: {
+        id: 'legacy-cursor-task', contextId: message.contextId,
+        status: { state: 'TASK_STATE_WORKING', timestamp },
+        history: [message],
+      },
+      history: [message],
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      eventSeq: 1,
+      lastRuntimeEventSeq: 42,
+      runtimeEventCount: 1,
+      runtimeEventBytes: 128,
+    }], null, 2)}\n`, 'utf8');
+
+    const store = new A2AFileTaskStore(root);
+    try {
+      const loaded = store.get('legacy-cursor-task');
+      expect(loaded).toMatchObject({
+        sessionId: 'legacy-cursor-session',
+        runIds: ['legacy-cursor-run'],
+      });
+      expect(loaded?.runtimeSessionCursor).toBeUndefined();
+    } finally {
+      store.close();
+    }
+  });
 });

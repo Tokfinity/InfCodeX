@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 
+import { setKodaXDiagnosticSink, type KodaXDiagnostic } from "@kodax-ai/agent";
 import { FileSessionStorage } from "@kodax-ai/repl";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -81,6 +82,24 @@ describe("Runtime Session event journals", () => {
     }
   });
 
+  it("rejects a replay cursor ahead of the current Session journal", async () => {
+    const root = await createRoot();
+    const runtime = await createKodaXRuntime({ mode: "embedded", homeDir: root });
+
+    try {
+      await runtime.sessions.create({ sessionId: "session-ahead" });
+      const [event] = await runtime.events.replay({ sessionId: "session-ahead" });
+      if (event === undefined) throw new Error("Session creation event missing");
+
+      await expect(runtime.events.replay({
+        sessionId: "session-ahead",
+        after: { ...event.cursor, seq: event.cursor.seq + 1 },
+      })).rejects.toMatchObject({ code: "resync_required" });
+    } finally {
+      await runtime.close();
+    }
+  });
+
   it("rejects unscoped public event access", async () => {
     const root = await createRoot();
     const runtime = await createKodaXRuntime({ mode: "embedded", homeDir: root });
@@ -129,6 +148,52 @@ describe("Runtime Session event journals", () => {
     }
   });
 
+  it("pages forward after a cursor while preserving latest-event replay without one", async () => {
+    const root = await createRoot();
+    const sessionId = "session-pagination";
+    const runtime = await createKodaXRuntime({ mode: "embedded", homeDir: root });
+
+    try {
+      await runtime.sessions.create({ sessionId });
+      await runtime.sessions.updateSettings(sessionId, { provider: "provider-1" });
+      await runtime.sessions.updateSettings(sessionId, { model: "model-1" });
+      await runtime.sessions.updateSettings(sessionId, { thinking: true });
+      const all = await runtime.events.replay({ sessionId });
+      const first = all[0];
+      if (first === undefined) throw new Error("Session creation event missing");
+
+      await expect(runtime.events.replay({
+        sessionId,
+        after: first.cursor,
+        limit: 2,
+      })).resolves.toMatchObject([{ seq: 2 }, { seq: 3 }]);
+      await expect(runtime.events.replay({ sessionId, limit: 2 }))
+        .resolves.toMatchObject([{ seq: 3 }, { seq: 4 }]);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("rejects non-positive or non-integer replay limits", async () => {
+    const root = await createRoot();
+    const runtime = await createKodaXRuntime({ mode: "embedded", homeDir: root });
+
+    try {
+      await runtime.sessions.create({ sessionId: "session-invalid-limit" });
+      const replay = runtime.events.replay as unknown as (
+        filter: Readonly<Record<string, unknown>>,
+      ) => Promise<unknown>;
+      for (const limit of [0, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
+        await expect(replay({
+          sessionId: "session-invalid-limit",
+          limit,
+        })).rejects.toMatchObject({ code: "invalid_argument" });
+      }
+    } finally {
+      await runtime.close();
+    }
+  });
+
   it("excludes an earlier journal epoch from a fresh Session replay", async () => {
     const root = await createRoot();
     const runtime = await createKodaXRuntime({ mode: "embedded", homeDir: root });
@@ -168,6 +233,79 @@ describe("Runtime Session event journals", () => {
       expect(events.map((event) => event.cursor.journalEpoch))
         .toEqual(["replacement-epoch"]);
     } finally {
+      await runtime.close();
+    }
+  });
+
+  it("reports corrupt aggregate replay metadata without widening the failure domain", async () => {
+    const root = await createRoot();
+    const sessionId = "session-aggregate-warning";
+    const runtime = await createKodaXRuntime({ mode: "embedded", homeDir: root });
+    const diagnostics: KodaXDiagnostic[] = [];
+    const restoreDiagnosticSink = setKodaXDiagnosticSink((diagnostic) => {
+      diagnostics.push(diagnostic);
+    });
+
+    try {
+      await runtime.sessions.create({ sessionId });
+      const runDir = path.join(root, ".kodax", "runtime", "runs", sessionId);
+      await fs.mkdir(runDir, { recursive: true });
+      await fs.writeFile(path.join(runDir, "status.json"), "{bad status", "utf8");
+
+      await expect(runtime.diagnostics.latestContextBudget({
+        sessionId,
+        contextKind: "child",
+      })).resolves.toBeNull();
+
+      await fs.writeFile(
+        path.join(sessionEventDir(root, sessionId), "journal.json"),
+        "{bad journal",
+        "utf8",
+      );
+      await expect(runtime.diagnostics.latestContextBudget({
+        sessionId,
+        contextKind: "child",
+      })).resolves.toBeNull();
+
+      expect(diagnostics).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          source: "runtime.persistence",
+          level: "warn",
+          message: expect.stringMatching(/Runtime status.*aggregate event replay/i),
+        }),
+        expect.objectContaining({
+          source: "runtime.persistence",
+          level: "warn",
+          message: expect.stringMatching(/active Session event journal metadata/i),
+        }),
+      ]));
+    } finally {
+      restoreDiagnosticSink();
+      await runtime.close();
+    }
+  });
+
+  it("does not report valid retired Session journal metadata as corrupt", async () => {
+    const root = await createRoot();
+    const sessionId = "session-retired-journal";
+    const runtime = await createKodaXRuntime({ mode: "embedded", homeDir: root });
+    const diagnostics: KodaXDiagnostic[] = [];
+    const restoreDiagnosticSink = setKodaXDiagnosticSink((diagnostic) => {
+      diagnostics.push(diagnostic);
+    });
+
+    try {
+      await runtime.sessions.create({ sessionId });
+      await runtime.sessions.delete(sessionId);
+      await expect(runtime.diagnostics.latestContextBudget({
+        sessionId,
+        contextKind: "child",
+      })).resolves.toBeNull();
+      expect(diagnostics).not.toContainEqual(expect.objectContaining({
+        message: expect.stringMatching(/active Session event journal metadata/i),
+      }));
+    } finally {
+      restoreDiagnosticSink();
       await runtime.close();
     }
   });

@@ -95,6 +95,28 @@ describe('runtime daemon protocol schema', () => {
     })).toEqual([]);
   });
 
+  it('requires event replay limits to be positive', () => {
+    const schema = RUNTIME_DAEMON_METHOD_SCHEMAS['event.replay'].params;
+    const candidates = schema.oneOf ?? [];
+    expect(candidates.map((candidate) => candidate.properties?.limit))
+      .toEqual(Array.from({ length: 3 }, () => ({
+        type: 'integer',
+        minimum: 1,
+        maximum: Number.MAX_SAFE_INTEGER,
+      })));
+    const invalidReplay = {
+      sessionId: 'session-1',
+      limit: 0,
+    };
+    expect(validateRuntimeDaemonJsonSchema(candidates[0]!, invalidReplay))
+      .toContain('$.limit must be at least 1.');
+    expect(validateRuntimeDaemonJsonSchema(schema, invalidReplay)).not.toEqual([]);
+    expect(validateRuntimeDaemonJsonSchema(candidates[0]!, {
+      sessionId: 'session-1',
+      limit: Number.MAX_SAFE_INTEGER + 1,
+    })).toContain(`$.limit must be at most ${Number.MAX_SAFE_INTEGER}.`);
+  });
+
   it('accepts optional Session correlation on observation invalidation', () => {
     const schema =
       RUNTIME_DAEMON_NOTIFICATION_SCHEMAS['observation.invalidated'];

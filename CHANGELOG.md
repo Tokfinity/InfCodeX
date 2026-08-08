@@ -28,6 +28,16 @@ All notable changes to this project will be documented in this file.
   watermark is later corrupted. Missing or corrupt index evidence fails closed
   instead of treating an ambiguous trimmed journal as unrelated.
 
+### Fixed
+
+- Session event replay now rejects cursors ahead of the current journal instead
+  of silently returning no events. Limited replay retains the latest-event
+  behavior without a cursor and returns the earliest forward page when `after`
+  is supplied; replay limits must be positive safe integers. Corrupt aggregate
+  journal/status metadata is reported without widening the failure to unrelated
+  Sessions, valid retired journals are not misreported as corrupt, and A2A
+  regression coverage pins legacy numeric event positions as non-cursors.
+
 ---
 
 ## [0.7.84] - 2026-08-07
