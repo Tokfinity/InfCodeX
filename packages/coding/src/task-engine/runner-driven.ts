@@ -282,7 +282,6 @@ import { buildRunnerGoalAdapter } from './runner-goal-adapter.js';
 import path from 'node:path';
 import os from 'node:os';
 import { resolveExecutionCwd } from '../runtime-paths.js';
-import { mkdir } from 'node:fs/promises';
 
 // FEATURE_171 (v0.7.41) — runner-driven.ts modular split. The shared
 // interfaces and leaf modules below were extracted from this file
@@ -1232,7 +1231,6 @@ async function runManagedTaskViaRunnerInner(
   const skillInvocationCtx = options.context?.skillInvocation;
   if (skillInvocationCtx) {
     try {
-      await mkdir(workspaceDir, { recursive: true });
       const initialSkillArtifacts = await writeManagedSkillArtifacts(
         workspaceDir,
         skillInvocationCtx,
@@ -2247,6 +2245,24 @@ async function runManagedTaskViaRunnerInner(
         sessionId: sessionIdRef.current,
         agentProfile: options.context?.agentProfile,
       }));
+    },
+    onToolExecutionStart: (call) => {
+      options.events?.onToolExecutionStart?.(
+        { id: call.id, name: call.name },
+        runnerToolEventMeta(options.events, call.id, {
+          sessionId: sessionIdRef.current,
+          agentProfile: options.context?.agentProfile,
+        }),
+      );
+    },
+    onToolExecutionEnd: (call) => {
+      options.events?.onToolExecutionEnd?.(
+        { id: call.id, name: call.name },
+        runnerToolEventMeta(options.events, call.id, {
+          sessionId: sessionIdRef.current,
+          agentProfile: options.context?.agentProfile,
+        }),
+      );
     },
   };
   const todoDriftObserver = createTodoDriftObserver({

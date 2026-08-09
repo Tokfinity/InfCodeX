@@ -746,6 +746,8 @@ describe('Runner', () => {
     it('does not start a tool after caller cancellation is observed by beforeTool', async () => {
       const controller = new AbortController();
       const execute = vi.fn(async () => ({ content: 'must not execute' }));
+      const executionStart = vi.fn();
+      const executionEnd = vi.fn();
       const agent = createAgent({
         name: 'cancelled-before-tool-agent',
         instructions: 'sys',
@@ -768,11 +770,15 @@ describe('Runner', () => {
             controller.abort();
             return true;
           },
+          onToolExecutionStart: executionStart,
+          onToolExecutionEnd: executionEnd,
         },
       });
 
       await expect(run).rejects.toMatchObject({ name: 'AbortError' });
       expect(execute).not.toHaveBeenCalled();
+      expect(executionStart).not.toHaveBeenCalled();
+      expect(executionEnd).not.toHaveBeenCalled();
     });
 
     it('fires onToolCall + onToolResult around each invocation', async () => {
@@ -789,7 +795,7 @@ describe('Runner', () => {
         }
         return { text: 'done', toolCalls: [] };
       });
-      const calls: Array<{ kind: 'call' | 'result'; id: string; name: string; content?: string }> = [];
+      const calls: Array<{ kind: 'call' | 'start' | 'end' | 'result'; id: string; name: string; content?: string }> = [];
       await Runner.run(agent, 'hi', {
         llm,
         toolObserver: {
@@ -799,10 +805,14 @@ describe('Runner', () => {
           onToolResult: (call, result) => {
             calls.push({ kind: 'result', id: call.id, name: call.name, content: result.content });
           },
+          onToolExecutionStart: (call) => calls.push({ kind: 'start', id: call.id, name: call.name }),
+          onToolExecutionEnd: (call) => calls.push({ kind: 'end', id: call.id, name: call.name }),
         },
       });
       expect(calls).toEqual([
         { kind: 'call', id: 'c1', name: 'echo' },
+        { kind: 'start', id: 'c1', name: 'echo' },
+        { kind: 'end', id: 'c1', name: 'echo' },
         { kind: 'result', id: 'c1', name: 'echo', content: 'echo:ping' },
       ]);
     });

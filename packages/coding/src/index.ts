@@ -1214,6 +1214,7 @@ export type {
 } from './guardrails/auto-mode/classify.js';
 export * from './guardrails/auto-mode/permission-analyzer.js';
 export * from './permissions/permission.js';
+export * from './permissions/agent-home-policy.js';
 export * from './permissions/bash-ast.js';
 export * from './permissions/powershell-mutation.js';
 export * from './permissions/shell-command-sets.js';
@@ -1277,8 +1278,12 @@ export type {
   ResolveClassifierModelOptions,
   ResolvedClassifierModel,
 } from './guardrails/auto-mode/model-resolver.js';
-export { createAutoModeToolGuardrail } from './guardrails/auto-mode/guardrail.js';
+export {
+  createAgentHomeShellBoundaryGuardrail,
+  createAutoModeToolGuardrail,
+} from './guardrails/auto-mode/guardrail.js';
 export type {
+  AgentHomeShellBoundaryGuardrailOptions,
   AutoModeEngine,
   AutoModeSharedState,
   AutoModeGuardrailConfig,

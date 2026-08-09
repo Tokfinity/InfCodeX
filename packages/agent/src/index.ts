@@ -434,6 +434,11 @@ export {
   type ManagedChildCleanupSummary,
 } from './runtime/managed-child-processes.js';
 
+export {
+  containWindowsEffectProcess,
+  type WindowsEffectJob,
+} from './runtime/windows-effect-job.js';
+
 // FEATURE_222 — user-interaction primitive (shared by coding ask_user_* tools
 // and the agent MCP elicitation reverse capability) + the live-surface registry.
 export type {
@@ -758,7 +763,10 @@ export {
   resolveLearnedAreaPaths,
   slugifyLearnedCapabilityName,
 } from './learning/index.js';
-export { withLearningFileLock as withKodaXFileLock } from './learning/store-lock.js';
+export {
+  acquireLearningFileLock as acquireKodaXFileLock,
+  withLearningFileLock as withKodaXFileLock,
+} from './learning/store-lock.js';
 
 // ============== FEATURE_194 v0.7.43 — MCP capability (inlined from @kodax-ai/mcp) ==============
 // Originally a standalone package, inlined per ADR-036 to consolidate single-consumer

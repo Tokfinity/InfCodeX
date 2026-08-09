@@ -7,7 +7,9 @@
  */
 
 import path from 'node:path';
+import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import type { KodaXOptions, KodaXTaskSurface } from '../../../types.js';
+import { withFileMutation } from '../../../tools/_internal/file-mutation-queue.js';
 
 /**
  * Resolve the managed-task surface ("cli" / "repl" / "plan") from options.
@@ -30,4 +32,27 @@ export function getManagedTaskWorkspaceRoot(options: KodaXOptions, _surface: Kod
 
   const cwd = options.context?.executionCwd ?? options.context?.gitRoot ?? process.cwd();
   return path.resolve(cwd, '.agent', 'managed-tasks');
+}
+
+/** Persist a computed task artifact through the host hard-boundary fence. */
+export async function writeManagedTaskFile(
+  filePath: string,
+  content: string,
+  _encoding: BufferEncoding = 'utf8',
+): Promise<void> {
+  await withFileMutation(filePath, async () => {
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await writeFile(filePath, content, 'utf8');
+  });
+}
+
+/** Remove one computed task artifact without bypassing Runtime protection. */
+export async function deleteManagedTaskFile(filePath: string): Promise<void> {
+  await withFileMutation(filePath, async () => {
+    try {
+      await unlink(filePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  });
 }

@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
-import { constants, readdirSync, statSync, writeSync } from 'node:fs';
+import { constants, readdirSync, realpathSync, statSync, writeSync } from 'node:fs';
 import {
   copyFile,
   lstat,
@@ -108,6 +108,8 @@ interface SandboxBrokerRequest {
 export interface CreateAsrtShellSandboxInput {
   readonly workspaceRoot: string;
   readonly shouldSandbox: (call: RunnerToolCall) => boolean;
+  /** Selected calls must fail closed when the OS sandbox cannot be applied. */
+  readonly failClosed?: boolean;
 }
 
 export type KodaXSandboxNetworkPolicy =
@@ -1455,13 +1457,84 @@ function workspaceShellSensitiveReadDenies(
   ])];
 }
 
+function workspaceShellWriteRoots(
+  candidateRoots: readonly string[],
+  agentHome: string,
+): string[] {
+  let canonicalAgentHome: string;
+  try {
+    canonicalAgentHome = realpathSync.native(agentHome);
+  } catch {
+    return [];
+  }
+  const roots: string[] = [];
+  for (const candidateRoot of candidateRoots) {
+    let canonicalCandidate: string;
+    try {
+      canonicalCandidate = realpathSync.native(candidateRoot);
+    } catch {
+      continue;
+    }
+    if (!isInside(canonicalCandidate, canonicalAgentHome)) {
+      roots.push(candidateRoot);
+    } else if (canonicalCandidate !== canonicalAgentHome) {
+      const protectedSegments = path.relative(canonicalCandidate, canonicalAgentHome).split(path.sep);
+      let current = canonicalCandidate;
+      try {
+        for (const protectedSegment of protectedSegments) {
+          for (const entry of readdirSync(current, { withFileTypes: true })) {
+            if (entry.name !== protectedSegment) roots.push(path.join(current, entry.name));
+          }
+          current = path.join(current, protectedSegment);
+        }
+      } catch {
+        // Existing sibling grants are optional; omitting them is fail-closed.
+      }
+    }
+  }
+  if (process.platform !== 'win32') roots.push(agentHome);
+  else roots.push(...existingWindowsAgentHomeWriteRoots(agentHome));
+  return [...new Set(roots)];
+}
+
+function existingWindowsAgentHomeWriteRoots(agentHome: string): string[] {
+  try {
+    const canonicalHome = realpathSync.native(agentHome);
+    const runtimeRoot = path.join(canonicalHome, 'runtime');
+    const sandboxControlRoot = path.join(canonicalHome, 'sandbox-runtime');
+    const legacyProcessControlRoot = path.join(canonicalHome, 'processes');
+    const learnedControlRoot = path.join(canonicalHome, 'learned');
+    const roots: string[] = [];
+    for (const entry of readdirSync(agentHome, { withFileTypes: true })) {
+      const candidate = path.join(agentHome, entry.name);
+      try {
+        const canonicalCandidate = realpathSync.native(candidate);
+        if (
+          canonicalCandidate !== canonicalHome
+          && isInside(canonicalHome, canonicalCandidate)
+          && !isInside(runtimeRoot, canonicalCandidate)
+          && !isInside(sandboxControlRoot, canonicalCandidate)
+          && !isInside(legacyProcessControlRoot, canonicalCandidate)
+          && !isInside(learnedControlRoot, canonicalCandidate)
+        ) roots.push(candidate);
+      } catch {
+        // A broken or racing child receives no grant; healthy siblings remain usable.
+      }
+    }
+    return roots;
+  } catch {
+    return [];
+  }
+}
+
 function workspaceShellSandboxConfig(
   workspaceRoot: string,
 ): SandboxRuntimeConfig {
   const agentHome = path.resolve(getAgentConfigHome());
   const controlDirectory = path.join(agentHome, 'sandbox-runtime');
   const home = path.resolve(os.homedir());
-  const denyRead = workspaceShellSensitiveReadDenies(home, agentHome, controlDirectory);
+  const denyRead = workspaceShellSensitiveReadDenies(home, agentHome, controlDirectory)
+    .filter((candidate) => candidate !== agentHome);
   const userReadGrants = (process.env.PATH ?? process.env.Path ?? '')
     .split(path.delimiter)
     .map((entry) => entry.replace(/^"|"$/g, ''))
@@ -1475,6 +1548,10 @@ function workspaceShellSandboxConfig(
         && !denyRead.some((denied) => isInside(denied, entry));
     });
   const bootstrap = sandboxJavaScriptCommand();
+  const writeRoots = workspaceShellWriteRoots(
+    [workspaceRoot, ...canonicalTempDirectories()],
+    agentHome,
+  );
   return withPreparedWindowsRunner({
     network: {
       allowedDomains: [],
@@ -1492,9 +1569,12 @@ function workspaceShellSandboxConfig(
           ...(path.isAbsolute(bootstrap) ? [bootstrap] : []),
         ]),
       ],
-      allowWrite: [workspaceRoot, ...canonicalTempDirectories()],
+      allowWrite: writeRoots,
       denyWrite: [
         controlDirectory,
+        path.join(agentHome, 'runtime'),
+        path.join(agentHome, 'processes'),
+        path.join(agentHome, 'learned'),
         ...existingWorkspaceDenyWrites(workspaceRoot),
       ],
     },
@@ -2063,23 +2143,19 @@ export async function resetAsrtWorkspaceSessionsForTest(): Promise<void> {
 }
 
 /**
- * Runtime-owned broker for exact workspace shell calls admitted by Auto[LLM].
- * Non-admitted commands return undefined and preserve the existing execution
- * path, including user-approved operations that intentionally need more scope.
+ * Runtime-owned broker for admitted workspace shell calls. Non-admitted calls
+ * return undefined; the caller either blocks them when failClosed is enabled or
+ * keeps the optional legacy execution path.
  */
 export function createAsrtShellSandbox(
   input: CreateAsrtShellSandboxInput,
 ): KodaXShellSandbox {
   const workspaceRoot = path.resolve(input.workspaceRoot);
-  void getWorkspaceSession(workspaceRoot).catch((error: unknown) => {
-    emitKodaXDiagnostic({
-      source: 'sandbox:workspace-session',
-      level: 'warn',
-      message: 'Workspace sandbox warm-up failed; commands will use normal permission fallback.',
-      detail: error,
-    });
-  });
   return {
+    failClosed: input.failClosed === true,
+    processTreeContainment: input.failClosed === true && process.platform === 'linux'
+      ? 'root-exit-drains'
+      : undefined,
     async prepare(shellInput) {
       if (!shellInput.toolCallId) {
         shellInput.reportObservation?.({
@@ -2147,7 +2223,7 @@ export function createAsrtShellSandbox(
           endpoints: [],
           allowAllNetwork: true,
           bootstrapCommand: sandboxJavaScriptCommand(),
-          fallbackToNormalExecution: true,
+          fallbackToNormalExecution: input.failClosed !== true,
           observationBackend: sandboxRuntimeCapability().backend,
           observationFile,
           targetStartedMarker:

@@ -40,6 +40,7 @@
 import path from 'path';
 import fs from 'fs/promises';
 import { emitKodaXDiagnostic } from '@kodax-ai/agent';
+import { withFileMutation } from '../tools/_internal/file-mutation-queue.js';
 
 const DISABLE_FILE = '_self_modify_disabled.json';
 
@@ -124,13 +125,15 @@ export async function disableSelfModify(
 ): Promise<DisableState> {
   const cwd = options.cwd ?? process.cwd();
   const file = disablePath(cwd, name);
-  await fs.mkdir(path.dirname(file), { recursive: true });
   const state: DisableState = {
     name,
     disabled: true,
     disabledAt: new Date().toISOString(),
     ...(options.user ? { user: options.user } : {}),
   };
-  await fs.writeFile(file, JSON.stringify(state, null, 2), 'utf8');
+  await withFileMutation(file, async () => {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, JSON.stringify(state, null, 2), 'utf8');
+  });
   return state;
 }

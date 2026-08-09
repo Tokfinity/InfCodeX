@@ -19,6 +19,7 @@ import type {
   RepoOverviewSnapshot,
 } from './public-bridge.js';
 import {
+  ensureRepoIntelligenceStorageDir,
   resolveRepoIntelligenceStorageDir,
   writeJsonFileAtomic as writeJsonFileAtomicInternal,
 } from './internal.js';
@@ -450,7 +451,7 @@ export async function ensureStorageDir(
   const storageRoot = profile === 'light'
     ? path.join(baseStorageRoot, 'light')
     : baseStorageRoot;
-  await fs.mkdir(storageRoot, { recursive: true });
+  await ensureRepoIntelligenceStorageDir(storageRoot);
   return storageRoot;
 }
 

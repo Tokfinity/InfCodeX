@@ -105,6 +105,8 @@ export interface RunnerToolObserver {
   readonly beforeTool?: (call: RunnerToolCall) => Promise<boolean | string | undefined>;
   readonly onToolCall?: (call: RunnerToolCall) => void;
   readonly onToolResult?: (call: RunnerToolCall, result: RunnerToolResult) => void;
+  readonly onToolExecutionStart?: (call: RunnerToolCall) => void;
+  readonly onToolExecutionEnd?: (call: RunnerToolCall) => void;
 }
 
 /**

@@ -252,6 +252,7 @@ export {
   isAlwaysConfirmPath,
   isCommandOnProtectedPath,
   isBashReadCommand,
+  isBashReadCommandAutoAllowed,
   isBashWriteCommand,
   collectBashWriteTargets,
   isPathInsideProject,

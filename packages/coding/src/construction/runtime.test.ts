@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import fs from 'fs/promises';
 import {
+  setAgentConfigHome,
   setKodaXDiagnosticSink,
   type KodaXDiagnostic,
 } from '@kodax-ai/agent';
@@ -62,6 +63,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   _resetRuntimeForTesting();
+  setAgentConfigHome(undefined);
   await fs.rm(tmpRoot, { recursive: true, force: true });
 });
 
@@ -403,6 +405,35 @@ describe('testArtifact() Phase 2 static-check pipeline', () => {
 });
 
 describe('stage() version immutability', () => {
+  it('atomically admits only one concurrent stage for the same version', async () => {
+    const artifact = buildToolArtifact({ name: 'concurrent', version: '1.0.0' });
+    const results = await Promise.allSettled([stage(artifact), stage(artifact)]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    const rejected = results.find((result) => result.status === 'rejected');
+    expect(rejected).toMatchObject({
+      status: 'rejected',
+      reason: expect.objectContaining({ message: expect.stringMatching(/manifest already exists/) }),
+    });
+  });
+
+  it('rejects a constructed artifact root retargeted into Agent Home Runtime', async () => {
+    const agentHome = path.join(tmpRoot, 'agent-home');
+    const runtimeRoot = path.join(agentHome, 'runtime');
+    const constructedRoot = path.join(tmpRoot, '.kodax', 'constructed');
+    await fs.mkdir(runtimeRoot, { recursive: true });
+    await fs.mkdir(path.dirname(constructedRoot), { recursive: true });
+    await fs.symlink(runtimeRoot, constructedRoot, process.platform === 'win32' ? 'junction' : 'dir');
+    setAgentConfigHome(agentHome);
+
+    await expect(
+      stage(buildToolArtifact({ name: 'retargeted', version: '1.0.0' })),
+    ).rejects.toThrow(/protected KodaX state/);
+    await expect(
+      fs.access(path.join(runtimeRoot, 'tools', 'retargeted', '1.0.0.json')),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('refuses to overwrite an active artifact at the same name+version', async () => {
     const handle = await stage(buildToolArtifact({ name: 'immut', version: '1.0.0' }));
     await testArtifact(handle);

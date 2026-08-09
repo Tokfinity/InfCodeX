@@ -30,6 +30,63 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Issue 282 follow-up: Actor progress is now batched once per controller tree,
+  terminal persistence excludes known mutation-queue waits from its five-second
+  ambiguity budget, and a permanently blocked predecessor remains bounded by a
+  separate queue-wait fence. Progress promises also reject when an ownership
+  conflict self-fences their controller instead of remaining pending forever.
+- A durability-unknown Actor tree now fail-closes its owning root executor and
+  automatically reconciles only an exact same-owner late snapshot. Runs settle
+  as `actor_settlement_not_persisted` unless a stronger executor Promise fact
+  was captured before the fence. Same-owner durable repair plus root abort and
+  post-fence admission suppression closes the Session route after every exact
+  tool execution admitted before the fence has settled. It does not wait for
+  an abort-ignoring provider Promise; callbacks and new Runtime-mediated effects
+  from the fenced root remain blocked.
+- Healthy `after_turn` input keeps the established coding-mode default. It
+  inherits a managed predecessor's mode only when it actually drains behind an
+  Actor durability repair.
+- Self-fenced Actor admission now reports the causal settlement-persistence
+  error instead of the misleading `actor_owner_conflict`. Genuine foreign-owner
+  conflicts remain fail-closed.
+- Runtime capability negotiation now exposes `actorSettlementConvergence:1`,
+  including automatic repair and safe after-turn queueing behind an unknown Run.
+- Issue 286: Learned Skill discovery now traverses the distinct remote and local
+  hashed project roots and routes every canary mutation to the record's owning
+  store. `remote-hash:*` receives the same local fallback, while the public
+  deprecated `expectedScope` configuration remains source/runtime compatible
+  with the optional multi-scope form.
+- Issue 285: Rules-mode agent-home access now protects the home root from whole-
+  tree removal, hard-denies Runtime mutations, and reviews credential/security
+  config plus generic sensitive filenames.
+  The legacy `processes/children` registry is now treated as host control state:
+  model writes are hard-denied, and upgrade cleanup quarantines unauthenticated
+  historical records without using them to signal a process.
+  Learned Area persistence is also host-owned and no longer directly writable
+  by model file or shell tools.
+  Ordinary descendants—including `agents/*.md`, Sessions, tool results, and
+  intermediate artifacts—remain readable and writable without approval.
+- Issue 285 execution-time file sinks now recheck the hard boundary after
+  queueing. Undo backups are context-scoped and identity-fenced, while workflow
+  worktree roots are accepted only through the trusted controller context.
+  Agent Home root and Runtime shell mutations use a non-authorizable gate in
+  both Auto[LLM] and Auto[Rules]; sensitive configuration remains reviewable.
+  A cross-process category lease prevents model-started shell effects from
+  racing a privileged file sink's canonical check and write without serializing
+  independent shell calls or independent direct-file mutations.
+- Every coding run now carries a non-removable Agent Home shell boundary.
+  Opaque Bash requires a fail-closed OS sandbox with authoritative process-tree
+  containment; unsandboxed or filesystem-only standalone callers
+  may run only completely modeled exact commands. Runtime supplies that sandbox
+  in every permission mode and fails closed when preparation is unavailable.
+  Linux uses the built-in ASRT PID namespace and Windows adds a per-effect Job;
+  macOS and legacy custom adapters without the optional containment capability
+  retain exact modeled commands but fail closed for opaque Bash.
+  Protected Agent Home reads still require review, but are not permanently
+  denied by the OS sandbox after an explicit approval.
+  On Windows, ACL grants target verified ordinary Agent Home children rather
+  than the Home object itself, so `agents`, Sessions, and intermediate results
+  remain writable without granting permission to delete the whole Home root.
 - Session event replay now rejects cursors ahead of the current journal instead
   of silently returning no events. Limited replay retains the latest-event
   behavior without a cursor and returns the earliest forward page when `after`

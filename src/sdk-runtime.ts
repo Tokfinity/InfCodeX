@@ -2896,6 +2896,8 @@ interface RuntimeRunRecord {
   actorDurabilityFailure?: RuntimeRunFailureFact;
   actorDurabilityRecovery?: Promise<void>;
   actorDurabilityPreservesExecutorFact?: boolean;
+  activeEffectCount?: number;
+  finishAfterEffectDrain?: () => void;
   capturedExecutorResult?: KodaXResult;
   capturedExecutorFailure?: RuntimeRunFailureFact;
   mode: RuntimeRunMode;
@@ -7430,7 +7432,10 @@ function createRuntimeRunService(deps: {
         || record.actorDurabilityFailure === undefined
         || record.actorSession?.health().state === "healthy"
       ) return;
-      if (attempt.error?.name !== "AgentSettlementAttemptTimeoutError") return;
+      if (
+        attempt.error?.name === "AgentOwnerConflictError"
+        || attempt.error?.name === "AgentSettlementPersistenceError"
+      ) return;
       await new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, retryMs);
         timer.unref?.();
@@ -8014,10 +8019,15 @@ function createRuntimeRunService(deps: {
       || !canApplyExecutorTerminalSignal(record)
     ) return;
     if (actorDurabilityFailureApplies(record)) {
-      // Actor repair proves the tree is durable, not that an already-started
-      // root effect has stopped. Keep the Session route fenced until the root
-      // executor Promise settles so a queued successor cannot overlap it.
-      if (!executorPromiseSettled(record)) return;
+      if ((record.activeEffectCount ?? 0) > 0) {
+        record.finishAfterEffectDrain = () => finishRecoveredUnconfirmedRun(record);
+        return;
+      }
+      record.finishAfterEffectDrain = undefined;
+      // Same-owner repair durably closes the Actor tree. Runtime's abort and
+      // post-fence admission suppression closes the root after every effect
+      // admitted before the fence has settled. The provider Promise itself
+      // may remain pending forever without overlapping the successor.
       finishRun(
         record,
         applyRunFailureFact(record, record.actorDurabilityFailure),
@@ -9818,18 +9828,25 @@ function buildRunOptions(input: {
   } = options.context ?? {};
   const runtimeAutoGuardrail = options.guardrails?.find(isRuntimeAutoModeGuardrail);
   const workspaceRoot =
-    options.context?.gitRoot ?? options.context?.executionCwd;
+    options.context?.gitRoot ?? options.context?.executionCwd ?? process.cwd();
   const runtimeWorkspaceShellSandbox =
-    runtimeAutoGuardrail !== undefined && workspaceRoot !== undefined
-      ? createAsrtShellSandbox({
-          workspaceRoot,
-          shouldSandbox: (call) =>
-            runtimeAutoGuardrail.consumeWorkspaceSandboxCall(call),
-        })
-      : undefined;
+    createAsrtShellSandbox({
+      workspaceRoot,
+      failClosed: true,
+      shouldSandbox: (call) =>
+        replApi.normalizePermissionMode(record.permissionMode) !== "auto"
+        || runtimeAutoGuardrail === undefined
+        || runtimeAutoGuardrail.consumeWorkspaceSandboxCall(call),
+    });
   const shellSandbox =
     runtimeWorkspaceShellSandbox !== undefined && callerShellSandbox !== undefined
       ? {
+          failClosed: true,
+          // Opaque calls admitted by the Runtime-owned Auto guardrail consume
+          // the Runtime sandbox token; non-Auto calls always select Runtime.
+          // The optional caller adapter is only a compatibility fallback for
+          // calls that Runtime did not select, so it cannot weaken this proof.
+          processTreeContainment: runtimeWorkspaceShellSandbox.processTreeContainment,
           async prepare(request: Parameters<KodaXShellSandbox["prepare"]>[0]) {
             let runtimeObservation:
               | Parameters<NonNullable<typeof request.reportObservation>>[0]
@@ -9841,6 +9858,15 @@ function buildRunOptions(input: {
               },
             });
             if (runtimeInvocation !== undefined) return runtimeInvocation;
+            if (
+              runtimeWorkspaceShellSandbox.failClosed === true
+              && runtimeObservation?.state !== "not_selected"
+            ) {
+              if (runtimeObservation !== undefined) {
+                request.reportObservation?.(runtimeObservation);
+              }
+              return undefined;
+            }
 
             let callerObservation:
               | Parameters<NonNullable<typeof request.reportObservation>>[0]
@@ -16298,6 +16324,26 @@ function wrapKodaXEvents(input: {
       emit("tool.finished", { result, meta }, meta);
       externalCallbacks()?.onToolResult?.(result, meta);
     },
+    onToolExecutionStart(tool, meta) {
+      void tool;
+      void meta;
+      if (actorDurabilityFenced()) {
+        const error = new Error("Tool execution was fenced by Actor durability failure.");
+        error.name = "AbortError";
+        throw error;
+      }
+      record.activeEffectCount = (record.activeEffectCount ?? 0) + 1;
+    },
+    onToolExecutionEnd(tool, meta) {
+      void tool;
+      void meta;
+      record.activeEffectCount = Math.max(0, (record.activeEffectCount ?? 0) - 1);
+      if ((record.activeEffectCount ?? 0) === 0) {
+        const finishAfterEffectDrain = record.finishAfterEffectDrain;
+        record.finishAfterEffectDrain = undefined;
+        finishAfterEffectDrain?.();
+      }
+    },
     onStreamEnd(meta) {
       emit("run.progress", { kind: "stream_end", meta }, meta);
       externalCallbacks()?.onStreamEnd?.(meta);
@@ -19925,6 +19971,7 @@ async function createRuntimeAutoModeGuardrail(input: {
     projectRoot,
     executionCwd,
     trustProcessEnvironmentPathExpansion,
+    requireWorkspaceShellSandbox: true,
     admitWorkspaceSandboxCall: (call, review) => {
       if (reviewTouchesProtectedWindowsSystemTemp(review)) return;
       const key = runtimeAutoModeDecisionKey(call);
@@ -20015,10 +20062,19 @@ function resolveRuntimePermissionPolicy(
   // become permission work merely because a client prompt is available.
   if (tool === "bash") {
     const command = typeof input.command === "string" ? input.command : "";
-    if (replApi.isBashReadCommand(command)) return true;
     if (
-      projectRoot &&
-      replApi.isCommandOnProtectedPath(command, projectRoot, executionCwd)
+      replApi.isBashReadCommandAutoAllowed(
+        command,
+        projectRoot ?? executionCwd,
+        executionCwd,
+      )
+    ) return true;
+    if (
+      replApi.isCommandOnProtectedPath(
+        command,
+        projectRoot ?? executionCwd,
+        executionCwd,
+      )
     )
       return undefined;
   }

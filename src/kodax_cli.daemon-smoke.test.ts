@@ -1542,7 +1542,7 @@ async function waitForManagedChildPid(
   configHome: string,
   expectedArg: string,
 ): Promise<number> {
-  const registryDir = path.join(configHome, 'processes', 'children');
+  const registryDir = path.join(configHome, 'runtime', 'processes', 'children');
   const deadline = Date.now() + 30_000;
   while (Date.now() <= deadline) {
     if (fs.existsSync(registryDir)) {

@@ -3198,26 +3198,29 @@ describe('Auto[rules] user KodaX home read narrowing', () => {
     fs.writeFileSync(path.join(userKodax, 'custom-providers.json'), '{}');
     fs.mkdirSync(path.join(userKodax, 'sessions'), { recursive: true });
     fs.writeFileSync(path.join(userKodax, 'sessions', 's.json'), '{}');
+    fs.mkdirSync(path.join(userKodax, 'agents'), { recursive: true });
+    fs.writeFileSync(path.join(userKodax, 'agents', 'reviewer.md'), '# Reviewer');
 
     const openPaths = [
-      'tool-results/out.txt',
-      'custom-providers.json',
-      'sessions/s.json',
+      ['tool-results/out.txt', 'agent-home'],
+      ['custom-providers.json', 'agent-home-readonly'],
+      ['sessions/s.json', 'agent-home'],
+      ['agents/reviewer.md', 'agent-home'],
     ];
-    for (const rel of openPaths) {
+    for (const [rel, boundary] of openPaths) {
       const assessment = assessAutoModeCall(
-        call('read', { path: path.join(userKodax, rel) }),
+        call('read', { path: path.join(userKodax, rel!) }),
         context(projectRoot),
       );
       expect(assessment.decision.action).toBe('allow');
       expect(assessment.review.operations).toContainEqual(expect.objectContaining({
         kind: 'read',
-        target: expect.objectContaining({ boundary: 'agent-home' }),
+        target: expect.objectContaining({ boundary }),
       }));
     }
   });
 
-  it('allows glob/grep of non-credential ~/.kodax paths without confirmation', () => {
+  it('allows glob/grep of a clean agent-home working subtree without confirmation', () => {
     const projectRoot = createRoot('kodax-home-narrow-');
     userKodax = createTempDirSync('kodax-home-narrow-user-', process.cwd());
     setAgentConfigHome(userKodax);
@@ -3237,6 +3240,198 @@ describe('Auto[rules] user KodaX home read narrowing', () => {
       }));
     }
   });
+
+  it('allows common recursive shell search flags over clean working subtrees', () => {
+    const projectRoot = createRoot('kodax-home-clean-shell-search-');
+    userKodax = createTempDirSync('kodax-home-clean-shell-search-user-', process.cwd());
+    setAgentConfigHome(userKodax);
+    const scratch = path.join(userKodax, 'scratch');
+    const toolResults = path.join(userKodax, 'tool-results');
+    fs.mkdirSync(scratch, { recursive: true });
+    fs.mkdirSync(toolResults, { recursive: true });
+    fs.writeFileSync(path.join(scratch, 'out.txt'), 'foo');
+    fs.writeFileSync(path.join(toolResults, 'out.txt'), 'foo');
+
+    for (const command of [
+      `rg -n foo "${scratch}"`,
+      `grep -n -r foo "${toolResults}"`,
+    ]) {
+      const assessment = assessAutoModeCall(
+        call('bash', { command }),
+        context(projectRoot),
+      );
+      expect(assessment.decision.action).toBe('allow');
+    }
+  });
+
+  it('reviews worktree removal only when an Agent Home tree contains protected descendants', () => {
+    const projectRoot = createRoot('kodax-home-worktree-remove-');
+    userKodax = createTempDirSync('kodax-home-worktree-remove-user-', process.cwd());
+    setAgentConfigHome(userKodax);
+    const worktree = path.join(userKodax, 'sessions', 'worktree');
+    fs.mkdirSync(worktree, { recursive: true });
+    fs.writeFileSync(path.join(worktree, 'ordinary.txt'), 'ok');
+    const rulesContext: AutoModeRulesContext = {
+      ...context(projectRoot),
+      toolSideEffect: 'mutates-fs',
+    };
+
+    expect(assessAutoModeCall(call('worktree_remove', {
+      action: 'remove',
+      worktree_path: worktree,
+    }), rulesContext).decision.action).toBe('allow');
+
+    fs.writeFileSync(path.join(worktree, '.env'), 'SECRET=value');
+    const protectedAssessment = assessAutoModeCall(call('worktree_remove', {
+      action: 'remove',
+      worktree_path: worktree,
+    }), rulesContext);
+    expect(protectedAssessment.decision.action).toBe('escalate');
+    expect(protectedAssessment.review.risks).toContain('protected_descendant');
+  });
+
+  it('treats an rg file operand as an exact read instead of a recursive root', () => {
+    const projectRoot = createRoot('kodax-home-rg-file-');
+    userKodax = createTempDirSync('kodax-home-rg-file-user-', process.cwd());
+    setAgentConfigHome(userKodax);
+    const scratch = path.join(userKodax, 'scratch');
+    const ordinary = path.join(scratch, 'out.txt');
+    fs.mkdirSync(scratch, { recursive: true });
+    fs.writeFileSync(ordinary, 'foo');
+    fs.writeFileSync(path.join(scratch, 'credentials.json'), 'secret');
+
+    const exact = assessAutoModeCall(
+      call('bash', { command: `rg -n foo "${ordinary}"` }),
+      context(projectRoot),
+    );
+    expect(exact.decision.action).toBe('allow');
+
+    const recursive = assessAutoModeCall(
+      call('bash', { command: `rg -n foo "${scratch}"` }),
+      context(projectRoot),
+    );
+    expect(recursive.decision.action).toBe('escalate');
+    expect(recursive.review.risks).toContain('sensitive_read');
+  });
+
+  it('escalates recursive reads rooted above the agent home', () => {
+    const projectRoot = createRoot('kodax-home-parent-read-');
+    userKodax = createTempDirSync('kodax-home-parent-read-user-', process.cwd());
+    setAgentConfigHome(userKodax);
+    const parent = path.dirname(userKodax);
+
+    for (const toolCall of [
+      call('glob', { path: parent, pattern: '**/*' }),
+      call('grep', { path: parent, pattern: 'token' }),
+      call('bash', { command: `grep -R token "${parent}"` }),
+    ]) {
+      const assessment = assessAutoModeCall(toolCall, context(projectRoot));
+      expect(assessment.decision.action).toBe('escalate');
+      expect(assessment.review.risks).toContain('sensitive_read');
+    }
+  });
+
+  it('escalates glob selectors that escape an open agent-home subtree', () => {
+    const projectRoot = createRoot('kodax-home-glob-escape-');
+    userKodax = createTempDirSync('kodax-home-glob-escape-user-', process.cwd());
+    setAgentConfigHome(userKodax);
+    const assessment = assessAutoModeCall(call('glob', {
+      path: path.join(userKodax, 'tool-results'),
+      pattern: '../mcp-tokens/**/*',
+    }), context(projectRoot));
+
+    expect(assessment.decision.action).toBe('escalate');
+    expect(assessment.review.risks).toContain('sensitive_read');
+  });
+
+  it('escalates absolute and ambiguous glob selectors that can reach credentials', () => {
+    const projectRoot = createRoot('kodax-home-glob-selector-');
+    userKodax = createTempDirSync('kodax-home-glob-selector-user-', process.cwd());
+    setAgentConfigHome(userKodax);
+    fs.mkdirSync(path.join(userKodax, 'tool-results'), { recursive: true });
+    fs.mkdirSync(path.join(userKodax, 'mcp-tokens'), { recursive: true });
+
+    for (const pattern of [
+      path.join(userKodax, 'mcp-tokens', '**', '*'),
+      '{../mcp-tokens,*.txt}/**/*',
+    ]) {
+      const assessment = assessAutoModeCall(call('glob', {
+        path: path.join(userKodax, 'tool-results'),
+        pattern,
+      }), context(projectRoot));
+      expect(assessment.decision.action).toBe('escalate');
+      expect(assessment.review.risks).toContain('sensitive_read');
+    }
+  });
+
+  it('escalates recursive search even in an open subtree with a sensitive descendant', () => {
+    const projectRoot = createRoot('kodax-home-sensitive-descendant-');
+    userKodax = createTempDirSync('kodax-home-sensitive-descendant-user-', process.cwd());
+    setAgentConfigHome(userKodax);
+    fs.mkdirSync(path.join(userKodax, 'scratch'), { recursive: true });
+    fs.writeFileSync(path.join(userKodax, 'scratch', 'credentials.json'), 'secret');
+
+    for (const toolCall of [
+      call('glob', { path: path.join(userKodax, 'scratch'), pattern: '**/*' }),
+      call('grep', { path: path.join(userKodax, 'scratch'), pattern: 'secret' }),
+      call('bash', { command: `grep -R secret "${path.join(userKodax, 'scratch')}"` }),
+    ]) {
+      const assessment = assessAutoModeCall(toolCall, context(projectRoot));
+      expect(assessment.decision.action).toBe('escalate');
+      expect(assessment.review.risks).toContain('sensitive_read');
+    }
+  });
+
+  it('does not mistake a recursive search option value for its search root', () => {
+    const projectRoot = createRoot('kodax-home-search-options-');
+    userKodax = createTempDirSync('kodax-home-search-options-user-', process.cwd());
+    setAgentConfigHome(userKodax);
+    const scratch = path.join(userKodax, 'scratch');
+    fs.mkdirSync(path.join(scratch, 'secret'), { recursive: true });
+    fs.writeFileSync(path.join(scratch, 'credentials.json'), 'secret');
+
+    const assessment = assessAutoModeCall(call('bash', {
+      command: 'rg -g "*" secret',
+    }), context(projectRoot, scratch));
+
+    expect(assessment.decision.action).toBe('escalate');
+    expect(assessment.review.risks).toContain('sensitive_read');
+  });
+
+  it('escalates recursive reads rooted above credential-bearing descendants', () => {
+    const projectRoot = createRoot('kodax-home-narrow-');
+    userKodax = createTempDirSync('kodax-home-narrow-user-', process.cwd());
+    setAgentConfigHome(userKodax);
+    fs.mkdirSync(path.join(userKodax, 'mcp-tokens'), { recursive: true });
+    fs.writeFileSync(path.join(userKodax, 'mcp-tokens', 'token.json'), '{"token":"secret"}');
+
+    for (const toolCall of [
+      call('glob', { path: userKodax, pattern: '**/*' }),
+      call('grep', { path: userKodax, pattern: 'secret' }),
+      call('grep', { path: path.join(userKodax, 'runtime'), pattern: 'token' }),
+    ]) {
+      const assessment = assessAutoModeCall(toolCall, context(projectRoot));
+      expect(assessment.decision.action).toBe('escalate');
+      expect(assessment.review.risks).toContain('sensitive_read');
+    }
+  });
+
+  it.each(['.env', '.npmrc', 'id_ed25519'])(
+    'escalates generic sensitive agent-home read: %s',
+    (filename) => {
+      const projectRoot = createRoot('kodax-home-narrow-');
+      userKodax = createTempDirSync('kodax-home-narrow-user-', process.cwd());
+      setAgentConfigHome(userKodax);
+      fs.writeFileSync(path.join(userKodax, filename), 'secret');
+
+      const assessment = assessAutoModeCall(
+        call('read', { path: path.join(userKodax, filename) }),
+        context(projectRoot),
+      );
+      expect(assessment.decision.action).toBe('escalate');
+      expect(assessment.review.risks).toContain('sensitive_read');
+    },
+  );
 
   it('still escalates credential-bearing ~/.kodax reads', () => {
     const projectRoot = createRoot('kodax-home-narrow-');
@@ -3310,14 +3505,18 @@ describe('Auto[rules] user KodaX home read narrowing', () => {
     const projectRoot = createRoot('kodax-home-narrow-');
     userKodax = createTempDirSync('kodax-home-narrow-user-', process.cwd());
     setAgentConfigHome(userKodax);
-    fs.mkdirSync(path.join(userKodax, 'tool-results'), { recursive: true });
-    fs.writeFileSync(path.join(userKodax, 'tool-results', 'out.txt'), 'x');
-
-    const decision = evaluateAutoRulesCall(
-      call('write', { path: path.join(userKodax, 'tool-results', 'out.txt') }),
-      context(projectRoot),
-    );
-    expect(decision.action).toBe('allow');
+    for (const rel of [
+      path.join('agents', 'reviewer.md'),
+      path.join('sessions', 's.json'),
+      path.join('tool-results', 'out.txt'),
+      path.join('scratch', 'plan.json'),
+    ]) {
+      const decision = evaluateAutoRulesCall(
+        call('write', { path: path.join(userKodax, rel) }),
+        context(projectRoot),
+      );
+      expect(decision.action).toBe('allow');
+    }
   });
 
   it('still escalates writes to credential ~/.kodax paths', () => {
@@ -3330,6 +3529,46 @@ describe('Auto[rules] user KodaX home read narrowing', () => {
       context(projectRoot),
     );
     expect(decision.action).toBe('escalate');
+  });
+
+  it.each([
+    ['agent home root', ''],
+    ['runtime root', 'runtime'],
+    ['runtime descendant', path.join('runtime', 'state.json')],
+    ['generic sensitive file', '.env'],
+  ])('escalates writes to %s', (_label, rel) => {
+    const projectRoot = createRoot('kodax-home-narrow-');
+    userKodax = createTempDirSync('kodax-home-narrow-user-', process.cwd());
+    setAgentConfigHome(userKodax);
+
+    const decision = evaluateAutoRulesCall(
+      call('write', { path: path.join(userKodax, rel) }),
+      context(projectRoot),
+    );
+    expect(decision.action).toBe('escalate');
+  });
+
+  it.runIf(process.platform === 'win32')('protects Win32 aliases of the Runtime control plane', () => {
+    const projectRoot = createRoot('kodax-home-win-alias-');
+    userKodax = createTempDirSync('kodax-home-win-alias-user-', process.cwd());
+    setAgentConfigHome(userKodax);
+
+    for (const rel of [
+      path.join('runtime.', 'state.json'),
+      path.join('runtime ', 'state.json'),
+      'runtime:control',
+      'config.json.',
+      path.join('mcp-tokens.', 'token.json'),
+    ]) {
+      expect(evaluateAutoRulesCall(
+        call('write', { path: path.join(userKodax, rel) }),
+        context(projectRoot),
+      ).action).toBe('escalate');
+    }
+    expect(evaluateAutoRulesCall(
+      call('write', { path: path.join(userKodax, 'agents', 'reviewer.md') }),
+      context(projectRoot),
+    ).action).toBe('allow');
   });
 
   it('allows bash reads of non-credential ~/.kodax paths (cat/Get-Content)', () => {
@@ -3369,6 +3608,109 @@ describe('Auto[rules] user KodaX home read narrowing', () => {
       );
       expect(assessment.decision.action).toBe('escalate');
       expect(assessment.review.risks).toContain('sensitive_read');
+    }
+  });
+
+  it('checks expanded reads and tree mutations against actual protected descendants', () => {
+    const projectRoot = createRoot('kodax-home-selection-');
+    userKodax = createTempDirSync('kodax-home-selection-user-', process.cwd());
+    setAgentConfigHome(userKodax);
+    const scratch = path.join(userKodax, 'scratch');
+    const credential = path.join(scratch, 'credentials.json');
+    const destination = path.join(projectRoot, 'backup');
+    fs.mkdirSync(scratch, { recursive: true });
+    fs.writeFileSync(credential, 'secret');
+
+    for (const command of [
+      `cat "${scratch}"/*`,
+      `rm "${scratch}"/*`,
+      `cp -r "${scratch}" "${destination}"`,
+      `mv "${scratch}" "${destination}"`,
+      `chmod -R 700 "${scratch}"`,
+      `chown -R user "${scratch}"`,
+      `Copy-Item -Recurse -Path "${scratch}" -Destination "${destination}"`,
+      `Move-Item -Path "${scratch}" -Destination "${destination}"`,
+    ]) {
+      const assessment = assessAutoModeCall(call('bash', { command }), context(projectRoot));
+      expect(assessment.decision.action, command).toBe('escalate');
+      expect(assessment.review.risks, command).toContain('protected_path');
+    }
+  });
+
+  it('keeps expanded reads and tree mutations prompt-free for clean working descendants', () => {
+    const projectRoot = createRoot('kodax-home-clean-selection-');
+    userKodax = createTempDirSync('kodax-home-clean-selection-user-', process.cwd());
+    setAgentConfigHome(userKodax);
+    const scratch = path.join(userKodax, 'scratch');
+    const destination = path.join(projectRoot, 'backup');
+    fs.mkdirSync(scratch, { recursive: true });
+    fs.writeFileSync(path.join(scratch, 'out.txt'), 'ordinary');
+
+    for (const command of [
+      `cat "${scratch}"/*`,
+      `rm "${scratch}"/*`,
+      `cp -r "${scratch}" "${destination}"`,
+      `mv "${scratch}" "${destination}"`,
+      `chmod -R 700 "${scratch}"`,
+      `chown -R user "${scratch}"`,
+      `Copy-Item -Recurse -Path "${scratch}" -Destination "${destination}"`,
+      `Move-Item -Path "${scratch}" -Destination "${destination}"`,
+    ]) {
+      const assessment = assessAutoModeCall(call('bash', { command }), context(projectRoot));
+      expect(
+        assessment.decision.action,
+        `${command}: ${JSON.stringify(assessment.review)}`,
+      ).toBe('allow');
+    }
+  });
+
+  it('traverses directories selected by a recursive mutation without broadening non-recursive reads', () => {
+    const projectRoot = createRoot('kodax-home-recursive-selector-');
+    userKodax = createTempDirSync('kodax-home-recursive-selector-user-', process.cwd());
+    setAgentConfigHome(userKodax);
+    const scratch = path.join(userKodax, 'scratch');
+    const work = path.join(scratch, 'work');
+    fs.mkdirSync(work, { recursive: true });
+    fs.writeFileSync(path.join(work, '.env'), 'secret');
+
+    const read = assessAutoModeCall(
+      call('bash', { command: `cat "${scratch}"/*` }),
+      context(projectRoot),
+    );
+    expect(read.decision.action).toBe('allow');
+
+    const copy = assessAutoModeCall(call('bash', {
+      command: `cp -r "${scratch}"/* "${path.join(projectRoot, 'backup')}"`,
+    }), context(projectRoot));
+    expect(copy.decision.action).toBe('escalate');
+    expect(copy.review.risks).toContain('protected_path');
+  });
+
+  it('reviews every PowerShell Path array member while keeping ordinary members prompt-free', () => {
+    const projectRoot = createRoot('kodax-home-powershell-array-');
+    userKodax = createTempDirSync('kodax-home-powershell-array-user-', process.cwd());
+    setAgentConfigHome(userKodax);
+    fs.mkdirSync(path.join(userKodax, 'scratch'), { recursive: true });
+    fs.mkdirSync(path.join(userKodax, 'sessions'), { recursive: true });
+    fs.mkdirSync(path.join(userKodax, 'tool-results'), { recursive: true });
+
+    const ordinary = assessAutoModeCall(call('bash', {
+      command: `Set-Content -Path "${path.join(userKodax, 'sessions', 'a.json')}","${path.join(userKodax, 'tool-results', 'b.txt')}" -Value x`,
+    }), context(projectRoot));
+    expect(
+      ordinary.decision.action,
+      JSON.stringify(ordinary.review),
+    ).toBe('allow');
+    expect(ordinary.review.analysis.status).toBe('complete');
+
+    for (const command of [
+      `Remove-Item -Path "${path.join(userKodax, 'scratch')}","${path.join(userKodax, 'credentials.json')}"`,
+      `Remove-Item -Recurse -Path "${path.join(userKodax, 'scratch')}","${path.join(userKodax, 'runtime')}"`,
+    ]) {
+      const assessment = assessAutoModeCall(call('bash', { command }), context(projectRoot));
+      expect(assessment.decision.action).toBe('escalate');
+      expect(assessment.review.analysis.status).toBe('complete');
+      expect(assessment.review.risks).toContain('protected_path');
     }
   });
 });

@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'fs/promises';
 import path from 'path';
 import { emitKodaXDiagnostic } from '@kodax-ai/agent';
+import { withFileMutation } from '../tools/_internal/file-mutation-queue.js';
 
 const repoIntelligenceStorageDirContext = new AsyncLocalStorage<string | undefined>();
 
@@ -97,23 +98,47 @@ export async function writeJsonFileAtomic(
   filePath: string,
   value: unknown,
 ): Promise<void> {
-  const directory = path.dirname(filePath);
-  await fs.mkdir(directory, { recursive: true });
-  const tempPath = nextAtomicTempPath(filePath);
-  try {
-    await fs.writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-    await renameWithRetry(tempPath, filePath);
-  } catch (error) {
-    // The write or rename failed (e.g. Windows EPERM when the target is
-    // locked by a concurrent reader). Remove our own temp so failed writes
-    // don't accumulate one orphan `.tmp` each, then surface the error.
-    await fs.rm(tempPath, { force: true }).catch(() => {});
-    throw error;
-  }
-  // Best-effort mop-up of stale orphans left by writes that were hard-killed
-  // before the catch above could run. Never lets a sweep failure break the
-  // write that just succeeded.
-  await sweepStaleTempFiles(directory, path.basename(filePath)).catch(() => {});
+  await withFileMutation(filePath, async () => {
+    const directory = path.dirname(filePath);
+    await fs.mkdir(directory, { recursive: true });
+    const tempPath = nextAtomicTempPath(filePath);
+    try {
+      await fs.writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+      await renameWithRetry(tempPath, filePath);
+    } catch (error) {
+      // The write or rename failed (e.g. Windows EPERM when the target is
+      // locked by a concurrent reader). Remove our own temp so failed writes
+      // don't accumulate one orphan `.tmp` each, then surface the error.
+      await fs.rm(tempPath, { force: true }).catch(() => {});
+      throw error;
+    }
+    // Best-effort mop-up of stale orphans left by writes that were hard-killed
+    // before the catch above could run. Never lets a sweep failure break the
+    // write that just succeeded.
+    await sweepStaleTempFiles(directory, path.basename(filePath)).catch(() => {});
+  });
+}
+
+/** Create a computed cache root through the same hard boundary as file tools. */
+export async function ensureRepoIntelligenceStorageDir(storageRoot: string): Promise<void> {
+  await withFileMutation(storageRoot, async () => {
+    await fs.mkdir(storageRoot, { recursive: true });
+  });
+}
+
+/** Verify a computed cache root without bypassing the host mutation fence. */
+export async function probeRepoIntelligenceStorage(
+  storageRoot: string,
+  probePath: string,
+): Promise<void> {
+  await withFileMutation(probePath, async () => {
+    await fs.mkdir(storageRoot, { recursive: true });
+    try {
+      await fs.writeFile(probePath, 'ok', 'utf8');
+    } finally {
+      await fs.rm(probePath, { force: true });
+    }
+  });
 }
 
 async function sweepStaleTempFiles(

@@ -20,7 +20,7 @@ import {
 import {
   isToolCallAllowed,
   isAlwaysConfirmPath,
-  isBashReadCommand,
+  isBashReadCommandAutoAllowed,
   collectBashWriteTargets,
   getBashOutsideProjectWriteRisk,
   isPathInsideProject,
@@ -189,7 +189,10 @@ export async function executeWithPermission(
   // === 2. Safe read-only bash commands: auto-allow in all modes ===
   if (toolName === 'bash') {
     const command = (input.command as string) ?? '';
-    if (isBashReadCommand(command)) {
+    if (isBashReadCommandAutoAllowed(
+      command,
+      permContext.gitRoot ?? process.cwd(),
+    )) {
       return executeTool(toolName, input, coreContext);
     }
 

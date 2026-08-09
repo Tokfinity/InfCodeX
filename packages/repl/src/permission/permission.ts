@@ -11,6 +11,7 @@ export {
   inferPermissionMode,
   isAlwaysConfirmPath,
   isBashReadCommand,
+  isBashReadCommandAutoAllowed,
   isBashWriteCommand,
   isCommandOnProtectedPath,
   isHelpCommand,

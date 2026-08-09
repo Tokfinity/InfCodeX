@@ -43,7 +43,7 @@ describe.runIf(process.platform === 'win32')('managed child cleanup query reuse'
       signal: null,
     });
 
-    const registry = path.join(tempHome, 'processes', 'children');
+    const registry = path.join(tempHome, 'runtime', 'processes', 'children');
     await mkdir(registry, { recursive: true });
     for (let index = 0; index < 4; index += 1) {
       const registrationId = `same-owner-${index}`;
@@ -87,7 +87,7 @@ describe.runIf(process.platform === 'win32')('managed child cleanup query reuse'
       signal: null,
     });
 
-    const registry = path.join(tempHome, 'processes', 'children');
+    const registry = path.join(tempHome, 'runtime', 'processes', 'children');
     await mkdir(registry, { recursive: true });
     for (const [index, ownerPid] of ownerPids.entries()) {
       const registrationId = `distinct-owner-${index}`;

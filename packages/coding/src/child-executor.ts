@@ -36,7 +36,7 @@ import { countTokens } from './tokenizer.js';
 import { resolveProvider } from './providers/index.js';
 import { resolveModelHintTier } from './model-hint-routing.js';
 import { invokeChildWithFallback } from './child-fallback.js';
-import { toolWorktreeCreate, toolWorktreeRemove } from './tools/worktree.js';
+import { createWorkflowWorktree, removeWorkflowWorktree } from './tools/worktree.js';
 import { loadAgentsFiles, formatAgentsForPrompt } from './context/agents-loader.js';
 import { uniqueBareInlineSlashNames, uniqueInlineSkillNames } from './skill-references.js';
 import {
@@ -530,15 +530,9 @@ async function prepareChildIsolationScope(
     return { ctx: parentCtx };
   }
 
-  const raw = await toolWorktreeCreate(
+  const raw = await createWorkflowWorktree(
     {
       description: `workflow-${bundle.id}`,
-      // Nest under the run's worktrees dir when the workflow runner provided
-      // one, so the run-level sweep can reclaim it. Falls back to the git
-      // root's parent otherwise (FEATURE_217).
-      ...(parentCtx.workflowWorktreeBaseDir
-        ? { base_dir: parentCtx.workflowWorktreeBaseDir }
-        : {}),
     },
     parentCtx,
   );
@@ -564,14 +558,7 @@ async function cleanupChildIsolationScope(
 ): Promise<string | undefined> {
   if (!scope.worktreePath) return undefined;
   try {
-    await toolWorktreeRemove(
-      {
-        action: 'remove',
-        worktree_path: scope.worktreePath,
-        discard_changes: false,
-      },
-      parentCtx,
-    );
+    await removeWorkflowWorktree(scope.worktreePath, parentCtx);
     return undefined;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -2489,6 +2476,12 @@ export function buildChildEvents(
         ...(meta?.toolId !== undefined ? { toolId: meta.toolId } : { toolId: result.id }),
         ...(meta?.workflowCorrelation !== undefined ? { workflowCorrelation: meta.workflowCorrelation } : {}),
       }, { liveOnly: true }));
+    },
+    onToolExecutionStart: (tool, meta) => {
+      parentEvents?.onToolExecutionStart?.(tool, toolEventMeta(meta, { liveOnly: true }));
+    },
+    onToolExecutionEnd: (tool, meta) => {
+      parentEvents?.onToolExecutionEnd?.(tool, toolEventMeta(meta, { liveOnly: true }));
     },
     ...(parentEvents?.askUser
       ? { askUser: (options, meta) => parentEvents.askUser!(options, toolEventMeta(meta, { liveOnly: true })) }

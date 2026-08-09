@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-08-08_
+_Last Updated: 2026-08-09_
 
 ---
 
@@ -14,9 +14,11 @@ _Last Updated: 2026-08-08_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 286 | High | Resolved | Learned Skill fallback scope was searched in the wrong physical project root | v0.7.85 development multi-scope repair | v0.7.85 development | 2026-08-09 | 2026-08-09 |
+| 285 | High | Resolved | Auto mode left agent-home roots and Runtime control paths mutable | v0.7.74 deterministic read fast paths | v0.7.85 development | 2026-08-09 | 2026-08-09 |
 | 284 | High | Resolved | Managed-task compaction no-ops can permanently trip the summary circuit breaker | v0.7.80 managed-run-context stripping | v0.7.85 development | 2026-08-07 | 2026-08-08 |
 | 283 | Medium | Resolved | REPL hides the canonical sidecar item and appends duplicated verifier evidence after Worker retry | v0.7.43 first-class sidecar messages | v0.7.84 development | 2026-08-07 | 2026-08-07 |
-| 282 | High | Resolved | Agent progress persistence backlog can self-fence its live owner and make an unknown Run reject Stop | v0.7.79 bounded Actor settlement | v0.7.84 release | 2026-08-06 | 2026-08-06 |
+| 282 | High | Release blocked | Agent progress persistence backlog can self-fence its live owner and make an unknown Run reject Stop | v0.7.79 bounded Actor settlement | v0.7.85 target | 2026-08-06 | — |
 | 281 | High | Resolved | Runtime input submission reads mutable canonical Session before resolving its authoritative Run target | v0.7.69 Runtime input submission | v0.7.82 release | 2026-08-05 | 2026-08-05 |
 | 280 | High | Resolved | Daemon managed Run Stop does not fence cooperative work or preserve Abort causality through credential redaction | v0.7.69 daemon managed Runs | v0.7.82 release | 2026-08-05 | 2026-08-05 |
 | 279 | Medium | Resolved | Daemon Host Tool merge drops MCP capability snapshots and leaks host tools into server-filtered search | v0.7.70 progressive MCP discovery | v0.7.82 release | 2026-08-05 | 2026-08-05 |
@@ -188,6 +190,87 @@ _Last Updated: 2026-08-08_
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
 
+### 286: Learned Skill fallback scope was searched in the wrong physical project root
+
+- Priority: High
+- Status: Resolved
+- Introduced: v0.7.85 development multi-scope repair
+- Fixed: v0.7.85 development
+- Created: 2026-08-09
+- Resolved: 2026-08-09
+
+#### Root Cause
+
+Discovery accepted both remote and local project scopes, but opened only the
+primary project store. Project IDs are hashed into their physical learned-area
+directory, so `remote:*`, `remote-hash:*`, and `local:*` records live in
+different roots. A Skill learned while remote identity was unavailable became
+invisible after the remote recovered. The regression test placed both records
+in one artificial root and did not reproduce the production layout. The same
+patch also replaced the public required `expectedScope` property with required
+`expectedScopes`, breaking source and runtime compatibility for standalone
+`@kodax-ai/agent` consumers.
+
+#### Resolution
+
+- Coding and Runtime binding now open every applicable physical project store,
+  discover across their de-duplicated roots, and retain the owning store for
+  admission, invocation, outcome, reconciliation, and release mutations.
+- Remote identity remains primary for precedence, while the local path root is
+  searched as a fallback for both `remote:*` and `remote-hash:*` identities.
+- `expectedScopes` is optional and the deprecated `expectedScope` spelling
+  remains accepted; discovery normalizes both without weakening scope checks.
+- Regression tests create genuinely distinct hashed roots and verify discovery,
+  exact-use attribution, canary admission, outcome, and release in the owning
+  fallback store.
+- Pending review draining uses the same trusted current-plus-local identity set
+  and a shared entry budget, so a job persisted during temporary remote loss is
+  claimed with its original local owner identity after the remote recovers.
+
+### 285: Auto mode left agent-home roots and Runtime control paths mutable
+
+- Priority: High
+- Status: Resolved
+- Introduced: v0.7.74 deterministic read fast paths
+- Fixed: v0.7.85 development
+- Created: 2026-08-09
+- Resolved: 2026-08-09
+
+#### Root Cause
+
+The Rules analyzer protected known credentials under `~/.kodax`, but did not
+separately protect the agent-home root, the Runtime control plane, or generic
+sensitive names such as `.env`, `.npmrc`, and `id_ed25519`. Recursive reads of
+the root could therefore include credential descendants, and Runtime state or
+the complete home could be mutated or deleted without approval.
+
+#### Resolution
+
+- Agent-home roots and ancestors plus Runtime mutations are hard-denied.
+  Credential/security configuration and generic sensitive filenames require
+  review. Recursive grep/glob of an ancestor cannot inherit a child-path
+  exemption.
+- Ordinary descendants remain writable without approval, including Agent
+  definitions, Sessions, tool results, and unknown intermediate directories.
+- File tools and shell commands share the same read/write predicates, with
+  negative coverage for reads, writes, and recursive deletion plus positive
+  coverage for Agent definitions and working-result directories.
+- Computed mutation sinks enforce the same boundary at execution time. Undo
+  uses context-local, canonical-identity backups; model worktree input cannot
+  select a hidden base, while the controller retains its explicit Runtime-owned
+  workflow worktree seam.
+- Auto[LLM] classifier approval and Auto[Rules] user approval cannot override
+  the Agent Home root/Runtime shell hard gate. Sensitive configuration remains
+  reviewable rather than becoming an execution-layer hard denial.
+- The coding entry applies the hard shell boundary in every permission mode.
+  Opaque commands require a fail-closed OS sandbox; standalone calls without an
+  adapter are limited to completely modeled exact commands. Runtime supplies
+  fail-closed ASRT for every Run, including Sessions without project metadata.
+- Windows sandbox ACLs grant verified ordinary Agent Home children rather than
+  the Home object, preserving Agent/session/intermediate writes without granting
+  the `DELETE` right that would permit whole-root removal. Broken or escaping
+  child links are skipped without revoking healthy sibling grants.
+
 ### 284: Managed-task compaction no-ops can permanently trip the summary circuit breaker
 
 - Priority: High
@@ -333,11 +416,10 @@ the duplicate projection.
 ### 282: Agent progress persistence backlog can self-fence its live owner and make an unknown Run reject Stop
 
 - Priority: High
-- Status: Resolved
+- Status: Release blocked
 - Introduced: v0.7.79 bounded Actor settlement
-- Fixed: v0.7.84 release
+- Fixed target: v0.7.85
 - Created: 2026-08-06
-- Resolved: 2026-08-06
 
 #### Problem
 
@@ -434,7 +516,7 @@ Four contracts formed one failure chain:
   saved `completed` fact after Stop, then admits a follow-up Run. Promise
   success/failure wins over conflicting callback failure/completion, and
   ordinary or pre-Stop `AbortError` rejection keeps its captured failure class;
-  no-result unknowns remain fenced.
+  no-result unknowns remain fenced until exact same-owner repair.
 - A first repair timeout can be retried with repeated Stop after storage
   recovers, while an already-terminal local Run cannot be rewound by a stale
   durable unknown status.
@@ -442,6 +524,45 @@ Four contracts formed one failure chain:
   after Stop remain stable.
 - Existing permanent-storage-failure, late-save stickiness, owner-conflict,
   Stop/completion race, and no-fabricated-terminal controls remain covered.
+
+#### 2026-08-09 recurrence and development fix
+
+The v0.7.84 release mitigated the original unbounded per-executor progress
+backlog and made an explicit same-owner Stop capable of repair, but it did not
+fully close the incident class. Each concurrent executor still owned its own
+projector; the five-second terminal deadline still included time spent behind
+known predecessor mutations; and an Actor self-fence aborted child turns but
+left the root provider running. That combination reproduced in Space as a
+long-lived `Run state not persisted` banner, rejected input, lost live history
+after manual Stop, and misleading `actor_owner_conflict` spawn failures.
+
+The v0.7.85 development fix moves batching to the controller tree, separates a
+bounded queue-wait fence from terminal-save time by pausing the five-second
+ambiguity budget during known predecessor waits, and makes the Runtime
+fail-close the root executor at the first durability-unknown fact. Progress
+waiters reject when an ownership conflict fences their controller. Runtime
+automatically quiesces and reconciles only the exact same owner. A Promise
+success or failure captured before that fence remains authoritative; otherwise
+same-owner repair plus root abort blocks new effect admission. Runtime releases
+the Session route only after every exact tool execution admitted before the
+fence has settled, but it does not wait for the old root executor Promise. An
+abort-ignoring provider remains pending only as an isolated Promise; its
+callbacks and new Runtime-mediated effects stay suppressed while the queued
+successor drains. A UI tool-start event or a pending permission gate is not an
+active effect lease.
+Healthy after-turn input keeps coding mode and inherits a predecessor's
+mode only when it actually drains behind repair. Provider output, callbacks, or
+results arriving after the fence cannot overwrite the infrastructure failure.
+Same-runtime self-fence admissions now return
+`actor_settlement_not_persisted`; only a real foreign owner returns
+`actor_owner_conflict`. The new `actorSettlementConvergence:1` capability lets
+hosts require these semantics rather than trusting a package version alone.
+
+The issue remains release-blocked until these exact bytes are published and a
+packaged Windows fault-injection run passes with a real large
+`FileSessionStorage` Session. The shared Session writer remains a known
+performance-coupling seam; permanent or foreign-owner persistence uncertainty
+continues to stay `unknown` rather than being presented as repaired.
 
 ### 281: Runtime input submission reads mutable canonical Session before resolving its authoritative Run target
 
@@ -11918,11 +12039,18 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 162 (27 Open, 135 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 166 (27 Open, 138 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-08-09: Issues 285 and 286 resolved (v0.7.85 development)
+- Protected agent-home roots, Runtime control state, and sensitive files while
+  preserving ordinary Agent definition and working-artifact mutations.
+- Made Learned Skill binding traverse the real remote/local physical roots,
+  preserve owning-store lifecycle mutations, cover `remote-hash:*`, and retain
+  the deprecated public single-scope configuration spelling.
 
 ### 2026-08-05: Issue 281 resolved (v0.7.82)
 - Reordered input admission around the authoritative Run and cached its minimal

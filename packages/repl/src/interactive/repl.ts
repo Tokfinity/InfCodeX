@@ -80,7 +80,12 @@ import { bootstrapAutoMode, type AutoModeBootstrapResult } from './auto-mode-boo
 import { formatLearningRecoverySummary } from '../ui/view-models/learning-summary.js';
 import { createBashPrefixExtractor, type BashPrefixExtractor } from '@kodax-ai/coding';
 import { bootstrapTeamMode, type TeamModeHandle, type WorkflowProcessEvent } from '@kodax-ai/agent';
-import { isToolCallAllowed, isAlwaysConfirmPath, isBashReadCommand, getPlanModeBlockReason } from '../permission/permission.js';
+import {
+  isToolCallAllowed,
+  isAlwaysConfirmPath,
+  isBashReadCommandAutoAllowed,
+  getPlanModeBlockReason,
+} from '../permission/permission.js';
 import { replBashPathSignalCollector } from '../permission/repl-bash-signals.js';
 import {
   getGitRoot,
@@ -1445,7 +1450,11 @@ Keyboard Shortcuts:
             // 所有模式：安全的只读 bash 命令在受保护路径检查之前就自动放行
             if (tool === 'bash') {
               const command = (input.command as string) ?? '';
-              if (isBashReadCommand(command)) {
+              if (isBashReadCommandAutoAllowed(
+                command,
+                gitRoot ?? process.cwd(),
+                activeRuntime.executionCwd ?? gitRoot ?? process.cwd(),
+              )) {
                 return true; // Auto-allowed for safe read-only commands
               }
             }

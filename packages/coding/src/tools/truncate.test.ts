@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
+import { setAgentConfigHome } from '@kodax-ai/agent';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   formatSize,
@@ -18,6 +19,7 @@ describe('truncate helpers', () => {
 
   afterEach(async () => {
     delete process.env[TOOL_OUTPUT_DIR_ENV];
+    setAgentConfigHome(undefined);
     await Promise.all(
       tempPaths.splice(0).map(async (entry) => {
         await fs.rm(entry, { recursive: true, force: true });
@@ -98,6 +100,27 @@ describe('truncate helpers', () => {
     await new Promise((resolve) => setTimeout(resolve, 25));
 
     await expect(fs.readFile(referencedArtifact, 'utf-8')).resolves.toBe('canonical evidence');
+  });
+
+  it('does not persist through a tool-results link into Runtime', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kodax-tool-output-boundary-'));
+    tempPaths.push(root);
+    const agentHome = path.join(root, 'agent-home');
+    const runtimeDirectory = path.join(agentHome, 'runtime');
+    const outputLink = path.join(agentHome, 'tool-results');
+    await fs.mkdir(runtimeDirectory, { recursive: true });
+    await fs.symlink(
+      runtimeDirectory,
+      outputLink,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    setAgentConfigHome(agentHome);
+    process.env[TOOL_OUTPUT_DIR_ENV] = outputLink;
+
+    await expect(persistToolOutput('read', 'must-not-enter-runtime'))
+      .rejects.toThrow('protected KodaX state');
+    const runtimeEntries = await fs.readdir(runtimeDirectory);
+    expect(runtimeEntries.every((entry) => entry.startsWith('test-filesystem-effects-'))).toBe(true);
   });
 
   it('formats byte sizes', () => {

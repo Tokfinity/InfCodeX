@@ -25,7 +25,6 @@
  * `attachManagedTaskRepoIntelligence` before the snapshot write.
  */
 
-import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import type {
@@ -54,6 +53,7 @@ import {
   resolveKodaXHotPathRepoMode,
 } from '../../../repo-intelligence/runtime.js';
 import { mergeEvidenceArtifacts } from './artifacts.js';
+import { writeManagedTaskFile as writeFile } from './workspace.js';
 
 export interface ManagedTaskRepoIntelligenceContext {
   executionCwd?: string;
@@ -117,7 +117,6 @@ export async function captureManagedTaskRepoIntelligence(
   }
   const hotPathRepoMode = resolveKodaXHotPathRepoMode(context.repoIntelligenceMode);
   const repoSnapshotDir = path.join(workspaceDir, 'repo-intelligence');
-  await mkdir(repoSnapshotDir, { recursive: true });
 
   const artifacts: KodaXTaskEvidenceArtifact[] = [];
   const summarySections: string[] = [];

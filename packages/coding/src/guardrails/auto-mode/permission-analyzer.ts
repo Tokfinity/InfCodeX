@@ -27,6 +27,11 @@ import {
   analyzePowerShellMutation,
   isPowerShellMutationCommand,
 } from '../../permissions/powershell-mutation.js';
+import {
+  isAutoReadableAgentHomePath,
+  isAutoWritableAgentHomePath,
+  isProtectedAgentHomeRemovalTarget,
+} from '../../permissions/agent-home-policy.js';
 
 const FILE_TOOLS = new Set(['write', 'edit', 'multi_edit', 'insert_after_anchor']);
 const READ_FILE_TOOLS = new Set(['read', 'grep', 'glob']);
@@ -657,7 +662,10 @@ function sensitivePowerShellPipelineProviderRead(tree: BashCommandTree): boolean
 }
 
 /** Resolve symlinks/junctions through the deepest existing path prefix. */
-function canonicalizePath(targetPath: string, baseDir?: string): string | undefined {
+export function canonicalizeAutoModePath(
+  targetPath: string,
+  baseDir?: string,
+): string | undefined {
   if (!targetPath.trim() || targetPath.includes('\0')) return undefined;
   const expanded = expandPermissionPath(targetPath);
   if (process.platform === 'win32' && /^[a-z]:[^\\/]/i.test(expanded)) return undefined;
@@ -733,6 +741,8 @@ function hasWindowsDeviceComponent(targetPath: string): boolean {
     return /^(?:con|prn|aux|clock\$|conin\$|conout\$|com[1-9\u00b9\u00b2\u00b3]|lpt[1-9\u00b9\u00b2\u00b3])$/i.test(basename);
   });
 }
+
+const canonicalizePath = canonicalizeAutoModePath;
 
 function hasSensitiveCredentialLocation(parts: readonly string[]): boolean {
   return parts.some((part, index) => (
@@ -826,16 +836,15 @@ function isProtectedAgentHome(targetPath: string): boolean {
 /**
  * Credential- and security-control-bearing subset of the user KodaX home
  * (`~/.kodax/`). After the read-side narrowing only these paths remain
- * `protected` for reads; every other `~/.kodax/` path reads as
- * `outside-workspace` (Tier 1 deterministic allow). Writes keep the whole-home
- * Tier 0 deny (`checkUserKodaxWrite`) independently of this classification.
+ * `protected` for reads; every other `~/.kodax/` path is deterministically
+ * readable. Writes use the narrower root/Runtime/credential hard boundary in
+ * `checkUserKodaxWrite` independently of this classification.
  *
  * `target` is a resolved absolute path inside `agentHome`.
  */
 export function isCredentialBearingKodaxPath(target: string, agentHome: string, forWrite = false): boolean {
-  const rel = path.relative(agentHome, target);
-  if (rel.startsWith('..')) return false;
-  const relNorm = rel.replace(/\\/g, '/').toLowerCase();
+  const relNorm = normalizedAgentHomeRelativePath(target, agentHome);
+  if (relNorm === undefined) return false;
   // OAuth / daemon credential stores (plaintext tokens / client secrets).
   if (relNorm === 'mcp-tokens' || relNorm.startsWith('mcp-tokens/')) return true;
   if (relNorm === 'mcp-clients' || relNorm.startsWith('mcp-clients/')) return true;
@@ -857,12 +866,38 @@ export function isCredentialBearingKodaxPath(target: string, agentHome: string, 
   return false;
 }
 
+function normalizedAgentHomeRelativePath(target: string, agentHome: string): string | undefined {
+  const rel = path.relative(agentHome, target);
+  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) return undefined;
+  return rel.split(/[\\/]+/).map((segment) => {
+    const lower = segment.toLowerCase();
+    if (process.platform !== 'win32') return lower;
+    const streamSeparator = lower.indexOf(':');
+    const basename = streamSeparator >= 0 ? lower.slice(0, streamSeparator) : lower;
+    return basename.replace(/[ .]+$/g, '');
+  }).join('/');
+}
+
+/** Agent-home descendants that are safe to read without confirmation. */
+export function isAutoReadableKodaxPath(target: string, agentHome: string): boolean {
+  return isAutoReadableAgentHomePath(target, agentHome);
+}
+
+/**
+ * Agent-home descendants that tools may mutate directly. The home root,
+ * Runtime control plane, credentials, and generic sensitive files remain
+ * protected; ordinary Agent definitions and working artifacts stay writable.
+ */
+export function isAutoWritableKodaxPath(target: string, agentHome: string): boolean {
+  return isAutoWritableAgentHomePath(target, agentHome);
+}
+
 /**
  * Read-side narrowing for the user KodaX home. Resolves `targetPath` the same
  * way `classifyTarget` does and, when it confidently lands inside
- * `getAgentConfigHome()`, classifies it by the credential subset:
- * credential / security-control -> `protected`, everything else ->
- * `outside-workspace`. Returns `undefined` when the path cannot be confidently
+ * `getAgentConfigHome()`, classifies it by protected subsets. Credential,
+ * control, ancestor, and generic sensitive paths stay protected.
+ * Returns `undefined` when the path cannot be confidently
  * resolved to the user home, so the caller falls through to the conservative
  * lexical `isSensitivePath` logic -- which still protects project
  * `<root>/.kodax/` and other CLI homes (`.codex` / `.claude` / ...).
@@ -888,17 +923,23 @@ function classifyAgentHomeTarget(
   const target = canonicalizePath(normalized, executionCwd);
   if (!target) return undefined;
   if (!isPathInsideDirectory(target, agentHome)) return undefined;
-  return isCredentialBearingKodaxPath(target, agentHome)
-    ? { path: targetPath, boundary: 'protected' }
-    : { path: targetPath, boundary: 'agent-home' };
+  if (!isAutoReadableKodaxPath(target, agentHome)) {
+    return { path: targetPath, boundary: 'protected' };
+  }
+  return {
+    path: targetPath,
+    boundary: isAutoWritableKodaxPath(target, agentHome)
+      ? 'agent-home'
+      : 'agent-home-readonly',
+  };
 }
 
 /**
  * Classifies a shell read target flagged as sensitive by `sensitivePathCandidate`.
- * Defers to the agent-home narrowing so non-credential `~/.kodax` reads
- * (tool-results, sessions, ...) read as agent-home; credentials stay
- * protected. Falls back to `protected` when the path is not confidently under
- * the user home (unresolvable, wildcard, or another CLI home).
+ * Defers to the agent-home classification so ordinary data paths read without
+ * a prompt while credentials and risky ancestors stay protected. Falls back
+ * to `protected` when the path is not confidently under the user home
+ * (unresolvable, wildcard, or another CLI home).
  */
 function classifySensitiveReadTarget(
   targetPath: string,
@@ -927,10 +968,9 @@ function classifyTarget(
   if (hasWindowsDeviceComponent(targetPath)) {
     return { path: targetPath, boundary: 'unresolved' };
   }
-  // Read-side narrowing: a path confidently inside the user KodaX home is
-  // classified by the credential subset instead of the whole-home lexical
-  // rule. Non-credential paths (tool-results, sessions, custom-providers.json, ...)
-  // read as outside-workspace; the credential subset stays protected. Falls
+  // A path confidently inside the user KodaX home uses the dedicated
+  // read/write boundaries above. Ordinary descendants remain usable while
+  // credentials, Runtime mutations, and the home root stay protected. Fall
   // through to the lexical rule when the path is not confidently under the
   // user home (project <root>/.kodax/ and other CLI homes stay protected).
   const agentHomeTarget = classifyAgentHomeTarget(targetPath, context, literalWildcards);
@@ -1094,6 +1134,130 @@ function readToolTarget(
   return targetPath;
 }
 
+function agentHomeSearchHasProtectedDescendant(
+  targetPath: string,
+  context: AutoModeRulesContext,
+  selector?: string,
+  traverseSelectedDirectories = false,
+): boolean {
+  let agentHome: string | undefined;
+  try {
+    agentHome = canonicalizePath(getAgentConfigHome());
+  } catch {
+    return true;
+  }
+  const searchRoot = canonicalizePath(targetPath, context.executionCwd);
+  if (agentHome === undefined || searchRoot === undefined) return true;
+  if (isPathInsideDirectory(agentHome, searchRoot)) return true;
+  if (!isPathInsideDirectory(searchRoot, agentHome)) return false;
+  if (!isAutoReadableKodaxPath(searchRoot, agentHome)) return true;
+
+  const pending = [{ directory: searchRoot, selectedByAncestor: false }];
+  let visited = 0;
+  while (pending.length > 0) {
+    const { directory, selectedByAncestor } = pending.pop()!;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch {
+      return true;
+    }
+    for (const entry of entries) {
+      visited += 1;
+      if (visited > 20_000) return true;
+      const candidate = path.join(directory, entry.name);
+      const relative = path.relative(searchRoot, candidate).replace(/\\/g, '/');
+      const selected = selectedByAncestor || selector === undefined || minimatch(relative, selector, {
+        dot: false,
+        nocase: process.platform === 'win32',
+      });
+      if (selected) {
+        const canonical = canonicalizePath(candidate);
+        if (canonical === undefined
+          || !isPathInsideDirectory(canonical, agentHome)
+          || !isAutoReadableKodaxPath(canonical, agentHome)) return true;
+      }
+      if (entry.isDirectory()) {
+        pending.push({
+          directory: candidate,
+          selectedByAncestor: selectedByAncestor
+            || (traverseSelectedDirectories && selected),
+        });
+        continue;
+      }
+    }
+  }
+  return false;
+}
+
+interface EffectiveGlobSearch {
+  readonly root?: string;
+  readonly selector?: string;
+  readonly unsafe: boolean;
+}
+
+function firstGlobSegmentIndex(segments: readonly string[]): number {
+  const index = segments.findIndex((segment) => /[*?\[\]{}()!]/.test(segment));
+  return index < 0 ? segments.length : index;
+}
+
+function resolveEffectiveGlobSearch(
+  targetPath: string,
+  pattern: string,
+  context: AutoModeRulesContext,
+): EffectiveGlobSearch {
+  const expandedPattern = expandPermissionPath(pattern);
+  const segments = expandedPattern.replace(/\\/g, '/').split('/');
+  const firstGlob = firstGlobSegmentIndex(segments);
+  const parentIndex = segments.indexOf('..');
+  const hasAmbiguousParentTraversal = /(^|[/,{(])\.\.(?=$|[/},)])/u.test(expandedPattern);
+  if (hasAmbiguousParentTraversal && parentIndex < 0) {
+    return { unsafe: true };
+  }
+  if (parentIndex >= firstGlob) {
+    return { unsafe: true };
+  }
+  if (!path.isAbsolute(expandedPattern) && parentIndex < 0) {
+    return { root: targetPath, selector: expandedPattern, unsafe: false };
+  }
+  const literalPrefix = segments.slice(0, firstGlob);
+  const literalRoot = path.isAbsolute(expandedPattern)
+    ? literalPrefix.join(path.sep)
+    : path.join(targetPath, ...literalPrefix);
+  const root = canonicalizePath(literalRoot, context.executionCwd);
+  if (root === undefined) return { unsafe: true };
+  const selector = segments.slice(firstGlob).join('/') || undefined;
+  return { root, selector, unsafe: false };
+}
+
+function classifyExpandedReadTarget(
+  selectorPath: string,
+  context: AutoModeRulesContext,
+): AutoModePermissionTarget {
+  const effective = resolveEffectiveGlobSearch(context.executionCwd, selectorPath, context);
+  const root = effective.root ?? context.executionCwd;
+  if (effective.unsafe
+    || agentHomeSearchHasProtectedDescendant(root, context, effective.selector)) {
+    return { path: selectorPath, boundary: 'protected' };
+  }
+  return classifyTarget(root, context);
+}
+
+function classifyMutationSelectorTarget(
+  targetPath: string,
+  context: AutoModeRulesContext,
+): AutoModePermissionTarget {
+  if (!hasShellReadExpansion(targetPath)) return classifyTarget(targetPath, context);
+  const effective = resolveEffectiveGlobSearch(context.executionCwd, targetPath, context);
+  if (effective.unsafe || effective.root === undefined
+    || agentHomeSearchHasProtectedDescendant(
+      effective.root,
+      context,
+      effective.selector,
+    )) return { path: targetPath, boundary: 'protected' };
+  return classifyTarget(effective.root, context);
+}
+
 function assessReadFileCall(
   toolName: string,
   input: Readonly<Record<string, unknown>>,
@@ -1106,8 +1270,28 @@ function assessReadFileCall(
       review('incomplete', 'tool', [], ['target_unresolved'], 'read target is missing'),
     );
   }
+  const globPattern = toolName === 'glob' && typeof input.pattern === 'string'
+    ? input.pattern
+    : toolName === 'grep' && typeof input.glob === 'string'
+      ? input.glob
+      : undefined;
+  const effectiveSearch = globPattern === undefined
+    ? { root: targetPath, selector: undefined, unsafe: false }
+    : resolveEffectiveGlobSearch(targetPath, globPattern, context);
+  const searchRoot = effectiveSearch.root ?? targetPath;
+  const directTarget = classifyTarget(searchRoot, context);
+  const recursiveSearch = toolName !== 'read' && isExistingDirectoryTarget(searchRoot, context);
+  const searchProtected = effectiveSearch.unsafe || (recursiveSearch
+    && agentHomeSearchHasProtectedDescendant(
+      searchRoot,
+      context,
+      effectiveSearch.selector,
+    ));
   const operation: AutoModePermissionOperation = {
-    kind: 'read', target: classifyTarget(targetPath, context),
+    kind: 'read',
+    target: searchProtected
+      ? { path: targetPath, boundary: 'protected' }
+      : directTarget,
   };
   const complete = operation.target.boundary !== 'unresolved';
   const allowed = complete && operation.target.boundary !== 'protected';
@@ -1859,6 +2043,21 @@ function assessBashCall(
     ? 'powershell'
     : 'shell';
   const operationResult = collectShellOperations(command, tree, context);
+  const protectedTraversalTarget = protectedAgentHomeMutationSelection(
+    tree,
+    operationResult.operations,
+    context,
+  );
+  const operations: readonly AutoModePermissionOperation[] = protectedTraversalTarget === undefined
+    ? operationResult.operations
+    : [
+        ...operationResult.operations,
+        {
+          kind: 'write',
+          target: { path: protectedTraversalTarget, boundary: 'protected' },
+          options: { recursive: true },
+        },
+      ];
   const highRisk = context.signals.some((signal) => (
     signal.kind === 'dangerous_pattern' && signal.severity === 'high'
   ));
@@ -1866,14 +2065,14 @@ function assessBashCall(
     && !hasWriteCapableReadSyntax(tree)
     && hasOnlyModeledShellStages(tree);
   const hasKnownWrite = isBashWriteCommand(command)
-    || operationResult.operations.some((operation) => operation.kind !== 'execute');
+    || operations.some((operation) => operation.kind !== 'execute');
   const complete = operationResult.complete && modeled
     && (isModeledShellReadCommand(command, tree) || hasKnownWrite)
-    && operationResult.operations.length > 0
-    && operationResult.operations.every((operation) => (
+    && operations.length > 0
+    && operations.every((operation) => (
       operationPaths(operation).every((target) => target.boundary !== 'unresolved')
     ));
-  const risks = collectRisks(operationResult.operations);
+  const risks = collectRisks(operations);
   if (highRisk) risks.push('high_risk_pattern');
   if (operationResult.reason?.includes('repository-configured')) {
     risks.push('indirect_execution');
@@ -1886,7 +2085,7 @@ function assessBashCall(
   const permissionReview = review(
     complete ? 'complete' : 'incomplete',
     shell,
-    operationResult.operations,
+    operations,
     risks,
     complete ? undefined : operationResult.reason ?? 'shell effects are not fully modeled',
   );
@@ -1915,10 +2114,177 @@ function assessBashCall(
       permissionReview,
     );
   }
-  const decision = operationResult.operations.every(isOperationAllowed)
+  const decision = operations.every(isOperationAllowed)
     ? { action: 'allow' as const }
     : escalate('auto-mode rules require confirmation for a protected or out-of-boundary shell target');
   return assessment(decision, permissionReview);
+}
+
+function protectedAgentHomeMutationSelection(
+  tree: BashCommandTree,
+  operations: readonly AutoModePermissionOperation[],
+  context: AutoModeRulesContext,
+): string | undefined {
+  for (const operation of operations) {
+    if ('target' in operation) {
+      const traverses = operation.kind === 'delete' && operation.options?.recursive === true;
+      if ((traverses || hasShellReadExpansion(operation.target.path))
+        && mutationSelectionHasProtectedPath(operation.target.path, traverses, context)) {
+        return operation.target.path;
+      }
+      continue;
+    }
+    if (!('source' in operation)) continue;
+    const traverses = operation.kind === 'move'
+      || operation.kind === 'rename'
+      || (operation.kind === 'copy' && operation.options?.recursive === true);
+    if ((traverses || hasShellReadExpansion(operation.source.path))
+      && mutationSelectionHasProtectedPath(operation.source.path, traverses, context)) {
+      return operation.source.path;
+    }
+  }
+  for (const statement of tree.statements) {
+    for (const stage of statement.stages) {
+      const executable = shellExecutable(stage);
+      if (!['chmod', 'chown'].includes(executable)) continue;
+      const recursive = stage.argv.slice(1).some((token) => (
+        token === '--recursive' || /^-[^-]*R/.test(token)
+      ));
+      const positionals = directPositionals(executable, stage.argv.slice(1)).slice(1);
+      for (const target of positionals) {
+        if ((recursive || hasShellReadExpansion(target))
+          && mutationSelectionHasProtectedPath(target, recursive, context)) return target;
+      }
+    }
+  }
+  return undefined;
+}
+
+function mutationSelectionHasProtectedPath(
+  targetPath: string,
+  traverseDescendants: boolean,
+  context: AutoModeRulesContext,
+): boolean {
+  if (hasShellReadExpansion(targetPath)) {
+    const effective = resolveEffectiveGlobSearch(context.executionCwd, targetPath, context);
+    if (effective.unsafe || effective.root === undefined) return true;
+    return agentHomeSearchHasProtectedDescendant(
+      effective.root,
+      context,
+      effective.selector,
+      traverseDescendants,
+    );
+  }
+  return traverseDescendants
+    && isExistingDirectoryTarget(targetPath, context)
+    && agentHomeSearchHasProtectedDescendant(targetPath, context);
+}
+
+interface RecursiveContentSearch {
+  readonly roots: readonly string[];
+  readonly unsafe?: string;
+}
+
+function recursiveContentSearch(
+  executable: string,
+  args: readonly string[],
+): RecursiveContentSearch | undefined {
+  if (executable === 'rg' || executable === 'ripgrep') {
+    if (args.some((token) => token === '--help' || token === '--version')) return undefined;
+    const valueOptions = new Set([
+      '-g', '--glob', '-t', '--type', '-T', '--type-not', '-e', '--regexp',
+      '-f', '--file', '--iglob', '--ignore-file', '--max-depth', '-m', '--max-count',
+      '-A', '--after-context', '-B', '--before-context', '-C', '--context',
+    ]);
+    const switchOptions = new Set([
+      '--hidden', '--no-hidden', '-i', '--ignore-case', '-s', '--case-sensitive',
+      '-S', '--smart-case', '-w', '--word-regexp', '-x', '--line-regexp', '-v',
+      '--invert-match', '-l', '--files-with-matches', '-L', '--files-without-match',
+      '--no-ignore', '--no-ignore-vcs', '--follow', '--multiline', '--crlf', '--text',
+      '-n', '--line-number', '-H', '--with-filename', '-c', '--count', '--json',
+      '--heading', '--no-heading', '--column', '--stats',
+    ]);
+    const positionals: string[] = [];
+    let patternProvidedByOption = false;
+    for (let index = 0; index < args.length; index += 1) {
+      const token = args[index]!;
+      if (token === '--') {
+        positionals.push(...args.slice(index + 1));
+        break;
+      }
+      const equals = token.indexOf('=');
+      const option = equals >= 0 ? token.slice(0, equals) : token;
+      if (valueOptions.has(option)) {
+        if (option === '-e' || option === '--regexp' || option === '-f' || option === '--file') {
+          patternProvidedByOption = true;
+        }
+        if (equals < 0) index += 1;
+        if (index >= args.length) return { roots: ['.'], unsafe: token };
+        continue;
+      }
+      if (/^-(?:g|t|T|e|f|m|A|B|C).+/.test(token) || switchOptions.has(token)) {
+        if (/^-(?:e|f).+/.test(token)) patternProvidedByOption = true;
+        continue;
+      }
+      if (token.startsWith('-')) {
+        return {
+          roots: ['.', ...positionals, ...args.slice(index + 1).filter((value) => !value.startsWith('-'))],
+          unsafe: token,
+        };
+      }
+      positionals.push(token);
+    }
+    const roots = patternProvidedByOption ? positionals : positionals.slice(1);
+    return { roots: roots.length > 0 ? roots : ['.'] };
+  }
+  if (!['grep', 'egrep', 'fgrep'].includes(executable)) return undefined;
+  const recursive = args.some((token, index) => (
+    token === '--recursive'
+    || /^-[^-]*[rR]/.test(token)
+    || token === '--directories=recurse'
+    || ((token === '--directories' || token === '-d') && args[index + 1] === 'recurse')
+    || token === '-drecurse'
+  ));
+  if (!recursive) return undefined;
+  const patternOptions = new Set(['-e', '--regexp', '-f', '--file']);
+  const valueOptions = new Set([
+    ...patternOptions,
+    '--include', '--exclude', '--exclude-from', '--exclude-dir', '--label',
+    '--binary-files', '--color', '-A', '--after-context', '-B', '--before-context',
+    '-C', '--context', '-m', '--max-count', '-d', '--directories',
+  ]);
+  const positionals: string[] = [];
+  let patternProvidedByOption = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index]!;
+    if (token === '--') {
+      positionals.push(...args.slice(index + 1));
+      break;
+    }
+    const equals = token.indexOf('=');
+    const option = equals >= 0 ? token.slice(0, equals) : token;
+    if (valueOptions.has(option)) {
+      if (patternOptions.has(option)) patternProvidedByOption = true;
+      if (equals < 0) index += 1;
+      if (index >= args.length) return { roots: ['.'], unsafe: token };
+      continue;
+    }
+    if (/^-(?:e|f).+/.test(token)) {
+      patternProvidedByOption = true;
+      continue;
+    }
+    if (/^-(?:d|m|A|B|C).+/.test(token) || token === '--recursive'
+      || /^-[^-]*[rR]/.test(token)) continue;
+    if (token.startsWith('-')) {
+      return {
+        roots: ['.', ...positionals, ...args.slice(index + 1).filter((value) => !value.startsWith('-'))],
+        unsafe: token,
+      };
+    }
+    positionals.push(token);
+  }
+  const roots = patternProvidedByOption ? positionals : positionals.slice(1);
+  return { roots: roots.length > 0 ? roots : ['.'] };
 }
 
 function sensitiveRecursiveListingDescendant(
@@ -1967,7 +2333,9 @@ function sensitiveRecursiveListingDescendant(
     const roots = args.filter((token) => !token.startsWith('-'));
     listingRoots = roots.length > 0 ? roots : ['.'];
   } else {
-    return undefined;
+    const contentSearch = recursiveContentSearch(rawExecutable, args);
+    if (contentSearch === undefined) return undefined;
+    listingRoots = contentSearch.roots;
   }
   const sensitiveDescendants = [
     ...[...SENSITIVE_PATH_PARTS].map((part) => path.join(os.homedir(), part)),
@@ -1980,6 +2348,14 @@ function sensitiveRecursiveListingDescendant(
     const restoredRoot = restoreMangledShellPath(listingRoot, extractedPaths);
     const canonicalRoot = canonicalizePath(restoredRoot, context.executionCwd);
     if (!canonicalRoot) continue;
+    if (isExistingDirectoryTarget(canonicalRoot, context)
+      && agentHomeSearchHasProtectedDescendant(canonicalRoot, context)) {
+      try {
+        return getAgentConfigHome();
+      } catch {
+        return unresolvedSearchFilterTarget('recursive search reaches protected Agent Home state');
+      }
+    }
     const descendant = sensitiveDescendants.find((candidate) => {
       const canonicalCandidate = canonicalizePath(candidate);
       return canonicalCandidate !== undefined
@@ -2165,6 +2541,7 @@ function collectShellOperations(
     const restoredTarget = restoreMangledShellPath(target, extractedPaths);
     if (isNullDevice(restoredTarget)
       || modeledTargets.has(restoredTarget)
+      || modeledTargetCoversSelector(modeledTargets, restoredTarget, context)
       || cmdCopyTimestampArtifacts.has(restoredTarget)
       || modeledRenameCoversTarget(tree, target)) continue;
     operations.push({ kind: 'write', target: classifyTarget(restoredTarget, context) });
@@ -2216,11 +2593,13 @@ function collectShellOperations(
         && !hasDynamicShellReadExpansion(target);
       operations.push({
         kind: 'read',
-        target: sensitive
+        target: ordinarySelector
+          ? classifyExpandedReadTarget(target, context)
+          : sensitive
           ? classifySensitiveReadTarget(target, context, literal)
           : !literal && hasDynamicShellReadExpansion(target)
           ? { path: target, boundary: 'unresolved' }
-          : classifyTarget(ordinarySelector ? context.executionCwd : target, context, literal),
+          : classifyTarget(target, context, literal),
       });
       modeledTargets.add(target);
     }
@@ -2234,6 +2613,24 @@ function collectShellOperations(
     });
   }
   return reason === undefined ? { complete, operations } : { complete, operations, reason };
+}
+
+function modeledTargetCoversSelector(
+  modeledTargets: ReadonlySet<string>,
+  selectorPath: string,
+  context: AutoModeRulesContext,
+): boolean {
+  if (!hasShellReadExpansion(selectorPath)) return false;
+  const effective = resolveEffectiveGlobSearch(context.executionCwd, selectorPath, context);
+  if (effective.unsafe || effective.root === undefined) return false;
+  const comparableRoot = process.platform === 'win32'
+    ? effective.root.toLowerCase()
+    : effective.root;
+  return [...modeledTargets].some((target) => {
+    const canonical = canonicalizePath(target, context.executionCwd);
+    if (canonical === undefined) return false;
+    return (process.platform === 'win32' ? canonical.toLowerCase() : canonical) === comparableRoot;
+  });
 }
 
 function collectDirectShellOperations(
@@ -2258,7 +2655,7 @@ function collectDirectShellOperations(
   const args = directPositionals(command, stage.argv.slice(1)).map(restorePath);
   if (['rm', 'rmdir', 'del', 'erase', 'rd'].includes(command)) {
     return args.map((target) => ({
-      kind: 'delete', target: classifyTarget(target, context),
+      kind: 'delete', target: classifyMutationSelectorTarget(target, context),
       options: {
         recursive: stage.argv.some((token) => (
           token === '--recursive'
@@ -2283,7 +2680,7 @@ function collectDirectShellOperations(
     if (!destination || sources.length === 0) return [];
     return sources.map((source) => ({
       kind: command === 'cp' || command === 'copy' ? 'copy' : 'move',
-      source: classifyTarget(source, context),
+      source: classifyMutationSelectorTarget(source, context),
       destination: classifyTarget(destination, context),
       options: {
         force: stage.argv.some((token) => /^(?:-f|--force|\/y)$/i.test(token)),
@@ -2301,6 +2698,17 @@ function collectDirectShellOperations(
       source: classifyTarget(source, context),
       destination: classifyTarget(joinSourceParent(source, args[1]!), context),
     }];
+  }
+  if (command === 'chmod' || command === 'chown') {
+    return args.slice(1).map((target) => ({
+      kind: 'write',
+      target: classifyMutationSelectorTarget(target, context),
+      options: {
+        recursive: stage.argv.some((token) => (
+          token === '--recursive' || /^-[^-]*R/.test(token)
+        )),
+      },
+    }));
   }
   return [];
 }
@@ -2696,10 +3104,24 @@ function assessDeclaredToolEffect(
         ? true
         : operation.target.boundary !== 'unresolved'
     ));
-    const allowed = complete && operations.every(isOperationAllowed);
+    const worktreeRemovalNeedsReview = call.name === 'worktree_remove'
+      && call.input.action === 'remove'
+      && paths.some((targetPath) => (
+        isProtectedAgentHomeRemovalTarget(targetPath, context.executionCwd)
+      ));
+    const allowed = complete && !worktreeRemovalNeedsReview
+      && operations.every(isOperationAllowed);
     return assessment(
       allowed ? { action: 'allow' } : escalate(`auto-mode requires confirmation for ${filesystemEffect} targets`),
-      review(complete ? 'complete' : 'incomplete', 'tool', operations, collectRisks(operations)),
+      review(
+        complete ? 'complete' : 'incomplete',
+        'tool',
+        operations,
+        [
+          ...collectRisks(operations),
+          ...(worktreeRemovalNeedsReview ? ['protected_descendant'] : []),
+        ],
+      ),
     );
   }
   const contained = context.toolSideEffect === 'mutates-state';

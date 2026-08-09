@@ -9,6 +9,7 @@ import {
   debugLogRepoIntelligence,
   resolveRepoIntelligenceStorageDir,
   safeReadJson,
+  ensureRepoIntelligenceStorageDir,
   writeJsonFileAtomic,
 } from './internal.js';
 
@@ -333,7 +334,7 @@ async function exists(targetPath: string): Promise<boolean> {
 
 async function ensureStorageDir(workspaceRoot: string): Promise<string> {
   const storageRoot = resolveRepoIntelligencePath(workspaceRoot);
-  await fs.mkdir(storageRoot, { recursive: true });
+  await ensureRepoIntelligenceStorageDir(storageRoot);
   return storageRoot;
 }
 

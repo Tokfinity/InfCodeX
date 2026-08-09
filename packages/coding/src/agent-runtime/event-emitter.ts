@@ -241,6 +241,12 @@ export function withLiveTurnAttribution(
     onToolResult: (result, meta) => {
       baseEvents.onToolResult?.(result, withActivityMeta(scope, meta));
     },
+    onToolExecutionStart: (tool, meta) => {
+      baseEvents.onToolExecutionStart?.(tool, withActivityMeta(scope, meta));
+    },
+    onToolExecutionEnd: (tool, meta) => {
+      baseEvents.onToolExecutionEnd?.(tool, withActivityMeta(scope, meta));
+    },
     onChildActivityEnd: (meta) => {
       baseEvents.onChildActivityEnd?.(withActivityMeta(scope, meta));
     },

@@ -1,7 +1,6 @@
 import fs from 'fs/promises';
 import fsSync from 'fs';
 import type { KodaXToolExecutionContext } from '../types.js';
-import { getFileBackups } from './write.js';
 import { generateDiff, countChanges } from './diff.js';
 import { resolveExecutionPath } from '../runtime-paths.js';
 import { memoryMutationDenial } from './memory-mutation-guard.js';
@@ -12,7 +11,7 @@ import {
   findUniqueNormalizedBlockMatch,
   findUniqueUnicodeNormalizedBlockMatch,
 } from './text-anchor.js';
-import { withFileMutation } from './_internal/file-mutation-queue.js';
+import { recordFileBackup, withFileMutation } from './_internal/file-mutation-queue.js';
 
 function formatInsertError(code: 'ANCHOR_NOT_FOUND' | 'ANCHOR_AMBIGUOUS', detail: string): string {
   return `[Tool Error] insert_after_anchor: ${code}: ${detail}`;
@@ -53,8 +52,7 @@ export async function toolInsertAfterAnchor(
     const prepared = prepareInsertionContent(content, insertion.index, contentToInsert);
     const nextContent = `${content.slice(0, insertion.index)}${prepared}${content.slice(insertion.index)}`;
 
-    ctx.backups.set(filePath, content);
-    getFileBackups().set(filePath, content);
+    recordFileBackup(ctx.backups, filePath, content);
     await fs.writeFile(filePath, nextContent, 'utf-8');
     // FEATURE_177 v0.7.42 — drop the read-state cache so the next Read
     // sees the post-insert content.

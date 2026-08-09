@@ -1,6 +1,11 @@
 import path from 'node:path';
+import os from 'node:os';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { describe, expect, it, vi } from 'vitest';
-import { createAutoModeToolGuardrail } from './guardrail.js';
+import {
+  createAgentHomeShellBoundaryGuardrail,
+  createAutoModeToolGuardrail,
+} from './guardrail.js';
 import type { AutoModeAskUser, AutoModeGuardrailConfig } from './guardrail.js';
 import type { AutoRules } from './rules.js';
 import { KodaXBaseProvider } from '@kodax-ai/llm';
@@ -13,8 +18,8 @@ import type {
   KodaXTextBlock,
   KodaXToolDefinition,
 } from '@kodax-ai/llm';
-import type { GuardrailContext } from '@kodax-ai/agent';
-import type { RunnerToolCall } from '@kodax-ai/agent';
+import { runToolBeforeGuardrails } from '@kodax-ai/agent';
+import type { GuardrailContext, RunnerToolCall, ToolGuardrail } from '@kodax-ai/agent';
 
 const emptyRules: AutoRules = { allow: [], soft_deny: [], environment: [] };
 
@@ -86,6 +91,150 @@ const callBash = (command: string): RunnerToolCall => ({
   id: 'c1',
   name: 'bash',
   input: { command },
+});
+
+describe('Agent Home shell boundary', () => {
+  it('allows exact ordinary Agent Home writes without requiring a sandbox', async () => {
+    const { setAgentConfigHome } = await import('@kodax-ai/agent');
+    const agentHome = await mkdtemp(path.join(os.tmpdir(), 'kodax-standalone-home-'));
+    await mkdir(path.join(agentHome, 'agents'));
+    setAgentConfigHome(agentHome);
+    try {
+      const guardrail = createAgentHomeShellBoundaryGuardrail({
+        projectRoot: process.cwd(),
+        executionCwd: process.cwd(),
+        failClosedShellSandbox: false,
+      });
+      const verdict = await guardrail.beforeTool!(callBash(
+        `Set-Content -Path "${path.join(agentHome, 'agents', 'reviewer.md')}" -Value result`,
+      ), ctx());
+
+      expect(verdict.action).toBe('allow');
+    } finally {
+      setAgentConfigHome(undefined);
+      await rm(agentHome, { recursive: true, force: true });
+    }
+  });
+
+  it('blocks opaque shell execution without a fail-closed sandbox', async () => {
+    const guardrail = createAgentHomeShellBoundaryGuardrail({
+      projectRoot: process.cwd(),
+      executionCwd: process.cwd(),
+      failClosedShellSandbox: false,
+    });
+    const verdict = await guardrail.beforeTool!(
+      callBash('node -e "eval(process.env.KODAX_TASK)"'),
+      ctx(),
+    );
+
+    expect(verdict.action).toBe('block');
+  });
+
+  it('blocks exact protected Agent Home reads when no host review exists', async () => {
+    const { setAgentConfigHome } = await import('@kodax-ai/agent');
+    const agentHome = await mkdtemp(path.join(os.tmpdir(), 'kodax-standalone-home-'));
+    setAgentConfigHome(agentHome);
+    try {
+      const guardrail = createAgentHomeShellBoundaryGuardrail({
+        projectRoot: process.cwd(),
+        executionCwd: process.cwd(),
+        failClosedShellSandbox: false,
+      });
+      const verdict = await guardrail.beforeTool!(
+        callBash(`type "${path.join(agentHome, 'config.json')}"`),
+        ctx(),
+      );
+
+      expect(verdict.action).toBe('block');
+    } finally {
+      setAgentConfigHome(undefined);
+      await rm(agentHome, { recursive: true, force: true });
+    }
+  });
+
+  it('allows opaque shell execution only behind a fail-closed sandbox', async () => {
+    const guardrail = createAgentHomeShellBoundaryGuardrail({
+      projectRoot: process.cwd(),
+      executionCwd: process.cwd(),
+      failClosedShellSandbox: true,
+      effectTreeContainmentAvailable: true,
+      protectedReadReviewAvailable: true,
+    });
+    const verdict = await guardrail.beforeTool!(
+      callBash('node -e "eval(process.env.KODAX_TASK)"'),
+      ctx(),
+    );
+
+    expect(verdict.action).toBe('allow');
+  });
+
+  it('blocks opaque shell execution when the sandbox cannot prove its effect tree drained', async () => {
+    const guardrail = createAgentHomeShellBoundaryGuardrail({
+      projectRoot: process.cwd(),
+      executionCwd: process.cwd(),
+      failClosedShellSandbox: true,
+      protectedReadReviewAvailable: true,
+    });
+    const verdict = await guardrail.beforeTool!(
+      callBash('node -e "eval(process.env.KODAX_TASK)"'),
+      ctx(),
+    );
+
+    expect(verdict.action).toBe('block');
+    expect('reason' in verdict ? verdict.reason : '').toContain('process-tree containment');
+  });
+
+  it('does not treat a fail-closed mutation sandbox as protected-read approval', async () => {
+    const { setAgentConfigHome } = await import('@kodax-ai/agent');
+    const agentHome = await mkdtemp(path.join(os.tmpdir(), 'kodax-standalone-home-'));
+    setAgentConfigHome(agentHome);
+    try {
+      const guardrail = createAgentHomeShellBoundaryGuardrail({
+        projectRoot: process.cwd(),
+        executionCwd: process.cwd(),
+        failClosedShellSandbox: true,
+      });
+      const protectedRead = await guardrail.beforeTool!(
+        callBash(`type "${path.join(agentHome, 'config.json')}"`),
+        ctx(),
+      );
+      const opaqueRead = await guardrail.beforeTool!(
+        callBash('node -e "eval(process.env.KODAX_TASK)"'),
+        ctx(),
+      );
+
+      expect(protectedRead.action).toBe('block');
+      expect(opaqueRead.action).toBe('block');
+    } finally {
+      setAgentConfigHome(undefined);
+      await rm(agentHome, { recursive: true, force: true });
+    }
+  });
+
+  it('checks the final call after an earlier caller guardrail rewrites Bash', async () => {
+    const rewrite: ToolGuardrail = {
+      kind: 'tool',
+      name: 'caller-rewrite',
+      beforeTool: async (call) => ({
+        action: 'rewrite',
+        payload: callBash('node -e "eval(process.env.KODAX_TASK)"'),
+      }),
+    };
+    const boundary = createAgentHomeShellBoundaryGuardrail({
+      projectRoot: process.cwd(),
+      executionCwd: process.cwd(),
+      failClosedShellSandbox: false,
+    });
+
+    const outcome = await runToolBeforeGuardrails(
+      callBash('echo safe'),
+      [rewrite, boundary],
+      ctx(),
+      null,
+    );
+
+    expect(outcome.kind).toBe('block');
+  });
 });
 
 describe('AutoModeToolGuardrail — Tier 1', () => {
@@ -1163,7 +1312,7 @@ describe('AutoModeToolGuardrail — Tier 1', () => {
     expect(admitWorkspaceSandboxCall).toHaveBeenCalledOnce();
   });
 
-  it('allows exact workspace/temp mutations even when ASRT is unavailable', async () => {
+  it('keeps the legacy availability hint non-authoritative', async () => {
     const provider = new StubProvider(okResult(
       '<decision>ask</decision><hazard>intent_conflict</hazard><reason>classifier must not gate deterministic writes</reason>',
     ));
@@ -1200,6 +1349,84 @@ describe('AutoModeToolGuardrail — Tier 1', () => {
     expect(verdict.action).toBe('allow');
     expect(stream).not.toHaveBeenCalled();
     expect(admitWorkspaceSandboxCall).toHaveBeenCalledOnce();
+  });
+
+  it('sandbox-admits opaque interpreter commands even when the classifier allows them', async () => {
+    const provider = new StubProvider(okResult(
+      '<decision>allow</decision><hazard>none</hazard><reason>requested maintenance command</reason>',
+    ));
+    const admitWorkspaceSandboxCall = vi.fn();
+    const guardrail = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      resolveProvider: () => provider,
+      workspaceShellSandboxAvailable: true,
+      requireWorkspaceShellSandbox: true,
+      admitWorkspaceSandboxCall,
+    });
+    const payload = Buffer.from(
+      "require('node:fs').writeFileSync(process.env.KODAX_HOME + '/runtime/pwn', 'x')",
+      'utf8',
+    ).toString('base64');
+    const dynamicWrite = `node -e "eval(Buffer.from('${payload}','base64').toString())"`;
+
+    const verdict = await guardrail.beforeTool!(
+      callBash(dynamicWrite),
+      ctx([{ role: 'user', content: 'Run the requested Node maintenance command.' }]),
+    );
+
+    expect(verdict.action).toBe('allow');
+    expect(admitWorkspaceSandboxCall).toHaveBeenCalledOnce();
+  });
+
+  it('allows a statically exact ordinary Agent Home write without a sandbox adapter', async () => {
+    const provider = new StubProvider(okResult(
+      '<decision>allow</decision><hazard>none</hazard><reason>ordinary agent output</reason>',
+    ));
+    const guardrail = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      resolveProvider: () => provider,
+      requireWorkspaceShellSandbox: true,
+      analyzeCall: () => ({
+        schemaVersion: 1,
+        analysis: { status: 'complete', shell: 'shell', binding: 'exact' },
+        operations: [{
+          kind: 'write',
+          target: { path: '/home/user/.kodax/agents/reviewer.md', boundary: 'agent-home' },
+        }],
+        risks: [],
+      }),
+    });
+
+    const verdict = await guardrail.beforeTool!(
+      callBash('printf result > ~/.kodax/agents/reviewer.md'),
+      ctx([{ role: 'user', content: 'Update the reviewer agent notes.' }]),
+    );
+
+    expect(verdict.action).toBe('allow');
+  });
+
+  it('blocks an opaque interpreter command when no required sandbox adapter exists', async () => {
+    const provider = new StubProvider(okResult(
+      '<decision>allow</decision><hazard>none</hazard><reason>requested command</reason>',
+    ));
+    const guardrail = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      resolveProvider: () => provider,
+      requireWorkspaceShellSandbox: true,
+      analyzeCall: () => ({
+        schemaVersion: 1,
+        analysis: { status: 'incomplete', shell: 'shell', binding: 'partial' },
+        operations: [{ kind: 'unknown', summary: 'opaque interpreter command' }],
+        risks: ['unmodeled_effect'],
+      }),
+    });
+
+    const verdict = await guardrail.beforeTool!(
+      callBash('node -e "eval(process.env.KODAX_TASK)"'),
+      ctx([{ role: 'user', content: 'Run the requested command.' }]),
+    );
+
+    expect(verdict.action).toBe('block');
   });
 
   it.each([
@@ -3218,7 +3445,7 @@ describe('AutoModeToolGuardrail — askUser escalation handling (FEATURE_092 pha
       askUser,
     });
 
-    const rejected = await g.beforeTool!(callBash('rm -rf /'), ctx());
+    const rejected = await g.beforeTool!(callBash('mkfs.ext4 /dev/sda1'), ctx());
     const safer = await g.beforeTool!(callBash('rm -rf ./dist'), ctx());
 
     expect(rejected.action).toBe('block');
@@ -3619,7 +3846,7 @@ describe('AutoModeToolGuardrail — defaultProvider/defaultModel staleness fix (
 // ============== FEATURE_158 (v0.7.39) ==============
 
 describe('AutoModeToolGuardrail — historical Tier 0 detector (FEATURE_158)', () => {
-  it('routes a legacy Tier 0 match through the LLM even with an empty projection', async () => {
+  it('hard-blocks root removal before the LLM even with an empty projection', async () => {
     const provider = new StubProvider(okResult(
       '<decision>allow</decision><hazard>none</hazard><reason>classifier owns the verdict</reason>',
     ));
@@ -3631,11 +3858,11 @@ describe('AutoModeToolGuardrail — historical Tier 0 detector (FEATURE_158)', (
     });
 
     const verdict = await g.beforeTool!(callBash('rm -rf /'), ctx());
-    expect(verdict.action).toBe('allow');
-    expect(stream).toHaveBeenCalledOnce();
+    expect(verdict.action).toBe('block');
+    expect(stream).not.toHaveBeenCalled();
   });
 
-  it('lets the classifier decide the concrete target behind tool_call', async () => {
+  it('hard-blocks root removal through tool_call before the classifier', async () => {
     let classifierCalls = 0;
     const provider = new StubProvider(async () => {
       classifierCalls += 1;
@@ -3655,11 +3882,11 @@ describe('AutoModeToolGuardrail — historical Tier 0 detector (FEATURE_158)', (
       },
     }, ctx());
 
-    expect(verdict.action).toBe('allow');
-    expect(classifierCalls).toBe(1);
+    expect(verdict.action).toBe('block');
+    expect(classifierCalls).toBe(0);
   });
 
-  it('asks about `rm -rf /` only when the classifier returns ask', async () => {
+  it('does not make `rm -rf /` authorizable when the classifier would ask', async () => {
     let classifierCalls = 0;
     const provider = new StubProvider(async () => {
       classifierCalls += 1;
@@ -3676,11 +3903,8 @@ describe('AutoModeToolGuardrail — historical Tier 0 detector (FEATURE_158)', (
     });
     const verdict = await g.beforeTool!(callBash('rm -rf /'), ctx());
     expect(verdict.action).toBe('block');
-    if (verdict.action === 'block') {
-      expect(verdict.reason).toMatch(/disables the system/i);
-    }
-    expect(askUser).toHaveBeenCalledOnce();
-    expect(classifierCalls).toBe(1);
+    expect(askUser).not.toHaveBeenCalled();
+    expect(classifierCalls).toBe(0);
   });
 
   it('retains the legacy Tier 0 gate when Rules is explicitly selected', async () => {
@@ -3744,6 +3968,81 @@ describe('AutoModeToolGuardrail — historical Tier 0 detector (FEATURE_158)', (
         expect(verdict.reason).toMatch(/make KodaX unavailable/i);
       }
       expect(stream).toHaveBeenCalledOnce();
+    } finally {
+      setAgentConfigHome(undefined);
+    }
+  });
+
+  it('hard-blocks Agent Home root and Runtime shell mutations before an LLM allow', async () => {
+    const { setAgentConfigHome } = await import('@kodax-ai/agent');
+    const agentHome = path.resolve('/tmp/test-kodax-hard-home');
+    setAgentConfigHome(agentHome);
+    try {
+      const provider = new StubProvider(okResult(
+        '<decision>allow</decision><hazard>none</hazard><reason>unsafe allow</reason>',
+      ));
+      const stream = vi.spyOn(provider, 'stream');
+      const g = createAutoModeToolGuardrail({
+        ...baseConfig(''),
+        resolveProvider: () => provider,
+      });
+
+      const runtimeWrite = await g.beforeTool!(callBash(
+        `echo x > "${path.join(agentHome, 'runtime', 'state.json')}"`,
+      ), ctx());
+      const homeRemoval = await g.beforeTool!(callBash(`rm -rf "${agentHome}"`), ctx());
+
+      expect(runtimeWrite.action).toBe('block');
+      expect(homeRemoval.action).toBe('block');
+      expect(stream).not.toHaveBeenCalled();
+    } finally {
+      setAgentConfigHome(undefined);
+    }
+  });
+
+  it('keeps credential writes reviewable after splitting the hard boundary', async () => {
+    const { setAgentConfigHome } = await import('@kodax-ai/agent');
+    const agentHome = path.resolve('/tmp/test-kodax-review-home');
+    setAgentConfigHome(agentHome);
+    try {
+      const provider = new StubProvider(okResult(
+        '<decision>allow</decision><hazard>none</hazard><reason>approved config change</reason>',
+      ));
+      const stream = vi.spyOn(provider, 'stream');
+      const g = createAutoModeToolGuardrail({
+        ...baseConfig(''),
+        resolveProvider: () => provider,
+      });
+
+      const verdict = await g.beforeTool!(callBash(
+        `echo x > "${path.join(agentHome, 'config.json')}"`,
+      ), ctx());
+
+      expect(verdict.action).toBe('allow');
+      expect(stream).toHaveBeenCalledOnce();
+    } finally {
+      setAgentConfigHome(undefined);
+    }
+  });
+
+  it('does not let Rules approval override the Agent Home hard boundary', async () => {
+    const { setAgentConfigHome } = await import('@kodax-ai/agent');
+    const agentHome = path.resolve('/tmp/test-kodax-rules-hard-home');
+    setAgentConfigHome(agentHome);
+    try {
+      const askUser = vi.fn<AutoModeAskUser>(async () => 'allow');
+      const g = createAutoModeToolGuardrail({
+        ...baseConfig(''),
+        initialEngine: 'rules',
+        askUser,
+      });
+
+      const verdict = await g.beforeTool!(callBash(
+        `Remove-Item -Recurse -Path "${path.join(agentHome, 'runtime')}"`,
+      ), ctx());
+
+      expect(verdict.action).toBe('block');
+      expect(askUser).not.toHaveBeenCalled();
     } finally {
       setAgentConfigHome(undefined);
     }
@@ -4274,7 +4573,7 @@ describe('AutoModeToolGuardrail — speculative classify (FEATURE_158)', () => {
 //      must NOT produce a protected_path signal that escalates.
 
 describe('FEATURE_158 Step 9 — subagent SharedState + legacy Tier 0 propagation', () => {
-  it('LLM ownership applies in both parent and subagent when state is shared', async () => {
+  it('hard boundaries apply in both parent and subagent when state is shared', async () => {
     const sharedState = {
       engine: 'llm' as const,
       denials: { consecutive: 0, cumulative: 0 },
@@ -4292,9 +4591,9 @@ describe('FEATURE_158 Step 9 — subagent SharedState + legacy Tier 0 propagatio
     });
     const parentVerdict = await parent.beforeTool!(callBash('rm -rf /'), ctx());
     const childVerdict = await child.beforeTool!(callBash('rm -rf /'), ctx());
-    expect(parentVerdict.action).toBe('allow');
-    expect(childVerdict.action).toBe('allow');
-    expect(stream).toHaveBeenCalledTimes(2);
+    expect(parentVerdict.action).toBe('block');
+    expect(childVerdict.action).toBe('block');
+    expect(stream).not.toHaveBeenCalled();
   });
 
   it('subagent retains the legacy Tier 0 gate when shared state explicitly selects Rules', async () => {

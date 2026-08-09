@@ -113,6 +113,22 @@ describe('consumeBudget', () => {
     expect(remaining(state)).toBe(0);
   });
 
+  it('admits exactly one concurrent final slot and never exceeds the hard limit', async () => {
+    await consumeBudget('alpha', { cwd: tmpRoot });
+    await consumeBudget('alpha', { cwd: tmpRoot });
+
+    const results = await Promise.allSettled([
+      consumeBudget('alpha', { cwd: tmpRoot }),
+      consumeBudget('alpha', { cwd: tmpRoot }),
+    ]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    await expect(readBudget('alpha', { cwd: tmpRoot })).resolves.toMatchObject({
+      count: DEFAULT_SELF_MODIFY_BUDGET,
+    });
+  });
+
   it('records lastModifiedAt as an ISO string', async () => {
     const before = Date.now();
     const after = await consumeBudget('alpha', { cwd: tmpRoot });

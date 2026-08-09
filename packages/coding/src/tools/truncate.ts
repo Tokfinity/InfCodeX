@@ -4,6 +4,7 @@ import path from 'path';
 import { getAgentConfigPath } from '@kodax-ai/agent';
 
 import type { KodaXToolExecutionContext } from '../types.js';
+import { withFileMutation } from './_internal/file-mutation-queue.js';
 
 export const DEFAULT_TOOL_OUTPUT_MAX_LINES = 2000;
 export const DEFAULT_TOOL_OUTPUT_MAX_BYTES = 50 * 1024;
@@ -256,8 +257,10 @@ export async function persistToolOutput(
   const fileName = `${timestamp}-${scope}-${sanitizePathSegment(toolName)}-${randomSuffix}.txt`;
   const filePath = path.join(outputDir, fileName);
 
-  await fs.mkdir(outputDir, { recursive: true });
-  await fs.writeFile(filePath, content, 'utf-8');
+  await withFileMutation(filePath, async () => {
+    await fs.mkdir(outputDir, { recursive: true });
+    await fs.writeFile(filePath, content, 'utf-8');
+  });
 
   // Recovery artifacts are canonical evidence referenced by conversation
   // history. Age alone cannot prove that a live/resumable session no longer

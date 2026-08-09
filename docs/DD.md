@@ -1,9 +1,10 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-08-07
+> Last updated: 2026-08-09
 >
-> Current release baseline: `v0.7.84`
-> (`@kodax-ai/kodax@0.7.84`; npm publication remains manual)
+> Current published baseline: `v0.7.84`
+> (`@kodax-ai/kodax@0.7.84`; the unreleased working tree targets `v0.7.85`,
+> and npm publication remains manual)
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -20,9 +21,19 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The root workspace package is `@kodax-ai/kodax@0.7.84`. This non-Feature
-runtime hardening patch establishes bounded Actor progress persistence and
-same-owner settlement recovery after an unknown durability boundary. It keeps
+The published package remains `@kodax-ai/kodax@0.7.84`; the working tree
+targets `v0.7.85`. This non-Feature runtime hardening patch establishes
+controller-wide bounded Actor progress
+persistence, queue-aware terminal deadlines, root fail-closed fencing, and
+automatic same-owner settlement recovery after an unknown durability boundary.
+Known queue waits pause the five-second persistence budget. Same-owner repair
+and root abort close effect admission; the logical convergence boundary also
+requires every exact tool execution admitted before the fence to settle. The
+Session route then releases without waiting for the old root executor Promise.
+An abort-ignoring provider cannot publish callbacks or start a new Runtime-
+mediated effect after its fence.
+The versioned `actorSettlementConvergence:1` capability lets SDK hosts reject
+older partial semantics. It keeps
 Windows daemon containment before user code
 can create descendants: the daemon is created suspended, assigned to a
 kill-on-close Job Object, and resumed only after assignment succeeds. An
@@ -692,6 +703,52 @@ Ready/attention. The locked invocation mutation rechecks the current artifact
 revision and fingerprint before consuming a slot. Protected/formal
 changes, user-global promotion, and Extension authoring require explicit user
 authority through `runtime.learning` or `/learn`.
+
+Remote and local project IDs hash to different learned-area roots. Discovery
+opens each applicable store, applies remote-first precedence, and retains the
+record-to-store mapping for admission, invocation, outcome, reconciliation, and
+release. This includes `remote-hash:*` fallback. The public discovery config
+accepts both deprecated `expectedScope` and optional `expectedScopes`. Discovery
+pairs each physical root with exactly one expected scope, validates the pairing
+before scanning even an empty store, and never accepts a stale cross-root scope.
+
+The Rules permission analyzer uses the same protected agent-home predicates for
+file and shell tools. Ordinary descendants, including `agents/*.md`, Sessions,
+tool results, and intermediate artifacts, may be read and written automatically.
+The home root cannot be removed or overwritten as a whole. Runtime mutations
+and writes to the legacy host-owned `processes/children` registry are hard-denied.
+Because that old location was historically model-writable, its records are
+quarantined for diagnosis and never used as process-signal authority.
+The host-owned `learned/` tree is also hard-denied to model mutation; Memory and
+Skill lifecycle APIs remain the only writers.
+Exact non-sensitive Runtime descendants remain readable, while
+the Runtime root, recursive reads that can reach protected descendants,
+credentials/security config, and generic sensitive files require review.
+Ancestor traversal never inherits a child exemption.
+
+File mutation sinks recheck the Runtime/home-root hard boundary immediately
+before execution. Undo records context-local canonical path identities and
+refuses restore after retargeting. Model-facing worktree creation ignores any
+undeclared base path; only the workflow controller can supply its Runtime-owned
+worktree base through trusted execution context. A cross-process category lease
+prevents shell effects from overlapping the canonical-check/write window of
+host file sinks; shell-shell and independent direct-file work remain concurrent,
+while a cross-category conflict fails quickly instead of waiting indefinitely.
+Recognized shell mutations of the Agent Home root or Runtime are blocked before
+either Auto engine can consult its classifier or approval surface; credential
+and security configuration remains on the reviewable branch.
+Every coding run also installs the shell boundary outside Auto mode. Runtime
+uses fail-closed ASRT admission in every permission mode. Linux's PID namespace
+and the Windows per-effect Job provide authoritative process-tree containment;
+macOS and legacy custom adapters without the optional `processTreeContainment`
+capability fail closed for opaque Bash but may execute a complete, exact
+permission analysis. On Windows, ASRT never grants `MODIFY` on the Agent Home
+directory object because that right includes root deletion. It grants verified
+existing ordinary children instead, skips broken/escaping links, and denies the
+Runtime, sandbox-control, legacy process-control, and Learned Area children. Creating or modifying files inside
+`agents`, Sessions, tool-results, and other existing ordinary directories stays
+available without approval. Reviewable Agent Home reads are not placed on the
+OS sandbox's unconditional deny list, so an explicit approval remains effective.
 
 ## 12. Media Input Artifacts
 

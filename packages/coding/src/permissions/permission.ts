@@ -31,6 +31,11 @@ import {
 } from './shell-command-sets.js';
 import { isNullDevice, parseBashCommand } from './bash-ast.js';
 import { analyzePowerShellMutation } from './powershell-mutation.js';
+import {
+  canonicalizeAgentHomePolicyPath,
+  isAutoWritableAgentHomePath,
+  isProtectedAgentHomeReadTarget,
+} from './agent-home-policy.js';
 
 export type PermissionMode = 'plan' | 'accept-edits' | 'auto' | 'auto-in-project';
 
@@ -1037,7 +1042,7 @@ export function isAlwaysConfirmPath(targetPath: string, projectRoot: string): bo
   try {
     const normalizedPath = path.resolve(targetPath);
     const normalizedRoot = path.resolve(projectRoot);
-    const userKodaxDir = getAgentConfigHome();
+    const userKodaxDir = path.resolve(getAgentConfigHome());
     const projectKodaxDir = path.join(normalizedRoot, '.kodax');
 
     // .kodax/ project config directory — always protected
@@ -1046,8 +1051,19 @@ export function isAlwaysConfirmPath(targetPath: string, projectRoot: string): bo
     }
 
     // ~/.kodax/ user config directory — always protected
+    const canonicalUserKodaxDir = canonicalizeAgentHomePolicyPath(userKodaxDir)
+      ?? userKodaxDir;
+    const canonicalTarget = canonicalizeAgentHomePolicyPath(normalizedPath);
     if (isPathInsideDirectory(normalizedPath, userKodaxDir)) {
-      return true;
+      return canonicalTarget === undefined
+        || !isPathInsideDirectory(canonicalTarget, canonicalUserKodaxDir)
+        || !isAutoWritableAgentHomePath(canonicalTarget, canonicalUserKodaxDir);
+    }
+    if (
+      canonicalTarget !== undefined
+      && isPathInsideDirectory(canonicalTarget, canonicalUserKodaxDir)
+    ) {
+      return !isAutoWritableAgentHomePath(canonicalTarget, canonicalUserKodaxDir);
     }
 
     // Inside project — not "always confirm"
@@ -1865,14 +1881,39 @@ export function isCommandOnProtectedPath(
   projectRoot: string,
   executionCwd = projectRoot,
 ): boolean {
+  const readOnly = isBashReadCommand(command);
   const paths = extractPathsFromCommand(command);
   for (const p of paths) {
     const resolved = resolveExecutionPath(p, executionCwd);
+    if (readOnly && isProtectedAgentHomeReadTarget(resolved, executionCwd)) {
+      return true;
+    }
+    if (readOnly && isReadableAgentHomeTarget(resolved)) continue;
     if (isAlwaysConfirmPath(resolved, projectRoot)) {
       return true;
     }
   }
   return false;
+}
+
+function isReadableAgentHomeTarget(targetPath: string): boolean {
+  try {
+    const agentHome = canonicalizeAgentHomePolicyPath(getAgentConfigHome())
+      ?? path.resolve(getAgentConfigHome());
+    const target = canonicalizeAgentHomePolicyPath(targetPath);
+    return target !== undefined && isPathInsideDirectory(target, agentHome);
+  } catch {
+    return false;
+  }
+}
+
+export function isBashReadCommandAutoAllowed(
+  command: string,
+  projectRoot: string,
+  executionCwd = projectRoot,
+): boolean {
+  return isBashReadCommand(command)
+    && !isCommandOnProtectedPath(command, projectRoot, executionCwd);
 }
 
 function normalizePathForComparison(targetPath: string): string {

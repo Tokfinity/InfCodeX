@@ -1,7 +1,9 @@
 import { spawnSync, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
+  lstatSync,
   mkdirSync,
+  realpathSync,
   renameSync,
   readdirSync,
   readFileSync,
@@ -13,6 +15,7 @@ import { emitKodaXDiagnostic } from '../diagnostics.js';
 import { getAgentConfigPath } from './agent-home.js';
 import {
   isCurrentProcessWindowsJobContained,
+  killChildProcessTree,
   killPidTree,
   rememberChildProcessTree,
   rememberedChildProcessTreeIdentities,
@@ -33,6 +36,8 @@ export interface ManagedChildProcessMetadata {
 export interface ManagedChildRegistrationOptions {
   /** Keep the record until the returned cleanup callback is invoked. */
   readonly manualUnregister?: boolean;
+  /** Do not let an externally mutating child start without durable recovery evidence. */
+  readonly requireDurableRecord?: boolean;
 }
 
 interface ManagedChildProcessRecord extends ManagedChildProcessMetadata {
@@ -89,7 +94,46 @@ type PosixCommandLineLookup =
   | { readonly status: 'unknown' };
 
 function registryDir(): string {
+  return getAgentConfigPath('runtime', 'processes', 'children');
+}
+
+function legacyRegistryDir(): string {
   return getAgentConfigPath('processes', 'children');
+}
+
+function verifiedLegacyRegistryDir(): string | undefined {
+  const directory = legacyRegistryDir();
+  const home = path.dirname(path.dirname(directory));
+  try {
+    const canonicalHome = realpathSync.native(home);
+    let current = home;
+    for (const component of ['processes', 'children']) {
+      current = path.join(current, component);
+      const stat = lstatSync(current);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) {
+        throw new Error(`Legacy managed-child path is not a physical directory: ${current}`);
+      }
+      const canonical = realpathSync.native(current);
+      const relative = path.relative(canonicalHome, canonical);
+      if (
+        relative === '..'
+        || relative.startsWith(`..${path.sep}`)
+        || path.isAbsolute(relative)
+      ) {
+        throw new Error(`Legacy managed-child path escapes Agent Home: ${current}`);
+      }
+    }
+    return directory;
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    emitKodaXDiagnostic({
+      source: 'agent.managed-child-processes',
+      level: 'warn',
+      message: 'Ignored an unsafe legacy managed-child registry path.',
+      detail: { directory, error },
+    });
+    return undefined;
+  }
 }
 
 function registryPath(pid: number, registrationId: string): string {
@@ -151,6 +195,21 @@ function removeRecord(pid: number, registrationId: string): boolean {
     activeChildren.delete(pid);
   }
   return true;
+}
+
+function removePersistedRecord(filePath: string): boolean {
+  try {
+    rmSync(filePath, { force: true });
+    return true;
+  } catch (error: unknown) {
+    emitKodaXDiagnostic({
+      source: 'agent.managed-child-processes',
+      level: 'warn',
+      message: 'Failed to retire a persisted managed child record.',
+      detail: { filePath, error },
+    });
+    return false;
+  }
 }
 
 function isPidAlive(pid: number): boolean {
@@ -644,6 +703,11 @@ export function registerManagedChildProcess(
     activeChildren.set(pid, { record, child });
     writeRecord(record);
   } catch (error: unknown) {
+    if (options.requireDurableRecord) {
+      registered = false;
+      activeChildren.delete(pid);
+      throw error;
+    }
     emitKodaXDiagnostic({
       source: 'agent.managed-child-processes',
       level: 'warn',
@@ -666,6 +730,9 @@ export function registerManagedChildProcess(
     try {
       writeRecord(refreshed);
     } catch (error: unknown) {
+      if (options.requireDurableRecord) {
+        void killChildProcessTree(child);
+      }
       emitKodaXDiagnostic({
         source: 'agent.managed-child-processes',
         level: 'warn',
@@ -700,8 +767,12 @@ export async function cleanupRegisteredManagedChildren(
   let skipped = 0;
   let unresolvedCurrentOwner = 0;
   let quarantined = 0;
-  let files: string[] = [];
-  let registryReadError: Error | undefined;
+  const persistedRecordFiles: Array<{
+    readonly file: string;
+    readonly filePath: string;
+    readonly current: boolean;
+  }> = [];
+  const registryReadErrors: Error[] = [];
   const skip = (ownerPid?: number): void => {
     skipped += 1;
     if (ownerPid === process.pid) unresolvedCurrentOwner += 1;
@@ -713,20 +784,39 @@ export async function cleanupRegisteredManagedChildren(
   skipped += activeSummary.skipped;
   unresolvedCurrentOwner += activeSummary.unresolved;
 
-  try {
-    files = readdirSync(registryDir()).filter((file) => file.endsWith('.json'));
-  } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      registryReadError = new Error('Managed child registry is unreadable.', { cause: error });
+  const legacyDirectory = verifiedLegacyRegistryDir();
+  const registrySources = [
+    { directory: registryDir(), current: true },
+    ...(legacyDirectory === undefined
+      ? []
+      : [{ directory: legacyDirectory, current: false }]),
+  ];
+  for (const source of registrySources) {
+    try {
+      persistedRecordFiles.push(...readdirSync(source.directory)
+        .filter((file) => file.endsWith('.json'))
+        .map((file) => ({
+          file,
+          filePath: path.join(source.directory, file),
+          current: source.current,
+        })));
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        registryReadErrors.push(new Error(
+          `Managed child registry is unreadable: ${source.directory}`,
+          { cause: error },
+        ));
+      }
     }
   }
 
-  const persistedFiles = files
-    .filter((file) => !activeSummary.processedFiles.has(file))
-    .map((file) => {
-      const filePath = path.join(registryDir(), file);
-      return { filePath, persisted: readRecord(filePath) };
-    });
+  const persistedFiles = persistedRecordFiles
+    .filter(({ current, file }) => !current || !activeSummary.processedFiles.has(file))
+    .map(({ filePath, current }) => ({
+      filePath,
+      current,
+      persisted: readRecord(filePath),
+    }));
   const ownerPids = persistedFiles.flatMap(({ persisted }) => (
     persisted.status !== 'invalid'
     && isPidAlive(persisted.record.ownerPid)
@@ -740,7 +830,17 @@ export async function cleanupRegisteredManagedChildren(
     ownerStartIdentities.get(pid)
   );
 
-  for (const { filePath, persisted } of persistedFiles) {
+  for (const { filePath, current, persisted } of persistedFiles) {
+    if (!current) {
+      if (persisted.status === 'invalid') {
+        if (removePersistedRecord(filePath)) pruned += 1;
+        else skip();
+        continue;
+      }
+      if (quarantineRecord(filePath)) quarantined += 1;
+      skip(persisted.record.ownerPid);
+      continue;
+    }
     if (persisted.status === 'unsupported') {
       if (
         process.platform === 'win32'
@@ -773,7 +873,7 @@ export async function cleanupRegisteredManagedChildren(
       && options.currentOwnerJobContained === true
       && record.ownerPid === process.pid
     ) {
-      if (removeRecord(record.pid, record.registrationId)) pruned += 1;
+      if (removePersistedRecord(filePath)) pruned += 1;
       else skip(record.ownerPid);
       continue;
     }
@@ -801,7 +901,7 @@ export async function cleanupRegisteredManagedChildren(
     const rootWasAlive = isPidAlive(record.pid);
     if (!rootWasAlive) {
       if (process.platform !== 'win32') {
-        if (removeRecord(record.pid, record.registrationId)) pruned += 1;
+        if (removePersistedRecord(filePath)) pruned += 1;
         else skip(record.ownerPid);
         continue;
       }
@@ -828,7 +928,7 @@ export async function cleanupRegisteredManagedChildren(
 
     if (!confirmed) {
       if (process.platform !== 'win32') {
-        if (removeRecord(record.pid, record.registrationId)) pruned += 1;
+        if (removePersistedRecord(filePath)) pruned += 1;
         else skip(record.ownerPid);
         continue;
       }
@@ -855,7 +955,7 @@ export async function cleanupRegisteredManagedChildren(
       expectedProcessTreeComplete: record.processTreeComplete === true,
     });
     if (result.status !== 'unknown') {
-      if (removeRecord(record.pid, record.registrationId)) {
+      if (removePersistedRecord(filePath)) {
         killed += 1;
       } else {
         skip(record.ownerPid);
@@ -881,7 +981,7 @@ export async function cleanupRegisteredManagedChildren(
 
   if (options.requireCurrentOwnerCleanup === true) {
     const errors: Error[] = [];
-    if (registryReadError !== undefined) errors.push(registryReadError);
+    errors.push(...registryReadErrors);
     if (unresolvedCurrentOwner > 0) {
       errors.push(new Error(
         `Managed child cleanup could not verify ${unresolvedCurrentOwner} current-owner process tree(s).`,
@@ -889,7 +989,10 @@ export async function cleanupRegisteredManagedChildren(
     }
     if (errors.length === 1) throw errors[0];
     if (errors.length > 1) {
-      throw new AggregateError(errors, 'Managed child final cleanup failed.');
+      throw new AggregateError(
+        errors,
+        'Managed child final cleanup failed because registry evidence is unreadable or unresolved.',
+      );
     }
   }
 

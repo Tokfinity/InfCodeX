@@ -15,6 +15,7 @@ import {
 } from '../../learning/index.js';
 import type {
   LearnedSkillDiscoveryConfig,
+  LearnedSkillDiscoveryScope,
   ResolvedSkillSource,
   SkillMetadata,
   SkillPathsConfig,
@@ -86,7 +87,29 @@ async function scanRecordGatedLearnedArea(
   readonly skills: readonly SkillMetadata[];
   readonly errors: readonly { path: string; error: string }[];
 }> {
-  const store = new LearnedAreaStore(config.rootDir);
+  const skills: SkillMetadata[] = [];
+  const errors: Array<{ path: string; error: string }> = [];
+  for (const binding of learnedAreaBindings(config)) {
+    const discovered = await scanRecordGatedLearnedRoot(
+      binding.rootDir,
+      binding.expectedScope,
+      config,
+    );
+    skills.push(...discovered.skills);
+    errors.push(...discovered.errors);
+  }
+  return { skills, errors };
+}
+
+async function scanRecordGatedLearnedRoot(
+  rootDir: string,
+  expectedScope: LearnedSkillDiscoveryScope,
+  config: LearnedSkillDiscoveryConfig,
+): Promise<{
+  readonly skills: readonly SkillMetadata[];
+  readonly errors: readonly { path: string; error: string }[];
+}> {
+  const store = new LearnedAreaStore(rootDir);
   const skills: SkillMetadata[] = [];
   const errors: Array<{ path: string; error: string }> = [];
   let records: readonly import('../../learning/index.js').LearnedCapabilityRecord[];
@@ -96,18 +119,18 @@ async function scanRecordGatedLearnedArea(
     return {
       skills,
       errors: [{
-        path: config.rootDir,
+        path: rootDir,
         error: error instanceof Error ? error.message : String(error),
       }],
     };
   }
   for (const record of records) {
-    if (!isLearnedCapabilityRecordV2(record) || !scopeMatches(record, config)) continue;
+    if (!isLearnedCapabilityRecordV2(record) || !scopeMatches(record, expectedScope)) continue;
     if (!isRecordAdmitted(record, config)) continue;
-    const artifactPath = resolve(config.rootDir, ...record.artifact.relativePath.split('/'));
+    const artifactPath = resolve(rootDir, ...record.artifact.relativePath.split('/'));
     try {
-      assertInside(artifactPath, config.rootDir);
-      await assertRegularArtifactChain(config.rootDir, artifactPath);
+      assertInside(artifactPath, rootDir);
+      await assertRegularArtifactChain(rootDir, artifactPath);
       const content = await readFile(artifactPath, 'utf8');
       if (sha256(content) !== record.artifact.fingerprint) {
         throw new Error('learned Skill artifact fingerprint mismatch');
@@ -131,13 +154,49 @@ async function scanRecordGatedLearnedArea(
   return { skills, errors };
 }
 
+function learnedAreaBindings(config: LearnedSkillDiscoveryConfig): readonly {
+  readonly rootDir: string;
+  readonly expectedScope: LearnedSkillDiscoveryScope;
+}[] {
+  const roots = [config.rootDir, ...(config.additionalRootDirs ?? [])];
+  const scopes = expectedLearnedScopes(config);
+  if (roots.length !== scopes.length) {
+    throw new Error('learned Skill discovery requires one expected scope per physical root');
+  }
+  const bindings = roots.map((rootDir, index) => ({
+    rootDir,
+    expectedScope: scopes[index]!,
+  }));
+  for (const [index, binding] of bindings.entries()) {
+    const duplicate = bindings.findIndex((candidate) => (
+      comparablePath(candidate.rootDir) === comparablePath(binding.rootDir)
+    ));
+    if (duplicate !== index) {
+      throw new Error('learned Skill discovery physical roots must be unique');
+    }
+  }
+  return bindings;
+}
+
 function scopeMatches(
   record: LearnedCapabilityRecordV2,
-  config: LearnedSkillDiscoveryConfig,
+  expectedScope: LearnedSkillDiscoveryScope,
 ): boolean {
-  return record.scope.configHomeHash === config.expectedScope.configHomeHash
-    && record.scope.tenantHash === config.expectedScope.tenantHash
-    && record.scope.projectHash === config.expectedScope.projectHash;
+  return record.scope.configHomeHash === expectedScope.configHomeHash
+    && record.scope.tenantHash === expectedScope.tenantHash
+    && record.scope.projectHash === expectedScope.projectHash;
+}
+
+function expectedLearnedScopes(
+  config: LearnedSkillDiscoveryConfig,
+): readonly LearnedSkillDiscoveryScope[] {
+  const expectedScopes = [
+    ...(config.expectedScopes ?? [config.expectedScope]),
+  ];
+  if (expectedScopes.length === 0) {
+    throw new Error('learned Skill discovery requires at least one expected scope');
+  }
+  return expectedScopes;
 }
 
 function isRecordAdmitted(

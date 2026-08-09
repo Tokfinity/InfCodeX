@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -473,6 +473,28 @@ describe('ASRT workspace shell adapter', () => {
     const home = path.resolve(os.homedir());
     const customAgentHome = path.join(root, 'custom-agent-home');
     vi.stubEnv('KODAX_HOME', customAgentHome);
+    const agentsDirectory = path.join(customAgentHome, 'agents');
+    const sessionsDirectory = path.join(customAgentHome, 'sessions');
+    const runtimeDirectory = path.join(customAgentHome, 'runtime');
+    const legacyProcessesDirectory = path.join(customAgentHome, 'processes');
+    const learnedDirectory = path.join(customAgentHome, 'learned');
+    await mkdir(agentsDirectory, { recursive: true });
+    await mkdir(sessionsDirectory, { recursive: true });
+    await mkdir(runtimeDirectory, { recursive: true });
+    await mkdir(legacyProcessesDirectory, { recursive: true });
+    await mkdir(learnedDirectory, { recursive: true });
+    const reviewableConfig = path.join(customAgentHome, 'config.json');
+    const reviewableToken = path.join(customAgentHome, 'mcp-tokens', 'token.json');
+    await mkdir(path.dirname(reviewableToken), { recursive: true });
+    await writeFile(reviewableConfig, '{}', 'utf8');
+    await writeFile(reviewableToken, 'reviewed-token', 'utf8');
+    if (process.platform === 'win32') {
+      await symlink(
+        path.join(customAgentHome, 'missing-target'),
+        path.join(customAgentHome, 'broken-link'),
+        'junction',
+      );
+    }
     const homePathEntry = process.platform === 'win32'
       ? `${home[0]!.toLowerCase()}${home.slice(1)}`
       : home;
@@ -486,7 +508,11 @@ describe('ASRT workspace shell adapter', () => {
     ].filter((entry): entry is string => entry !== undefined).join(path.delimiter));
     const shouldSandbox = vi.fn(() => true);
     const reportObservation = vi.fn();
-    const sandbox = createAsrtShellSandbox({ workspaceRoot: root, shouldSandbox });
+    const sandbox = createAsrtShellSandbox({
+      workspaceRoot: root,
+      shouldSandbox,
+      failClosed: true,
+    });
     const childControlledTemp = path.join(path.parse(root).root, 'kodax-child-temp');
 
     const prepared = await sandbox.prepare({
@@ -514,6 +540,7 @@ describe('ASRT workspace shell adapter', () => {
       const requestFile = prepared.args.find((arg) => arg.endsWith('.json'));
       expect(requestFile).toBeDefined();
       const request = JSON.parse(readFileSync(requestFile!, 'utf8')) as {
+        readonly fallbackToNormalExecution?: boolean;
         readonly config: {
           readonly filesystem: {
             readonly allowRead: readonly string[];
@@ -533,7 +560,20 @@ describe('ASRT workspace shell adapter', () => {
         readonly allowAllNetwork?: boolean;
         readonly observationFile: string;
       };
-      expect(request.config.filesystem.allowWrite).toContain(path.resolve(root));
+      if (process.platform === 'win32') {
+        expect(request.config.filesystem.allowWrite).not.toContain(path.resolve(root));
+        expect(request.config.filesystem.allowWrite).not.toContain(path.resolve(customAgentHome));
+        expect(request.config.filesystem.allowWrite).toEqual(expect.arrayContaining([
+          path.resolve(agentsDirectory),
+          path.resolve(sessionsDirectory),
+        ]));
+        expect(request.config.filesystem.allowWrite).not.toContain(path.resolve(runtimeDirectory));
+        expect(request.config.filesystem.allowWrite)
+          .not.toContain(path.resolve(legacyProcessesDirectory));
+        expect(request.config.filesystem.allowWrite).not.toContain(path.resolve(learnedDirectory));
+      } else {
+        expect(request.config.filesystem.allowWrite).toContain(path.resolve(customAgentHome));
+      }
       expect(request.config.filesystem.allowWrite).not.toContain(childControlledTemp);
       expect(request.config.filesystem.denyRead).toEqual(expect.arrayContaining([
         '.ssh', '.aws', '.azure', '.gnupg', '.kube', '.docker', '.kodax', '.agents',
@@ -595,7 +635,17 @@ describe('ASRT workspace shell adapter', () => {
         'id_ecdsa',
         'id_ed25519',
       ].map((relative) => path.join(home, relative))));
-      expect(request.config.filesystem.denyRead).toContain(path.resolve(customAgentHome));
+      expect(request.config.filesystem.denyRead).not.toContain(path.resolve(customAgentHome));
+      expect(request.config.filesystem.denyRead).not.toContain(path.resolve(reviewableConfig));
+      expect(request.config.filesystem.denyRead).not.toContain(path.resolve(reviewableToken));
+      expect(request.config.filesystem.denyWrite)
+        .toContain(path.resolve(customAgentHome, 'runtime'));
+      expect(request.config.filesystem.denyWrite)
+        .toContain(path.resolve(customAgentHome, 'processes'));
+      expect(request.config.filesystem.denyWrite)
+        .toContain(path.resolve(customAgentHome, 'learned'));
+      expect(request.config.filesystem.denyWrite)
+        .not.toContain(path.resolve(customAgentHome));
       expect(request.config.filesystem.allowRead).not.toContain(homePathEntry);
       expect(request.config.filesystem.allowRead).not.toContain(sensitivePathEntry);
       expect(request.config.filesystem.allowRead).toContain(ordinaryHomePathEntry);
@@ -641,6 +691,7 @@ describe('ASRT workspace shell adapter', () => {
       expect(request.config.network.allowedDomains).toEqual([]);
       expect(request.config.network.strictAllowlist).toBe(false);
       expect(request.allowAllNetwork).toBe(true);
+      expect(request.fallbackToNormalExecution).toBe(false);
       expect(request.env.TEST_API_KEY).toBe('must-not-cross-the-broker');
       expect(request.env.AWS_ACCESS_KEY_ID).toBe('must-not-cross-the-broker-either');
       await writeFile(request.observationFile, JSON.stringify({
@@ -659,6 +710,52 @@ describe('ASRT workspace shell adapter', () => {
       policyId: 'kodax-workspace-shell-v1',
     });
   });
+
+  it.runIf(process.platform === 'win32')(
+    'canonicalizes a junction workspace before granting Agent Home write roots',
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-workspace-link-'));
+      tempRoots.push(root);
+      const physicalWorkspace = path.join(root, 'physical-workspace');
+      const workspaceAlias = path.join(root, 'alias-parent', 'workspace-link');
+      const agentHome = path.join(physicalWorkspace, 'custom-agent-home');
+      const agentsDirectory = path.join(agentHome, 'agents');
+      const runtimeDirectory = path.join(agentHome, 'runtime');
+      await mkdir(agentsDirectory, { recursive: true });
+      await mkdir(runtimeDirectory, { recursive: true });
+      await mkdir(path.dirname(workspaceAlias), { recursive: true });
+      await symlink(physicalWorkspace, workspaceAlias, 'junction');
+      vi.stubEnv('KODAX_HOME', agentHome);
+
+      const sandbox = createAsrtShellSandbox({
+        workspaceRoot: workspaceAlias,
+        shouldSandbox: () => true,
+        failClosed: true,
+      });
+      const prepared = await sandbox.prepare({
+        toolCallId: 'bash-junction-workspace',
+        toolInput: { command: 'echo safe' },
+        command: 'echo safe',
+        cwd: workspaceAlias,
+        env: process.env,
+      });
+      if (!prepared) throw new Error('expected junction workspace invocation');
+      try {
+        const requestFile = prepared.args.find((arg) => arg.endsWith('.json'));
+        if (!requestFile) throw new Error('expected junction broker request');
+        const request = JSON.parse(readFileSync(requestFile, 'utf8')) as {
+          readonly config: { readonly filesystem: { readonly allowWrite: readonly string[] } };
+        };
+        expect(request.config.filesystem.allowWrite).not.toContain(path.resolve(workspaceAlias));
+        expect(request.config.filesystem.allowWrite).not.toContain(path.resolve(physicalWorkspace));
+        expect(request.config.filesystem.allowWrite).not.toContain(path.resolve(agentHome));
+        expect(request.config.filesystem.allowWrite).not.toContain(path.resolve(runtimeDirectory));
+        expect(request.config.filesystem.allowWrite).toContain(path.resolve(agentsDirectory));
+      } finally {
+        await prepared.cleanup();
+      }
+    },
+  );
 
   it('reuses one workspace session across sequential admitted commands', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-session-reuse-'));
@@ -930,7 +1027,7 @@ describe('ASRT workspace shell adapter', () => {
     await expect(closing).resolves.toBeUndefined();
   });
 
-  it('falls back to the ordinary execution plan when ASRT is not ready', async () => {
+  it('falls back to the ordinary execution plan when an optional ASRT is not ready', async () => {
     const asrt = await import('@anthropic-ai/sandbox-runtime');
     const checkDependencies = vi.mocked(asrt.SandboxManager.checkDependencies);
     checkDependencies.mockReturnValueOnce({
@@ -958,6 +1055,39 @@ describe('ASRT workspace shell adapter', () => {
       reason: 'not_ready',
       execution: 'normal_permission_policy',
     });
+  });
+
+  it('marks an admitted fail-closed call unavailable instead of permitting normal execution', async () => {
+    const asrt = await import('@anthropic-ai/sandbox-runtime');
+    const checkDependencies = vi.mocked(asrt.SandboxManager.checkDependencies);
+    checkDependencies.mockReturnValueOnce({
+      errors: ['bubblewrap is unavailable'],
+      warnings: [],
+    });
+    await doctorSandboxRuntime({ refresh: true });
+    const sandbox = createAsrtShellSandbox({
+      workspaceRoot: process.cwd(),
+      shouldSandbox: () => true,
+      failClosed: true,
+    });
+    const reportObservation = vi.fn();
+
+    await expect(sandbox.prepare({
+      toolCallId: 'bash-no-asrt-required',
+      toolInput: { command: 'node --version' },
+      command: 'node --version',
+      cwd: process.cwd(),
+      env: process.env,
+      reportObservation,
+    })).resolves.toBeUndefined();
+    expect(sandbox.failClosed).toBe(true);
+    expect(sandbox.processTreeContainment).toBe(
+      process.platform === 'linux' ? 'root-exit-drains' : undefined,
+    );
+    expect(reportObservation).toHaveBeenCalledWith(expect.objectContaining({
+      state: 'fallback',
+      reason: 'not_ready',
+    }));
   });
 
   it('returns structured unavailability for a standalone SDK sandbox run', async () => {

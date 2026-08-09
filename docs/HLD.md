@@ -1,9 +1,10 @@
 # KodaX High-Level Design
 
-> Last updated: 2026-08-07
+> Last updated: 2026-08-09
 >
-> Current implementation baseline: `v0.7.84` release
-> (`@kodax-ai/kodax@0.7.84` workspace package; npm publication remains manual)
+> Current published baseline: `v0.7.84`
+> (`@kodax-ai/kodax@0.7.84`; the unreleased implementation targets `v0.7.85`,
+> and npm publication remains manual)
 >
 > This HLD is intentionally current-state only. The old pre-v0.7.43
 > chain/harness model has been removed from this active design document because
@@ -38,11 +39,38 @@ boundary as a verified shutdown contract rather than treating PID exit alone as
 completion.
 
 Actor settlement is a separate durability boundary. Progress observations are
-coalesced behind a bounded projector, while terminal settlement is allowed to
-reach the controller deadline without waiting for an unbounded observation
-queue. A same-owner Stop can reload and validate the late durable Actor
-snapshot before quiescing remaining turns; owner conflicts and unresolved
-storage remain unknown rather than being treated as successful cancellation.
+coalesced once across the complete controller tree. Terminal settlement starts
+its ambiguity deadline only at the mutation-queue head; a separate bounded wait
+detects a permanently blocked predecessor. On unknown durability, Runtime
+fail-closes root and child work, suppresses later effects, and automatically
+reloads only an exact same-owner snapshot before durably quiescing remaining
+turns. Owner conflicts and unresolved storage remain unknown rather than being
+treated as successful cancellation. Same-owner repair and abort close effect
+admission; the logical convergence boundary also waits for each exact tool
+execution admitted before the fence. The Session route then releases without
+waiting for the old executor Promise. An abort-ignoring provider remains unable
+to publish callbacks or begin new Runtime-mediated effects. Ordinary healthy
+after-turn input still defaults to coding mode; mode
+inheritance is reserved for work that actually drains behind durability repair.
+
+Auto-mode access to the agent-home directory preserves ordinary working-data
+access: Agent definitions, Sessions, tool results, and intermediate artifacts
+may be modified without review. The home root cannot be removed as a whole,
+Runtime mutations are hard-denied, and credential/security config plus generic
+sensitive files require review. The legacy `processes/children` registry is
+hard-denied to model writes; upgrade cleanup quarantines its unauthenticated
+records without signaling a process. Exact
+non-sensitive Runtime reads remain open.
+Opaque shell execution is admitted only behind a fail-closed OS sandbox with
+authoritative process-tree containment. Runtime supplies Linux PID-namespace
+containment and a Windows per-effect Job in all permission modes. macOS and
+legacy custom adapters without the optional containment capability fail closed
+for opaque Bash; they retain statically exact commands. Windows sandbox grants
+attach to verified ordinary Home children, not
+the Home root object, so child mutation does not imply whole-root deletion.
+Learned Skill discovery likewise treats local and remote project identities as
+distinct physical roots, searches each applicable root, and directs lifecycle
+mutations back to the store that owns the discovered record.
 
 ## 2. Layering
 

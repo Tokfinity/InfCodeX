@@ -23,6 +23,7 @@
 
 import fs from 'fs/promises';
 import path from 'path';
+import { withFileMutation } from './_internal/file-mutation-queue.js';
 
 /** Legacy/manual retention default. Callers must establish artifact liveness. */
 export const DEFAULT_TOOL_OUTPUT_TTL_MS = 14 * 24 * 60 * 60 * 1000;
@@ -54,6 +55,15 @@ export async function cleanupExpiredToolOutputs(
   dir: string,
   ttlMs: number = DEFAULT_TOOL_OUTPUT_TTL_MS,
   now: number = Date.now(),
+): Promise<ToolOutputGcResult> {
+  return withFileMutation(dir, () => cleanupExpiredToolOutputsInPlace(dir, ttlMs, now))
+    .catch(() => ({ scanned: 0, removed: 0, failed: 1, bytesRemoved: 0 }));
+}
+
+async function cleanupExpiredToolOutputsInPlace(
+  dir: string,
+  ttlMs: number,
+  now: number,
 ): Promise<ToolOutputGcResult> {
   let entries: string[];
   try {
@@ -111,6 +121,18 @@ export async function cleanupUnreferencedToolOutputs(
   referencedPaths: ReadonlySet<string>,
   graceMs: number = DEFAULT_TOOL_OUTPUT_TTL_MS,
   now: number = Date.now(),
+): Promise<ToolOutputGcResult> {
+  return withFileMutation(
+    dir,
+    () => cleanupUnreferencedToolOutputsInPlace(dir, referencedPaths, graceMs, now),
+  ).catch(() => ({ scanned: 0, removed: 0, failed: 1, bytesRemoved: 0 }));
+}
+
+async function cleanupUnreferencedToolOutputsInPlace(
+  dir: string,
+  referencedPaths: ReadonlySet<string>,
+  graceMs: number,
+  now: number,
 ): Promise<ToolOutputGcResult> {
   let entries: string[];
   try {

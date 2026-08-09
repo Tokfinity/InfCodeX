@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import path, { join } from 'node:path';
 
 import {
   LearnedAreaStore,
@@ -9,17 +9,156 @@ import {
   createLearnedCapabilityScope,
   resolveProjectLearnedAreaRoot,
 } from '@kodax-ai/agent';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { prepareCodingLearnedSkillBinding } from './learned-skill-runtime.js';
 
 const roots: string[] = [];
+const learnedSpec = {
+  name: 'verify-release',
+  description: 'Use when validating this project before a release.',
+  purpose: 'Verify release state from reproducible evidence.',
+  triggers: ['A release candidate needs verification.'],
+  steps: ['Run the release test suite.'],
+  verification: ['Require a passing check artifact.'],
+  pitfalls: ['Do not treat self-report as verification.'],
+} as const;
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  await Promise.all(roots.splice(0).map((root) => rm(root, {
+    recursive: true,
+    force: true,
+    maxRetries: 3,
+    retryDelay: 50,
+  })));
 });
 
 describe('FEATURE_263 coding root learned Skill binding', () => {
+  it('releases a canary admitted in one root when a later root fails to initialize', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kodax-coding-learned-partial-'));
+    roots.push(root);
+    const configHome = join(root, '.kodax');
+    const projectRoot = join(root, 'project');
+    await mkdir(projectRoot, { recursive: true });
+    const tenantId = `local:${configHome}`;
+    const remoteProjectId = 'remote:github.com/kodax/partial';
+    const localProjectId = `local:${path.resolve(projectRoot).toLowerCase()}`;
+    const remoteStore = new LearnedAreaStore(resolveProjectLearnedAreaRoot(configHome, {
+      tenantId,
+      projectId: remoteProjectId,
+    }));
+    const localStore = new LearnedAreaStore(resolveProjectLearnedAreaRoot(configHome, {
+      tenantId,
+      projectId: localProjectId,
+    }));
+    await Promise.all([remoteStore.initialize(), localStore.initialize()]);
+    const record = await commitLearnedSkillRevision(remoteStore, {
+      scope: createLearnedCapabilityScope(configHome, { tenantId, projectId: remoteProjectId }),
+      spec: learnedSpec,
+      disposition: 'project_canary',
+      operation: 'create',
+      provenance: {
+        jobId: 'job-partial',
+        inputHash: 'd'.repeat(64),
+        decisionId: 'decision-partial',
+        actionId: 'action-partial',
+      },
+    });
+    const originalList = LearnedAreaStore.prototype.listCapabilities;
+    const list = vi.spyOn(LearnedAreaStore.prototype, 'listCapabilities')
+      .mockImplementation(async function (this: LearnedAreaStore) {
+        if (this.paths.root === localStore.paths.root) throw new Error('local root unavailable');
+        return originalList.call(this);
+      });
+    try {
+      await expect(prepareCodingLearnedSkillBinding({
+        provider: 'test',
+        context: { configHome, executionCwd: projectRoot },
+      }, {
+        configHome,
+        tenantId,
+        agentId: 'coding-agent',
+        projectId: remoteProjectId,
+        sessionId: 'session-partial',
+      }, 'session-partial')).resolves.toBeUndefined();
+    } finally {
+      list.mockRestore();
+    }
+    expect((await remoteStore.readCapability(record.capabilityId))?.canary)
+      .not.toHaveProperty('binding');
+  });
+
+  it.each([
+    'remote:github.com/kodax/repo',
+    `remote-hash:${'f'.repeat(64)}`,
+  ])('binds a local-root canary when the active identity is %s', async (remoteProjectId) => {
+    const root = await mkdtemp(join(tmpdir(), 'kodax-coding-learned-dual-root-'));
+    roots.push(root);
+    const configHome = join(root, '.kodax');
+    const projectRoot = join(root, 'project');
+    await mkdir(projectRoot, { recursive: true });
+    const tenantId = `local:${configHome}`;
+    const localProjectId = `local:${path.resolve(projectRoot).toLowerCase()}`;
+    const localStore = new LearnedAreaStore(resolveProjectLearnedAreaRoot(configHome, {
+      tenantId,
+      projectId: localProjectId,
+    }));
+    await localStore.initialize();
+    const record = await commitLearnedSkillRevision(localStore, {
+      scope: createLearnedCapabilityScope(configHome, { tenantId, projectId: localProjectId }),
+      spec: learnedSpec,
+      disposition: 'project_canary',
+      operation: 'create',
+      provenance: {
+        jobId: 'job-dual-root',
+        inputHash: 'c'.repeat(64),
+        decisionId: 'decision-dual-root',
+        actionId: 'action-dual-root',
+      },
+    });
+    const staleRemoteStore = new LearnedAreaStore(resolveProjectLearnedAreaRoot(configHome, {
+      tenantId,
+      projectId: remoteProjectId,
+    }));
+    await staleRemoteStore.initialize();
+    // A misplaced local-scope duplicate in the remote physical root must not
+    // steal discovery or lifecycle ownership from the paired local root.
+    await staleRemoteStore.writeCapability(record);
+    const identity = {
+      configHome,
+      tenantId,
+      agentId: 'coding-agent',
+      projectId: remoteProjectId,
+      sessionId: 'session-dual-root',
+    } as const;
+
+    const binding = await prepareCodingLearnedSkillBinding({
+      provider: 'test',
+      context: { configHome, executionCwd: projectRoot },
+    }, identity, identity.sessionId);
+
+    expect(binding?.context.skillRegistry?.get('verify-release')).toMatchObject({ source: 'learned' });
+    await expect(binding?.context.admitLearnedSkillInvocation?.({
+      sessionId: 'child-dual-root',
+      capabilityId: record.capabilityId,
+      revision: record.artifact.contentRevision,
+      fingerprint: record.artifact.fingerprint,
+    })).resolves.toMatchObject({ invocationId: expect.any(String) });
+    await binding?.context.completeLearnedSkillOutcomes?.({
+      sessionId: 'child-dual-root',
+      outcome: 'verified_success',
+      evidenceRefs: ['artifact:dual-root'],
+    });
+    await binding?.release();
+    await expect(localStore.readCapability(record.capabilityId)).resolves.toMatchObject({
+      canary: { verifiedSuccesses: 1 },
+    });
+    await expect(staleRemoteStore.readCapability(record.capabilityId)).resolves.toMatchObject({
+      lifecycle: 'testing',
+      canary: { verifiedSuccesses: 0 },
+    });
+  });
+
   it('fails closed without blocking the foreground when the Learned Area contains invalid JSON', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kodax-coding-learned-invalid-'));
     roots.push(root);

@@ -20,21 +20,36 @@
  *                        `dd of=test.bin` (file write — reaches LLM as
  *                        dangerous_pattern signal).
  *   4. fork_bomb       — `:(){ :|:& };:` — denial of service.
- *   5. user_kodax_write — write/edit/bash-write to credential-bearing paths
- *                        under `~/.kodax/` (tokens, secrets, config.json,
- *                        custom-providers.json, ...). Non-credential paths
- *                        (tool-results, sessions, ...) are allowed so the
- *                        agent can manage its normal outputs.
+ *   5. user_kodax_write — write/edit/bash-write to protected agent-home paths
+ *                        under `~/.kodax/`: the home root, Runtime control
+ *                        plane, credentials, security config, and generic
+ *                        sensitive files. Ordinary working data stays open.
  *
  * Layer note: bash-level `~/.kodax/` writes are detected via AST
  * path-extraction (`collectDeterministicBashWriteTargets`) in
  * `checkUserKodaxBashWrite`, covering both file-tool and bash paths.
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
 import { getAgentConfigHome, isPathInsideDirectory, resolveExecutionPath } from '@kodax-ai/agent';
 import type { RunnerToolCall } from '@kodax-ai/agent';
+import { minimatch } from 'minimatch';
+import { parseBashCommand } from '../../permissions/bash-ast.js';
 import { collectDeterministicBashWriteTargets } from '../../permissions/permission.js';
-import { isCredentialBearingKodaxPath } from './permission-analyzer.js';
+import {
+  analyzePowerShellMutation,
+  isPowerShellMutationCommand,
+} from '../../permissions/powershell-mutation.js';
+import {
+  isAgentHomeHardMutationTarget,
+  isAgentHomeHardRemovalTarget,
+  isProtectedAgentHomeMutationTarget,
+} from '../../permissions/agent-home-policy.js';
+import {
+  canonicalizeAutoModePath,
+  isAutoWritableKodaxPath,
+} from './permission-analyzer.js';
 
 export type TierZeroPatternId =
   | 'rm_rf_root'
@@ -193,27 +208,283 @@ function checkUserKodaxWrite(
   call: RunnerToolCall,
   executionCwd: string,
 ): AbsoluteDenyResult {
-  if (call.name !== 'write' && call.name !== 'edit') return MISS;
+  if (!['write', 'edit', 'multi_edit', 'insert_after_anchor'].includes(call.name)) return MISS;
   const targetPath = typeof call.input.path === 'string' ? call.input.path : '';
   if (!targetPath) return MISS;
-  let userKodax: string;
-  try {
-    userKodax = getAgentConfigHome();
-  } catch {
-    return MISS;
-  }
-  const resolved = resolveExecutionPath(targetPath, executionCwd);
-  if (!isPathInsideDirectory(resolved, userKodax)) return MISS;
-  // Non-credential ~/.kodax writes (tool-results, sessions, ...) are allowed;
-  // only credential-bearing paths (plus custom-providers.json) are Tier 0 denied.
-  if (isCredentialBearingKodaxPath(resolved, userKodax, true)) {
+  if (isProtectedAgentHomeMutationTarget(targetPath, executionCwd)) {
     return {
       denied: true,
       patternId: 'user_kodax_write',
-      reason: `The write targets KodaX credential path \`${targetPath}\` under ~/.kodax/ (tokens, secrets, or provider config); managed config APIs are available for non-credential paths.`,
+      reason: `The write targets protected KodaX state \`${targetPath}\` under ~/.kodax/ (home root, Runtime control plane, credentials, or security config).`,
     };
   }
   return MISS;
+}
+
+function recursiveRemovalTargets(command: string): readonly string[] {
+  const tree = parseBashCommand(command);
+  if (tree.unparseable) return [];
+  const targets: string[] = [];
+  for (const statement of tree.statements) {
+    for (const stage of statement.stages) {
+      const executable = (stage.argv[0] ?? '').replace(/\\/g, '/').split('/').at(-1)?.toLowerCase();
+      if (executable === 'rm') {
+        const args = stage.argv.slice(1);
+        const recursive = args.some((token) => (
+          token === '--recursive' || (/^-[^-]/.test(token) && /[rR]/.test(token.slice(1)))
+        ));
+        if (!recursive) continue;
+        let optionsEnded = false;
+        for (const token of args) {
+          if (token === '--') {
+            optionsEnded = true;
+            continue;
+          }
+          if (!optionsEnded && token.startsWith('-')) continue;
+          targets.push(...powerShellPathArrayMembers(token));
+        }
+        continue;
+      }
+      if (['remove-item', 'ri', 'rmdir', 'rd', 'del', 'erase'].includes(executable ?? '')) {
+        const args = stage.argv.slice(1);
+        const recursive = args.some((token) => (
+          /^\/s(?::.*)?$/i.test(token)
+          || /^-r(?:e(?:c(?:u(?:r(?:s(?:e)?)?)?)?)?)?$/i.test(token)
+        ));
+        if (!recursive) continue;
+        for (let index = 0; index < args.length; index += 1) {
+          const token = args[index]!;
+          if (/^-(?:literal)?path(?::.*)?$/i.test(token)) {
+            const separator = token.indexOf(':');
+            if (separator >= 0 && token.slice(separator + 1)) {
+              targets.push(...powerShellPathArrayMembers(token.slice(separator + 1)));
+            } else if (args[index + 1] !== undefined) {
+              targets.push(...powerShellPathArrayMembers(args[index + 1]!));
+              index += 1;
+            }
+            continue;
+          }
+          if (token.startsWith('-') || /^\/[a-z](?::.*)?$/i.test(token)) continue;
+          targets.push(...powerShellPathArrayMembers(token));
+        }
+        continue;
+      }
+      const analysis = analyzePowerShellMutation(stage.argv);
+      for (const operation of analysis.operations) {
+        if (operation.kind === 'delete' && operation.options.recursive === true) {
+          targets.push(operation.target);
+        }
+      }
+    }
+  }
+  return targets;
+}
+
+function powerShellPathArrayMembers(value: string): readonly string[] {
+  return value.split(',').map((member) => member.trim()).filter(Boolean);
+}
+
+function parentRemovalTargets(command: string): readonly string[] {
+  const tree = parseBashCommand(command);
+  if (tree.unparseable) return [];
+  const targets: string[] = [];
+  for (const statement of tree.statements) {
+    for (const stage of statement.stages) {
+      const executable = (stage.argv[0] ?? '').replace(/\\/g, '/').split('/').at(-1)?.toLowerCase();
+      if (executable !== 'rmdir') continue;
+      const args = stage.argv.slice(1);
+      if (!args.some((token) => token === '-p' || token === '--parents')) continue;
+      targets.push(...args.filter((token) => !token.startsWith('-')));
+    }
+  }
+  return targets;
+}
+
+function powerShellRemovalTargets(command: string): readonly string[] {
+  const tree = parseBashCommand(command);
+  if (tree.unparseable) return [];
+  const targets: string[] = [];
+  for (const statement of tree.statements) {
+    for (const stage of statement.stages) {
+      const executable = (stage.argv[0] ?? '').replace(/\\/g, '/').split('/').at(-1)?.toLowerCase();
+      if (!['rm', 'remove-item', 'ri', 'rmdir', 'rd', 'del', 'erase'].includes(executable ?? '')) continue;
+      const args = stage.argv.slice(1);
+      for (let index = 0; index < args.length; index += 1) {
+        const token = args[index]!;
+        if (/^-(?:literal)?path(?::.*)?$/i.test(token)) {
+          const separator = token.indexOf(':');
+          const value = separator >= 0 && token.slice(separator + 1)
+            ? token.slice(separator + 1)
+            : args[index + 1];
+          if (value !== undefined) targets.push(...powerShellPathArrayMembers(value));
+          if (separator < 0) index += 1;
+          continue;
+        }
+        if (!token.startsWith('-')) targets.push(...powerShellPathArrayMembers(token));
+      }
+    }
+  }
+  return targets;
+}
+
+function traversedMutationTargets(command: string): readonly string[] {
+  const tree = parseBashCommand(command);
+  if (tree.unparseable) return [];
+  const targets: string[] = [];
+  for (const statement of tree.statements) {
+    for (const stage of statement.stages) {
+      const executable = (stage.argv[0] ?? '').replace(/\\/g, '/').split('/').at(-1)?.toLowerCase() ?? '';
+      const args = stage.argv.slice(1);
+      const positionals = args.filter((token) => !token.startsWith('-') && !/^\/[a-z]$/i.test(token));
+      if (['mv', 'move'].includes(executable) && positionals.length > 1) {
+        targets.push(...positionals.slice(0, -1));
+        continue;
+      }
+      if (executable === 'ren' && positionals.length === 2) {
+        targets.push(positionals[0]!);
+        continue;
+      }
+      if (['chmod', 'chown'].includes(executable)
+        && args.some((token) => token === '--recursive' || /^-[^-]*R/.test(token))) {
+        targets.push(...positionals.slice(1));
+        continue;
+      }
+      if (!isPowerShellMutationCommand(executable)) continue;
+      const analysis = analyzePowerShellMutation(stage.argv);
+      for (const operation of analysis.operations) {
+        if (operation.kind === 'move' || operation.kind === 'rename') targets.push(operation.source);
+      }
+    }
+  }
+  return targets;
+}
+
+function recursiveRemovalCoversProtectedAgentHome(
+  targetPath: string,
+  executionCwd: string,
+  agentHome: string,
+): boolean {
+  const lexicalHome = path.resolve(agentHome);
+  const canonicalHome = canonicalizeAutoModePath(agentHome) ?? path.resolve(agentHome);
+  const resolvedTarget = resolveExecutionPath(targetPath, executionCwd);
+  if (!/[*?\[\]{}()!]/.test(resolvedTarget)) {
+    return (isPathInsideDirectory(resolvedTarget, canonicalHome)
+        && !isAutoWritableKodaxPath(resolvedTarget, canonicalHome))
+      || isPathInsideDirectory(lexicalHome, resolvedTarget)
+      || isPathInsideDirectory(canonicalHome, resolvedTarget)
+      || removalTreeContainsProtectedPath(resolvedTarget, canonicalHome);
+  }
+  const normalizedPattern = resolvedTarget.replace(/\\/g, '/');
+  const protectedCandidates = [
+    canonicalHome,
+    path.join(canonicalHome, 'runtime'),
+    path.join(canonicalHome, 'mcp-tokens'),
+    path.join(canonicalHome, 'mcp-clients'),
+    path.join(canonicalHome, 'integrations'),
+    path.join(canonicalHome, 'config.json'),
+    path.join(canonicalHome, 'custom-providers.json'),
+    path.join(canonicalHome, 'trusted-project-rules.json'),
+    path.join(canonicalHome, '.env'),
+    path.join(canonicalHome, 'credentials.json'),
+    lexicalHome,
+    path.join(lexicalHome, 'runtime'),
+    path.join(lexicalHome, 'mcp-tokens'),
+    path.join(lexicalHome, 'mcp-clients'),
+    path.join(lexicalHome, 'integrations'),
+    path.join(lexicalHome, 'config.json'),
+    path.join(lexicalHome, 'custom-providers.json'),
+    path.join(lexicalHome, 'trusted-project-rules.json'),
+    path.join(lexicalHome, '.env'),
+    path.join(lexicalHome, 'credentials.json'),
+  ];
+  if (protectedCandidates.some((candidate) => minimatch(
+    candidate.replace(/\\/g, '/'),
+    normalizedPattern,
+    { dot: true, nocase: process.platform === 'win32' },
+  ))) return true;
+  return existingRemovalSelectionContainsProtectedPath(
+    resolvedTarget,
+    canonicalHome,
+  );
+}
+
+function removalTreeContainsProtectedPath(
+  target: string,
+  canonicalHome: string,
+): boolean {
+  let stat: fs.Stats;
+  try {
+    stat = fs.lstatSync(target);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ENOENT';
+  }
+  const policyTarget = stat.isSymbolicLink()
+    ? path.resolve(target)
+    : canonicalizeAutoModePath(target) ?? path.resolve(target);
+  if (isPathInsideDirectory(policyTarget, canonicalHome)
+    && !isAutoWritableKodaxPath(policyTarget, canonicalHome)) return true;
+  // Recursive rm unlinks a directory symlink; it does not traverse the target.
+  if (stat.isSymbolicLink()) return false;
+  if (!stat.isDirectory()) return false;
+  const pending = [target];
+  let visited = 0;
+  while (pending.length > 0) {
+    const directory = pending.pop()!;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch {
+      return true;
+    }
+    for (const entry of entries) {
+      visited += 1;
+      if (visited > 20_000) return true;
+      const candidate = path.join(directory, entry.name);
+      const policyCandidate = entry.isSymbolicLink()
+        ? path.resolve(candidate)
+        : canonicalizeAutoModePath(candidate);
+      if (policyCandidate === undefined) return true;
+      if (isPathInsideDirectory(policyCandidate, canonicalHome)
+        && !isAutoWritableKodaxPath(policyCandidate, canonicalHome)) return true;
+      if (entry.isDirectory()) pending.push(candidate);
+    }
+  }
+  return false;
+}
+
+function existingRemovalSelectionContainsProtectedPath(
+  resolvedPattern: string,
+  canonicalHome: string,
+): boolean {
+  const parsed = path.parse(resolvedPattern);
+  const relativeSegments = resolvedPattern.slice(parsed.root.length).split(/[\\/]+/);
+  const firstGlob = relativeSegments.findIndex((segment) => /[*?\[\]{}()!]/.test(segment));
+  if (firstGlob < 0) return false;
+  const staticRoot = path.join(parsed.root, ...relativeSegments.slice(0, firstGlob));
+  if (!fs.existsSync(staticRoot)) return false;
+  const normalizedPattern = resolvedPattern.replace(/\\/g, '/');
+  const pending = [staticRoot];
+  let visited = 0;
+  while (pending.length > 0) {
+    const directory = pending.pop()!;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch {
+      return true;
+    }
+    for (const entry of entries) {
+      visited += 1;
+      if (visited > 20_000) return true;
+      const candidate = path.join(directory, entry.name);
+      if (minimatch(candidate.replace(/\\/g, '/'), normalizedPattern, {
+        dot: true,
+        nocase: process.platform === 'win32',
+      }) && removalTreeContainsProtectedPath(candidate, canonicalHome)) return true;
+      if (entry.isDirectory()) pending.push(candidate);
+    }
+  }
+  return false;
 }
 
 function checkUserKodaxBashWrite(
@@ -227,15 +498,276 @@ function checkUserKodaxBashWrite(
   } catch {
     return MISS;
   }
-  const targets = collectDeterministicBashWriteTargets(command);
-  for (const target of targets) {
-    const resolved = resolveExecutionPath(target, executionCwd);
-    if (isPathInsideDirectory(resolved, userKodax) && isCredentialBearingKodaxPath(resolved, userKodax, true)) {
+  const recursiveTargets = recursiveRemovalTargets(command);
+  const recursiveResolvedTargets = new Set(recursiveTargets.map((target) => (
+    resolveExecutionPath(target, executionCwd)
+  )));
+  const removalTargets = powerShellRemovalTargets(command);
+  const removalResolvedTargets = new Set(removalTargets.map((target) => (
+    resolveExecutionPath(target, executionCwd)
+  )));
+  for (const target of recursiveTargets) {
+    if (recursiveRemovalCoversProtectedAgentHome(target, executionCwd, userKodax)) {
       return {
         denied: true,
         patternId: 'user_kodax_write',
-        reason: `The bash command writes to KodaX credential path \`${target}\` under ~/.kodax/ (tokens, secrets, or provider config); managed config APIs are available for non-credential paths.`,
+        reason: `The bash command recursively removes protected KodaX state through \`${target}\`.`,
       };
+    }
+  }
+  const lexicalHome = path.resolve(userKodax);
+  const canonicalHome = canonicalizeAutoModePath(userKodax) ?? lexicalHome;
+  for (const target of parentRemovalTargets(command)) {
+    const resolved = resolveExecutionPath(target, executionCwd);
+    const canonical = canonicalizeAutoModePath(target, executionCwd) ?? resolved;
+    if (isPathInsideDirectory(resolved, lexicalHome)
+      || isPathInsideDirectory(canonical, canonicalHome)) {
+      return {
+        denied: true,
+        patternId: 'user_kodax_write',
+        reason: `The bash command can remove the protected KodaX home through parent cleanup from \`${target}\`.`,
+      };
+    }
+  }
+  for (const target of traversedMutationTargets(command)) {
+    if (recursiveRemovalCoversProtectedAgentHome(target, executionCwd, userKodax)) {
+      return {
+        denied: true,
+        patternId: 'user_kodax_write',
+        reason: `The bash command traverses protected KodaX state through \`${target}\`.`,
+      };
+    }
+  }
+  const targets = [
+    ...collectDeterministicBashWriteTargets(command),
+    ...removalTargets,
+  ];
+  for (const target of targets) {
+    const resolved = resolveExecutionPath(target, executionCwd);
+    if (recursiveResolvedTargets.has(resolved)) continue;
+    if (/[*?\[\]{}()!]/.test(resolved)
+      && recursiveRemovalCoversProtectedAgentHome(target, executionCwd, userKodax)) {
+      return {
+        denied: true,
+        patternId: 'user_kodax_write',
+        reason: `The bash command selector includes protected KodaX state through \`${target}\`.`,
+      };
+    }
+    if (removalResolvedTargets.has(resolved)) {
+      let finalSymlink = false;
+      try {
+        finalSymlink = fs.lstatSync(resolved).isSymbolicLink();
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          return {
+            denied: true,
+            patternId: 'user_kodax_write',
+            reason: `The bash command removal target could not be checked safely: \`${target}\`.`,
+          };
+        }
+      }
+      if (finalSymlink && (!isPathInsideDirectory(resolved, userKodax)
+        || isAutoWritableKodaxPath(resolved, userKodax))) continue;
+    }
+    if (!isPathInsideDirectory(resolved, userKodax)) continue;
+    const canonicalTarget = canonicalizeAutoModePath(target, executionCwd);
+    if (canonicalTarget === undefined
+      || (isPathInsideDirectory(canonicalTarget, canonicalHome)
+        && !isAutoWritableKodaxPath(canonicalTarget, canonicalHome))) {
+      return {
+        denied: true,
+        patternId: 'user_kodax_write',
+        reason: `The bash command writes to protected KodaX state \`${target}\` under ~/.kodax/ (home root, Runtime control plane, credentials, or security config).`,
+      };
+    }
+  }
+  return MISS;
+}
+
+function selectorMatchesHardAgentHomePath(
+  targetPath: string,
+  executionCwd: string,
+  agentHome: string,
+  removal = false,
+): boolean {
+  const resolved = resolveExecutionPath(targetPath, executionCwd);
+  if (!/[*?\[\]{}()!]/.test(resolved)) {
+    return removal
+      ? isAgentHomeHardRemovalTarget(targetPath, executionCwd)
+      : isAgentHomeHardMutationTarget(targetPath, executionCwd);
+  }
+  const canonicalHome = canonicalizeAutoModePath(agentHome) ?? path.resolve(agentHome);
+  const pattern = resolved.replace(/\\/g, '/');
+  const candidates = [agentHome, path.join(agentHome, 'runtime'), canonicalHome,
+    path.join(canonicalHome, 'runtime')];
+  return candidates.some((candidate) => minimatch(candidate.replace(/\\/g, '/'), pattern, {
+    dot: true,
+    nocase: process.platform === 'win32',
+  })) || existingSelectionMatchesHardPath(resolved, executionCwd, removal);
+}
+
+function existingSelectionMatchesHardPath(
+  patternPath: string,
+  executionCwd: string,
+  removal: boolean,
+  recursiveContainment = false,
+): boolean {
+  const parsed = path.parse(patternPath);
+  const segments = patternPath.slice(parsed.root.length).split(/[\\/]+/);
+  const firstGlob = segments.findIndex((segment) => /[*?\[\]{}()!]/.test(segment));
+  if (firstGlob < 0) return false;
+  const staticRoot = path.join(parsed.root, ...segments.slice(0, firstGlob));
+  if (!fs.existsSync(staticRoot)) return false;
+  const pattern = patternPath.replace(/\\/g, '/');
+  const selectorDepth = segments.length - firstGlob;
+  const hasGlobStar = segments.slice(firstGlob).includes('**');
+  const pending = [{ directory: staticRoot, depth: 0 }];
+  const followedDirectories = new Set<string>();
+  let visited = 0;
+  while (pending.length > 0) {
+    const { directory, depth } = pending.pop()!;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch {
+      return true;
+    }
+    for (const entry of entries) {
+      if (++visited > 20_000) return true;
+      const candidate = path.join(directory, entry.name);
+      const normalizedCandidate = candidate.replace(/\\/g, '/');
+      const canMatch = minimatch(normalizedCandidate, pattern, {
+        dot: true,
+        nocase: process.platform === 'win32',
+        partial: true,
+      });
+      if (!canMatch) continue;
+      if (minimatch(normalizedCandidate, pattern, {
+        dot: true,
+        nocase: process.platform === 'win32',
+      }) && (recursiveContainment
+        ? traversedTargetHitsHardBoundary(candidate, executionCwd)
+        : removal
+          ? isAgentHomeHardRemovalTarget(candidate, executionCwd)
+          : isAgentHomeHardMutationTarget(candidate, executionCwd))) return true;
+      const childDepth = depth + 1;
+      if (!hasGlobStar && childDepth >= selectorDepth) continue;
+      if (entry.isDirectory()) {
+        pending.push({ directory: candidate, depth: childDepth });
+        continue;
+      }
+      if (!entry.isSymbolicLink()) continue;
+      let canonicalDirectory: string;
+      try {
+        if (!fs.statSync(candidate).isDirectory()) continue;
+        canonicalDirectory = fs.realpathSync.native(candidate);
+      } catch {
+        return true;
+      }
+      // A selector that traverses a symlink has different semantics from
+      // unlinking the symlink itself: descendants are effects on the target.
+      if (isAgentHomeHardMutationTarget(candidate, executionCwd)) return true;
+      if (!followedDirectories.has(canonicalDirectory)) {
+        followedDirectories.add(canonicalDirectory);
+        pending.push({ directory: candidate, depth: childDepth });
+      }
+    }
+  }
+  return false;
+}
+
+function traversedTargetHitsHardBoundary(
+  targetPath: string,
+  executionCwd: string,
+): boolean {
+  const resolvedTarget = resolveExecutionPath(targetPath, executionCwd);
+  try {
+    if (fs.lstatSync(resolvedTarget).isSymbolicLink()) {
+      return isAgentHomeHardRemovalTarget(targetPath, executionCwd);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return true;
+  }
+  let agentHome: string;
+  try {
+    agentHome = getAgentConfigHome();
+  } catch {
+    return false;
+  }
+  const lexicalHome = path.resolve(agentHome);
+  const canonicalHome = canonicalizeAutoModePath(agentHome) ?? lexicalHome;
+  const canonicalTarget = canonicalizeAutoModePath(targetPath, executionCwd) ?? resolvedTarget;
+  return isAgentHomeHardMutationTarget(targetPath, executionCwd)
+    || isPathInsideDirectory(lexicalHome, resolvedTarget)
+    || isPathInsideDirectory(canonicalHome, canonicalTarget);
+}
+
+function removalSelectionHitsHardBoundary(
+  targetPath: string,
+  executionCwd: string,
+  agentHome: string,
+): boolean {
+  const resolved = resolveExecutionPath(targetPath, executionCwd);
+  if (/[*?\[\]{}()!]/.test(resolved)) {
+    if (selectorMatchesHardAgentHomePath(targetPath, executionCwd, agentHome, true)) return true;
+    return existingSelectionMatchesHardPath(resolved, executionCwd, true, true);
+  }
+  return traversedTargetHitsHardBoundary(targetPath, executionCwd);
+}
+
+/** Unauthorizable Agent Home boundary, enforced before either Auto engine. */
+export function checkAgentHomeHardDeny(
+  call: RunnerToolCall,
+  projectRoot: string,
+  executionCwd = projectRoot,
+): AbsoluteDenyResult {
+  if (['write', 'edit', 'multi_edit', 'insert_after_anchor'].includes(call.name)) {
+    const target = typeof call.input.path === 'string' ? call.input.path : '';
+    return target && isAgentHomeHardMutationTarget(target, executionCwd)
+      ? { denied: true, patternId: 'user_kodax_write', reason: `The operation targets the Agent Home root or Runtime control plane: ${target}` }
+      : MISS;
+  }
+  if (call.name !== 'bash') return MISS;
+  const command = typeof call.input.command === 'string' ? call.input.command : '';
+  let agentHome: string;
+  try {
+    agentHome = getAgentConfigHome();
+  } catch {
+    return MISS;
+  }
+  const recursiveTargets = recursiveRemovalTargets(command);
+  for (const target of recursiveTargets) {
+    if (removalSelectionHitsHardBoundary(target, executionCwd, agentHome)) {
+      return { denied: true, patternId: 'user_kodax_write', reason: `The command can recursively remove the Agent Home root or Runtime control plane: ${target}` };
+    }
+  }
+  for (const target of parentRemovalTargets(command)) {
+    const resolved = resolveExecutionPath(target, executionCwd);
+    if (isPathInsideDirectory(resolved, path.resolve(agentHome))
+      || removalSelectionHitsHardBoundary(target, executionCwd, agentHome)) {
+      return { denied: true, patternId: 'user_kodax_write', reason: `The command can remove the Agent Home root through parent cleanup: ${target}` };
+    }
+  }
+  const traversedTargets = traversedMutationTargets(command);
+  for (const target of traversedTargets) {
+    const resolved = resolveExecutionPath(target, executionCwd);
+    if (/[*?\[\]{}()!]/.test(resolved)
+      ? existingSelectionMatchesHardPath(resolved, executionCwd, true, true)
+      : traversedTargetHitsHardBoundary(target, executionCwd)) {
+      return { denied: true, patternId: 'user_kodax_write', reason: `The command traverses the Agent Home root or Runtime control plane: ${target}` };
+    }
+  }
+  const recursive = new Set(recursiveTargets.map((target) => resolveExecutionPath(target, executionCwd)));
+  const traversed = new Set(traversedTargets.map((target) => resolveExecutionPath(target, executionCwd)));
+  const removalTargets = powerShellRemovalTargets(command);
+  const removalPaths = new Set(removalTargets.map((target) => resolveExecutionPath(target, executionCwd)));
+  const targets = [...collectDeterministicBashWriteTargets(command), ...removalTargets];
+  for (const target of targets) {
+    if (recursive.has(resolveExecutionPath(target, executionCwd))) continue;
+    if (traversed.has(resolveExecutionPath(target, executionCwd))) continue;
+    const removal = removalPaths.has(resolveExecutionPath(target, executionCwd));
+    if (selectorMatchesHardAgentHomePath(target, executionCwd, agentHome, removal)) {
+      return { denied: true, patternId: 'user_kodax_write', reason: `The command writes or deletes the Agent Home root or Runtime control plane: ${target}` };
     }
   }
   return MISS;
@@ -271,12 +803,12 @@ export function checkAbsoluteDeny(
   const command = typeof call.input.command === 'string' ? call.input.command : '';
   if (!command) return MISS;
 
+  const rmRoot = checkRmRfRoot(command);
+  if (rmRoot.denied) return rmRoot;
+
   // Bash path-aware: credential ~/.kodax/ writes (echo >, tee, etc.)
   const kodaxBashWrite = checkUserKodaxBashWrite(command, executionCwd);
   if (kodaxBashWrite.denied) return kodaxBashWrite;
-
-  const rmRoot = checkRmRfRoot(command);
-  if (rmRoot.denied) return rmRoot;
 
   const mkfs = checkMkfsOrFormat(command);
   if (mkfs.denied) return mkfs;

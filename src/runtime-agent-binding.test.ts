@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -11,7 +12,7 @@ import {
   resolveProjectLearnedAreaRoot,
   type ToolGuardrail,
 } from '@kodax-ai/agent';
-import { registerTool } from '@kodax-ai/coding';
+import { canonicalMemoryProjectId, registerTool } from '@kodax-ai/coding';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -293,6 +294,166 @@ describe('FEATURE_267 Runtime local Agent binding', () => {
 });
 
 describe('FEATURE_263 Runtime learned Skill binding', () => {
+  it('releases a canary admitted in one physical root when the fallback root fails', async () => {
+    execFileSync('git', ['init'], { cwd: workspace, windowsHide: true, stdio: 'ignore' });
+    const remoteUrl = 'https://github.com/kodax/partial-root.git';
+    execFileSync('git', ['remote', 'add', 'origin', remoteUrl], {
+      cwd: workspace,
+      windowsHide: true,
+      stdio: 'ignore',
+    });
+    const configHome = path.join(home, '.kodax');
+    const tenantId = `local:${configHome}`;
+    const remoteProjectId = canonicalMemoryProjectId(remoteUrl);
+    const localProjectId = `local:${path.resolve(workspace).toLowerCase()}`;
+    const remoteStore = new LearnedAreaStore(resolveProjectLearnedAreaRoot(configHome, {
+      tenantId,
+      projectId: remoteProjectId,
+    }));
+    const localStore = new LearnedAreaStore(resolveProjectLearnedAreaRoot(configHome, {
+      tenantId,
+      projectId: localProjectId,
+    }));
+    await Promise.all([remoteStore.initialize(), localStore.initialize()]);
+    const record = await commitLearnedSkillRevision(remoteStore, {
+      scope: createLearnedCapabilityScope(configHome, { tenantId, projectId: remoteProjectId }),
+      spec: {
+        name: 'verify-release',
+        description: 'Use when validating this project before a release.',
+        purpose: 'Verify release state from reproducible evidence.',
+        triggers: ['A release candidate needs verification.'],
+        steps: ['Run the release test suite.'],
+        verification: ['Require a passing check artifact.'],
+        pitfalls: ['Do not treat self-report as verification.'],
+      },
+      disposition: 'project_canary',
+      operation: 'create',
+      provenance: {
+        jobId: 'job-runtime-partial',
+        inputHash: 'e'.repeat(64),
+        decisionId: 'decision-runtime-partial',
+        actionId: 'action-runtime-partial',
+      },
+    });
+    const originalList = LearnedAreaStore.prototype.listCapabilities;
+    const list = vi.spyOn(LearnedAreaStore.prototype, 'listCapabilities')
+      .mockImplementation(async function (this: LearnedAreaStore) {
+        if (this.paths.root === localStore.paths.root) throw new Error('fallback root unavailable');
+        return originalList.call(this);
+      });
+    const service = createRuntimeAgentBindingService(host());
+    const owner = await service.openOwnerSession();
+    try {
+      const binding = await service.bindDefault({
+        ownerSessionId: owner.ownerSessionId,
+        workspace: { mode: 'fixed', root: workspace },
+        toolPolicy: policy(),
+      });
+      expect(binding.effectiveSkills).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'verify-release', source: 'learned' }),
+      ]));
+    } finally {
+      list.mockRestore();
+      await service.closeOwnerSession(owner.ownerSessionId);
+    }
+    expect((await remoteStore.readCapability(record.capabilityId))?.canary)
+      .not.toHaveProperty('binding');
+  });
+
+  it('binds and completes a local-root canary after a git remote becomes available', async () => {
+    execFileSync('git', ['init'], { cwd: workspace, windowsHide: true, stdio: 'ignore' });
+    execFileSync(
+      'git',
+      ['remote', 'add', 'origin', 'https://github.com/kodax/dual-root.git'],
+      { cwd: workspace, windowsHide: true, stdio: 'ignore' },
+    );
+    const configHome = path.join(home, '.kodax');
+    const tenantId = `local:${configHome}`;
+    const localProjectId = `local:${path.resolve(workspace).toLowerCase()}`;
+    const localStore = new LearnedAreaStore(resolveProjectLearnedAreaRoot(configHome, {
+      tenantId,
+      projectId: localProjectId,
+    }));
+    await localStore.initialize();
+    const record = await commitLearnedSkillRevision(localStore, {
+      scope: createLearnedCapabilityScope(configHome, { tenantId, projectId: localProjectId }),
+      spec: {
+        name: 'verify-release',
+        description: 'Use when validating this project before a release.',
+        purpose: 'Verify release state from reproducible evidence.',
+        triggers: ['A release candidate needs verification.'],
+        steps: ['Run the release test suite.'],
+        verification: ['Require a passing check artifact.'],
+        pitfalls: ['Do not treat self-report as verification.'],
+      },
+      disposition: 'project_canary',
+      operation: 'create',
+      provenance: {
+        jobId: 'job-runtime-dual-root',
+        inputHash: 'f'.repeat(64),
+        decisionId: 'decision-runtime-dual-root',
+        actionId: 'action-runtime-dual-root',
+      },
+    });
+    const remoteStore = new LearnedAreaStore(resolveProjectLearnedAreaRoot(configHome, {
+      tenantId,
+      projectId: canonicalMemoryProjectId('https://github.com/kodax/dual-root.git'),
+    }));
+    await remoteStore.initialize();
+    await remoteStore.writeCapability(record);
+    let finishRun!: (result: RuntimeRunResult) => void;
+    const runResult = new Promise<RuntimeRunResult>((resolve) => { finishRun = resolve; });
+    const service = createRuntimeAgentBindingService({
+      ...host(),
+      runs: {
+        async start(input) {
+          starts.push(input);
+          return { runId: 'run-dual-root', sessionId: input.sessionId, result: runResult };
+        },
+      },
+    });
+    const owner = await service.openOwnerSession();
+    const binding = await service.bindDefault({
+      ownerSessionId: owner.ownerSessionId,
+      workspace: { mode: 'fixed', root: workspace },
+      toolPolicy: policy(),
+    });
+    expect(binding.effectiveSkills).toContainEqual(expect.objectContaining({
+      name: 'verify-release',
+      source: 'learned',
+    }));
+
+    const run = await service.startDefault({
+      ownerSessionId: owner.ownerSessionId,
+      bindingId: binding.bindingId,
+      expectedExecutionPolicyRevision: binding.executionPolicyRevision,
+      sessionId: 'session-dual-root',
+      input: { type: 'text', text: 'Verify the release.' },
+    });
+    const context = starts[0]?.options?.context;
+    await expect(context?.admitLearnedSkillInvocation?.({
+      sessionId: 'session-dual-root',
+      capabilityId: record.capabilityId,
+      revision: record.artifact.contentRevision,
+      fingerprint: record.artifact.fingerprint,
+    })).resolves.toMatchObject({ invocationId: expect.any(String) });
+    await context?.completeLearnedSkillOutcomes?.({
+      sessionId: 'session-dual-root',
+      outcome: 'verified_success',
+      evidenceRefs: ['artifact:runtime-dual-root'],
+    });
+    await expect(localStore.readCapability(record.capabilityId)).resolves.toMatchObject({
+      canary: { verifiedSuccesses: 1 },
+    });
+    await expect(remoteStore.readCapability(record.capabilityId)).resolves.toMatchObject({
+      lifecycle: 'testing',
+      canary: { verifiedSuccesses: 0 },
+    });
+    finishRun({ runId: run.runId, sessionId: run.sessionId, phase: 'completed' });
+    await run.result;
+    await service.closeOwnerSession(owner.ownerSessionId);
+  });
+
   it('gives each root run a distinct canary reservation and excludes a concurrent root', async () => {
     const configHome = path.join(home, '.kodax');
     const tenantId = `local:${configHome}`;

@@ -518,6 +518,16 @@ export interface KodaXEvents {
     result: { id: string; name: string; content: string },
     meta?: KodaXToolEventMeta,
   ) => void;
+  /** Internal execution lease boundary; fires immediately around tool.execute. */
+  onToolExecutionStart?: (
+    tool: { id: string; name: string },
+    meta?: KodaXToolEventMeta,
+  ) => void;
+  /** Pairs with onToolExecutionStart in a finally block. */
+  onToolExecutionEnd?: (
+    tool: { id: string; name: string },
+    meta?: KodaXToolEventMeta,
+  ) => void;
   /** FEATURE_067 v2: Real-time tool execution progress update. Updates the tool's display in the REPL transcript. */
   onToolProgress?: (
     update: { id: string; message: string },
@@ -1642,6 +1652,14 @@ export interface KodaXPreparedShellSandboxInvocation {
 
 /** Runtime-owned OS sandbox broker for selected concrete shell calls. */
 export interface KodaXShellSandbox {
+  /** Selected calls must not fall back to ordinary host execution. */
+  readonly failClosed?: boolean;
+  /**
+   * Host-trusted proof that the prepared root cannot settle while one of its
+   * descendants remains alive. Omitted adapters remain source-compatible but
+   * cannot authorize opaque process-launching shell calls.
+   */
+  readonly processTreeContainment?: 'root-exit-drains';
   prepare(
     input: KodaXShellSandboxPrepareInput,
   ): Promise<KodaXPreparedShellSandboxInvocation | undefined>;

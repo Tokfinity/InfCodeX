@@ -5,7 +5,11 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  admitAndRecordLearnedSkillInvocation,
+  admitLearnedSkillBinding,
   appendMemoryOutcomeDigest,
+  commitLearnedSkillRevision,
+  createLearnedCapabilityScope,
   createMemoryControlPlane,
   createSessionLineage,
   LearnedAreaStore,
@@ -1036,6 +1040,169 @@ describe('memory runtime hooks', () => {
       configHome: home,
       tenantId: identity.tenantId,
     })).resolves.toEqual([]);
+  });
+
+  it('reviews and quarantines an exact invocation from the local root after remote identity recovers', async () => {
+    const cwd = await createTempDir('kodax-memory-runtime-cross-root-');
+    const home = await createTempDir('kodax-memory-runtime-cross-root-home-');
+    cleanupDirs.push(cwd, home);
+    const localProjectId = `local:${path.resolve(cwd).toLowerCase()}`;
+    const identity: MemoryContextIdentity = {
+      configHome: home,
+      tenantId: 'tenant-cross-root',
+      agentId: 'agent-cross-root',
+      projectId: 'remote:example.com/team/project',
+      sessionId: 'session-cross-root',
+    };
+    const localStore = new LearnedAreaStore(resolveProjectLearnedAreaRoot(home, {
+      tenantId: identity.tenantId,
+      projectId: localProjectId,
+    }));
+    await localStore.initialize();
+    const learned = await commitLearnedSkillRevision(localStore, {
+      scope: createLearnedCapabilityScope(home, {
+        tenantId: identity.tenantId,
+        projectId: localProjectId,
+      }),
+      spec: {
+        name: 'verify-local-release',
+        description: 'Use when verifying this project before release.',
+        purpose: 'Verify the release with reproducible checks.',
+        triggers: ['A release candidate needs verification.'],
+        steps: ['Run the release test suite.'],
+        verification: ['Require a passing test artifact.'],
+        pitfalls: ['Do not trust incomplete output.'],
+      },
+      disposition: 'project_canary',
+      operation: 'create',
+      provenance: {
+        jobId: 'job-cross-root-create',
+        inputHash: 'a'.repeat(64),
+        decisionId: 'decision-cross-root-create',
+        actionId: 'action-cross-root-create',
+      },
+    });
+    const remoteStore = new LearnedAreaStore(resolveProjectLearnedAreaRoot(home, {
+      tenantId: identity.tenantId,
+      projectId: identity.projectId,
+    }));
+    await remoteStore.initialize();
+    await remoteStore.writeCapability(learned);
+    const bindingId = 'episode-cross-root';
+    await admitLearnedSkillBinding(localStore, learned.capabilityId, {
+      bindingId,
+      ownerSessionRef: identity.sessionId,
+    });
+    await admitAndRecordLearnedSkillInvocation(localStore, {
+      sessionId: identity.sessionId,
+      ownerSessionRef: identity.sessionId,
+      bindingId,
+      capabilityId: learned.capabilityId,
+      expectedRevision: learned.artifact.contentRevision,
+      expectedFingerprint: learned.artifact.fingerprint,
+      invocationId: 'invocation-cross-root',
+    });
+    const digest: KodaXMemoryOutcomeDigest = {
+      id: 'digest-cross-root',
+      reviewKey: 'review-cross-root',
+      episodeId: bindingId,
+      sessionId: identity.sessionId,
+      branchId: identity.sessionId,
+      sequence: 1,
+      objective: 'Verify a release candidate',
+      approach: 'Use the learned release procedure.',
+      outcome: 'failed',
+      summary: 'The exact learned procedure contradicted verified evidence.',
+      evidenceRefs: ['check:release'],
+      evidence: [{
+        ref: 'check:release',
+        grade: 'verified',
+        source: 'tool',
+        verdict: 'failed',
+        observedAt: '2026-08-09T00:00:00.000Z',
+      }],
+      visibility: 'prompt_safe',
+      createdAt: '2026-08-09T00:00:00.000Z',
+    };
+    const pending = await persistPendingEpisodeReview({
+      ...identity,
+      projectId: localProjectId,
+    }, digest);
+    if (pending.entry.version !== 2) throw new Error('expected v2 review job');
+    let sessionData: KodaXSessionData = {
+      messages: [{ role: 'user', content: 'Verify release' }],
+      title: 'cross-root review',
+      gitRoot: cwd,
+      lineage: appendMemoryOutcomeDigest(
+        createSessionLineage([{ role: 'user', content: 'Verify release' }]),
+        digest,
+        pending.entry.jobId,
+      ),
+    };
+    const options: KodaXOptions = {
+      provider: 'anthropic',
+      context: { executionCwd: cwd, configHome: home },
+      session: {
+        id: identity.sessionId,
+        persistedByHost: true,
+        storage: {
+          load: async (id) => id === identity.sessionId ? sessionData : null,
+          save: async (id, data) => {
+            if (id === identity.sessionId) sessionData = data;
+          },
+          mutateLineage: async (id, mutation) => {
+            if (id !== identity.sessionId) return false;
+            const lineage = sessionData.lineage ?? createSessionLineage(sessionData.messages);
+            sessionData = { ...sessionData, lineage: mutation(lineage) };
+            return true;
+          },
+        },
+      },
+      learningReviewer: async (input) => {
+        expect(input.evidence.exactInvokedSkill).toMatchObject({
+          capabilityId: learned.capabilityId,
+          fingerprint: learned.artifact.fingerprint,
+          invocationId: 'invocation-cross-root',
+        });
+        expect(input.evidence.qualification).toMatchObject({
+          exactSkillInvoked: true,
+          verifiedOutcome: true,
+        });
+        expect(input.evidence.verifierFacts).toContainEqual({
+          ref: 'check:release',
+          verdict: 'failed',
+        });
+        return {
+          memoryPlan: {
+            trigger: input.memory.trigger,
+            createdAt: '2026-08-09T00:01:00.000Z',
+            sourceRefs: input.memory.sourceRefs,
+            candidateRefs: input.memory.candidateRefs,
+            actions: [],
+            warnings: [],
+          },
+          capabilityDecision: {
+            disposition: 'discard',
+            reasonCodes: ['rule_level_contradiction'],
+          },
+        };
+      },
+    };
+    const controller = createMemoryControlPlane({
+      cwd,
+      identity,
+      projectDocs: [],
+      discoverSkills: false,
+    });
+
+    await expect(drainCodingMemoryReviewInbox(options, identity, controller, ''))
+      .resolves.toMatchObject({ reviewed: 1, failed: 0 });
+    await expect(localStore.readCapability(learned.capabilityId)).resolves.toMatchObject({
+      lifecycle: 'quarantined',
+    });
+    await expect(remoteStore.readCapability(learned.capabilityId)).resolves.toMatchObject({
+      lifecycle: 'testing',
+    });
   });
 
   it('does not report Memory updated for a proposal that remains pending approval', async () => {

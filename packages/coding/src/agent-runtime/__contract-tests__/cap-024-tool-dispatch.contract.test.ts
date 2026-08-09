@@ -203,10 +203,14 @@ describe('CAP-024: executeToolCall — permission gate (CAP-010) override', () =
       itemId: 'agent:child-1',
     };
     const onToolUseStart = vi.fn();
+    const onToolExecutionStart = vi.fn();
+    const onToolExecutionEnd = vi.fn();
     const askUser = vi.fn(async () => 'yes');
     const events: KodaXEvents = {
       workflowCorrelation,
       onToolUseStart,
+      onToolExecutionStart,
+      onToolExecutionEnd,
       askUser,
     };
 
@@ -249,16 +253,22 @@ describe('CAP-024: executeToolCall — permission gate (CAP-010) override', () =
         workflowCorrelation,
       },
     );
+    expect(onToolExecutionStart).toHaveBeenCalledOnce();
+    expect(onToolExecutionEnd).toHaveBeenCalledOnce();
   });
 
   it('CAP-TOOL-DISPATCH-PERMISSION-1: `beforeToolExecute` returning a string short-circuits dispatch and uses the returned string as the result', async () => {
     let registryCalled = false;
+    const onToolExecutionStart = vi.fn();
+    const onToolExecutionEnd = vi.fn();
     const events: KodaXEvents = {
       beforeToolExecute: async () => '[Blocked] denied by user',
       // Synthesised registry-fail signal — if dispatch leaks past the
       // gate to the real registry, the test would crash on the
       // unknown tool name; the assertion proves we returned early.
       onToolUseStart: () => { registryCalled = true; },
+      onToolExecutionStart,
+      onToolExecutionEnd,
     };
 
     const result = await executeToolCall(
@@ -273,6 +283,8 @@ describe('CAP-024: executeToolCall — permission gate (CAP-010) override', () =
     // The start event WAS emitted (before permission gate), but the
     // override prevented the dispatch from reaching the registry.
     expect(registryCalled).toBe(true);
+    expect(onToolExecutionStart).not.toHaveBeenCalled();
+    expect(onToolExecutionEnd).not.toHaveBeenCalled();
   });
 });
 

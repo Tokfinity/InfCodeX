@@ -5,6 +5,7 @@ import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 
+import { setAgentConfigHome } from '@kodax-ai/agent';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -45,6 +46,7 @@ describe('cleanupExpiredToolOutputs', () => {
   });
 
   afterEach(async () => {
+    setAgentConfigHome(undefined);
     await fs.rm(dir, { recursive: true, force: true });
   });
 
@@ -127,6 +129,34 @@ describe('cleanupExpiredToolOutputs', () => {
 
     expect(result.removed).toBe(1);
     expect(await fs.readdir(dir)).toEqual(['referenced.txt']);
+  });
+
+  it('does not sweep through a tool-results link into Runtime', async () => {
+    const agentHome = path.join(dir, 'agent-home');
+    const runtimeDirectory = path.join(agentHome, 'runtime');
+    const outputLink = path.join(agentHome, 'tool-results');
+    const runtimeFile = path.join(runtimeDirectory, 'state.json');
+    await fs.mkdir(runtimeDirectory, { recursive: true });
+    await fs.writeFile(runtimeFile, 'control-plane', 'utf8');
+    await fs.utimes(runtimeFile, new Date(0), new Date(0));
+    await fs.symlink(
+      runtimeDirectory,
+      outputLink,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    setAgentConfigHome(agentHome);
+
+    const expired = await cleanupExpiredToolOutputs(outputLink, 0, NOW);
+    const unreferenced = await cleanupUnreferencedToolOutputs(
+      outputLink,
+      new Set(),
+      0,
+      NOW,
+    );
+
+    expect(expired.failed).toBe(1);
+    expect(unreferenced.failed).toBe(1);
+    await expect(fs.readFile(runtimeFile, 'utf8')).resolves.toBe('control-plane');
   });
 });
 

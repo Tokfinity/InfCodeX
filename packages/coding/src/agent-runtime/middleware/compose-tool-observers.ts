@@ -89,5 +89,11 @@ export function composeToolObservers(
         obs.onToolResult?.(call, result);
       }
     },
+    onToolExecutionStart: (call: RunnerToolCall) => {
+      for (const obs of observers) obs.onToolExecutionStart?.(call);
+    },
+    onToolExecutionEnd: (call: RunnerToolCall) => {
+      for (const obs of observers) obs.onToolExecutionEnd?.(call);
+    },
   };
 }

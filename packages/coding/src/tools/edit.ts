@@ -1,7 +1,6 @@
 import fs from 'fs/promises';
 import fsSync from 'fs';
 import type { KodaXToolExecutionContext } from '../types.js';
-import { getFileBackups } from './write.js';
 import { generateDiff, countChanges } from './diff.js';
 import { resolveExecutionPath } from '../runtime-paths.js';
 import { formatDiffPreview } from './truncate.js';
@@ -14,7 +13,7 @@ import {
 } from './text-anchor.js';
 import { findExactMatchPositions, formatLineList } from './multi-edit.js';
 import { appendLspDiagnostics } from './_internal/lsp-reflux.js';
-import { withFileMutation } from './_internal/file-mutation-queue.js';
+import { recordFileBackup, withFileMutation } from './_internal/file-mutation-queue.js';
 import { buildStaleWriteReason } from '../multi-instance/content-hash-cache.js';
 import { memoryMutationDenial } from './memory-mutation-guard.js';
 import { formatActiveFileWarning } from '../multi-instance/active-file-warning.js';
@@ -164,8 +163,7 @@ async function runEditOnce(
     };
   }
 
-  ctx.backups.set(filePath, content);
-  getFileBackups().set(filePath, content);
+  recordFileBackup(ctx.backups, filePath, content);
   await fs.writeFile(filePath, replacementPlan.newContent, 'utf-8');
 
   // FEATURE_125 v0.7.41 — update content-hash cache with the post-edit

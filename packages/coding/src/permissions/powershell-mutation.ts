@@ -125,22 +125,43 @@ export function analyzePowerShellMutation(
   if (hasUnmodelledBracketWildcard(bound)) {
     return incomplete('PowerShell path contains bracket wildcard syntax');
   }
-  const operation = buildOperation(command, bound);
-  if (!operation) return incomplete('PowerShell mutation target is missing or ambiguous');
+  const boundTargets = expandStaticPathArray(bound);
+  if (!boundTargets) return incomplete('PowerShell path array contains an empty target');
+  const operations = boundTargets.map((target) => buildOperation(command, target));
+  if (operations.some((operation) => operation === undefined)) {
+    return incomplete('PowerShell mutation target is missing or ambiguous');
+  }
+  const resolvedOperations = operations.filter(
+    (operation): operation is PowerShellMutationOperation => operation !== undefined,
+  );
   if (['filter', 'include', 'exclude'].some((name) => bound.values.has(name))) {
     return {
       status: 'incomplete',
-      operations: [operation],
+      operations: resolvedOperations,
       reason: 'PowerShell provider selectors make the concrete target set unresolved',
     };
   }
-  if (operationPaths(operation).some(isAmbiguousPathExpression)) {
+  if (resolvedOperations.some((operation) => operationPaths(operation).some(isAmbiguousPathExpression))) {
     return {
-      status: 'incomplete', operations: [operation],
+      status: 'incomplete', operations: resolvedOperations,
       reason: 'PowerShell path contains dynamic, wildcard, or array syntax',
     };
   }
-  return { status: 'complete', operations: [operation] };
+  return { status: 'complete', operations: resolvedOperations };
+}
+
+function expandStaticPathArray(bound: BoundArguments): readonly BoundArguments[] | undefined {
+  const name = ['path', 'literalpath'].find((candidate) => bound.values.has(candidate));
+  if (!name) return [bound];
+  const value = bound.values.get(name)!;
+  if (!value.includes(',')) return [bound];
+  const targets = value.split(',').map((target) => target.trim());
+  if (targets.some((target) => !target)) return undefined;
+  return targets.map((target) => {
+    const values = new Map(bound.values);
+    values.set(name, target);
+    return { ...bound, values };
+  });
 }
 
 function bindArguments(args: readonly string[], commandSpec: CommandSpec): BoundArguments {

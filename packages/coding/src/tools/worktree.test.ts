@@ -2,33 +2,98 @@
  * Tests for KodaX Worktree Isolation Tools
  */
 
-import { describe, it, expect, vi } from 'vitest';
-import { toolWorktreeCreate, toolWorktreeRemove } from './worktree.js';
+import path from 'node:path';
+import { EventEmitter } from 'node:events';
+import {
+  containWindowsEffectProcess,
+  killChildProcessTree,
+  setAgentConfigHome,
+} from '@kodax-ai/agent';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import {
+  createWorkflowWorktree,
+  removeWorkflowWorktree,
+  toolWorktreeCreate,
+  toolWorktreeRemove,
+} from './worktree.js';
+import {
+  acquireFileSystemMutationLease,
+  withFileMutation,
+} from './_internal/file-mutation-queue.js';
 import type { KodaXToolExecutionContext } from '../types.js';
 
-// `toolWorktreeCreate` mkdirs an explicit base_dir; stub it so tests touch no fs.
-vi.mock('fs', () => ({ mkdirSync: vi.fn() }));
+vi.mock('@kodax-ai/agent', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@kodax-ai/agent')>()),
+  containWindowsEffectProcess: vi.fn(async (pid: number) => ({
+    drained: Promise.resolve(),
+    supervisorPid: pid,
+  })),
+  killChildProcessTree: vi.fn(async () => ({ status: 'already-exited' as const })),
+}));
 
-// Mock child_process.execFile with default behavior
+// `toolWorktreeCreate` mkdirs an explicit base_dir; stub it so tests touch no fs.
+vi.mock('fs', async (importOriginal) => {
+  const original = await importOriginal<typeof import('fs')>();
+  return {
+    ...original,
+    mkdirSync: vi.fn((target: import('fs').PathLike, options?: import('fs').MakeDirectoryOptions) => {
+    if (String(target).replace(/\\/g, '/').includes('/runtime/processes/children')) {
+      return original.mkdirSync(target, options);
+    }
+    return undefined;
+    }),
+  };
+});
+
+// Mock the gated child process with default git behavior.
 let mockExecFileImpl: Function | null = null;
 
-vi.mock('child_process', () => {
+vi.mock('child_process', async (importOriginal) => {
+  const original = await importOriginal<typeof import('child_process')>();
   return {
-    execFile: vi.fn((cmd: string, args: string[], opts: Record<string, unknown>, cb: Function) => {
-      if (mockExecFileImpl) {
-        mockExecFileImpl(cmd, args, opts, cb);
-      } else {
-        // Default behavior: success for all commands
-        if (args?.includes('status') && args?.includes('--porcelain')) {
-          cb(null, { stdout: '', stderr: '' });
-        } else if (args?.includes('rev-list')) {
-          cb(null, { stdout: '0\n', stderr: '' });
-        } else if (args?.includes('rev-parse')) {
-          cb(null, { stdout: 'kodax-wt-test\n', stderr: '' });
-        } else {
-          cb(null, { stdout: '', stderr: '' });
-        }
-      }
+    ...original,
+    spawn: vi.fn((cmd: string, args: string[], opts: Record<string, unknown>) => {
+      const hardenedArgs = JSON.parse(
+        String((opts.env as NodeJS.ProcessEnv | undefined)?.KODAX_GIT_ARGS_JSON ?? '[]'),
+      ) as string[];
+      const effectiveArgs = hardenedArgs.slice(8);
+      const child = new EventEmitter() as EventEmitter & {
+        pid: number;
+        exitCode: number | null;
+        signalCode: NodeJS.Signals | null;
+        stdin: { end(value?: string): void };
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+      };
+      child.pid = 2_147_483_647;
+      child.exitCode = null;
+      child.signalCode = null;
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.stdin = {
+        end: () => queueMicrotask(() => {
+          const complete = (error: Error | null, stdout: string, stderr: string): void => {
+            if (stdout) child.stdout.emit('data', stdout);
+            if (stderr) child.stderr.emit('data', stderr);
+            if (error) child.emit('error', error);
+            child.exitCode = error ? 1 : 0;
+            child.emit('exit', child.exitCode, null);
+            child.emit('close', child.exitCode, null);
+          };
+          if (mockExecFileImpl) {
+            mockExecFileImpl('git', effectiveArgs, opts, complete);
+          } else if (effectiveArgs.includes('status') && effectiveArgs.includes('--porcelain')) {
+            complete(null, '', '');
+          } else if (effectiveArgs.includes('rev-list')) {
+            complete(null, '0\n', '');
+          } else if (effectiveArgs.includes('rev-parse')) {
+            complete(null, 'kodax-wt-test\n', '');
+          } else {
+            complete(null, '', '');
+          }
+        }),
+      };
+      return child;
     }),
   };
 });
@@ -42,6 +107,11 @@ const mockContext: KodaXToolExecutionContext = {
   executionCwd: '/test/repo',
   gitRoot: '/test/repo',
 };
+
+afterEach(() => {
+  setMockExecFileImpl(null);
+  setAgentConfigHome(undefined);
+});
 
 describe('toolWorktreeCreate', () => {
   it('generates valid branch name from description', async () => {
@@ -93,7 +163,7 @@ describe('toolWorktreeCreate', () => {
     let addPath: string | undefined;
     setMockExecFileImpl((_cmd: string, args: string[], _opts: unknown, cb: Function) => {
       if (args[0] === 'worktree' && args[1] === 'add') addPath = args[args.length - 1];
-      cb(null, { stdout: '', stderr: '' });
+      cb(null, '', '');
     });
     const result = await toolWorktreeCreate({ branch_name: 'sibling-wt' }, mockContext);
     setMockExecFileImpl(null);
@@ -105,15 +175,15 @@ describe('toolWorktreeCreate', () => {
     expect(addPath?.replace(/\\/g, '/')).toMatch(/\/test\/\.kodax-worktree-sibling-wt$/);
   });
 
-  it('nests the worktree under an explicit base_dir (workflow runs)', async () => {
+  it('nests the worktree under the trusted workflow context base', async () => {
     let addPath: string | undefined;
     setMockExecFileImpl((_cmd: string, args: string[], _opts: unknown, cb: Function) => {
       if (args[0] === 'worktree' && args[1] === 'add') addPath = args[args.length - 1];
-      cb(null, { stdout: '', stderr: '' });
+      cb(null, '', '');
     });
-    const result = await toolWorktreeCreate(
-      { branch_name: 'wf-child-1', base_dir: '/runs/proj/r1/worktrees' },
-      mockContext,
+    const result = await createWorkflowWorktree(
+      { branch_name: 'wf-child-1' },
+      { ...mockContext, workflowWorktreeBaseDir: '/runs/proj/r1/worktrees' },
     );
     setMockExecFileImpl(null);
 
@@ -121,9 +191,140 @@ describe('toolWorktreeCreate', () => {
     expect(parsed.path.replace(/\\/g, '/')).toMatch(/\/runs\/proj\/r1\/worktrees\/\.kodax-worktree-wf-child-1$/);
     expect(addPath?.replace(/\\/g, '/')).toMatch(/\/runs\/proj\/r1\/worktrees\/\.kodax-worktree-wf-child-1$/);
   });
+
+  it('refuses repository-configured filter processes before checkout', async () => {
+    setMockExecFileImpl((_cmd: string, args: string[], _opts: unknown, cb: Function) => {
+      if (args[0] === 'config') {
+        cb(null, 'filter.danger.process node filter.js\n', '');
+      } else {
+        cb(null, '', '');
+      }
+    });
+    await expect(toolWorktreeCreate({ branch_name: 'filtered' }, mockContext))
+      .rejects.toThrow('content filter processes are not allowed');
+    setMockExecFileImpl(null);
+  });
+
+  it('ignores a model-supplied hidden base_dir', async () => {
+    const hidden = await toolWorktreeCreate(
+      { branch_name: 'hidden-base', base_dir: '/agent-home/runtime' },
+      mockContext,
+    );
+    expect(JSON.parse(hidden).path.replace(/\\/g, '/'))
+      .toMatch(/\/test\/\.kodax-worktree-hidden-base$/);
+
+  });
+
+  it('allows the controller-owned workflow base inside Runtime', async () => {
+    const agentHome = path.resolve('/agent-home');
+    setAgentConfigHome(agentHome);
+    const result = await createWorkflowWorktree(
+      { branch_name: 'trusted-protected-base' },
+      { ...mockContext, workflowWorktreeBaseDir: path.join(agentHome, 'runtime', 'worktrees') },
+    );
+    expect(JSON.parse(result).path.replace(/\\/g, '/'))
+      .toMatch(/\/agent-home\/runtime\/worktrees\/\.kodax-worktree-trusted-protected-base$/);
+  });
+
+  it('rejects a model worktree whose default path lands in Runtime', async () => {
+    const agentHome = path.resolve('/agent-home');
+    setAgentConfigHome(agentHome);
+    await expect(toolWorktreeCreate(
+      { branch_name: 'model-runtime-base' },
+      { ...mockContext, executionCwd: path.join(agentHome, 'runtime', 'repo') },
+    )).rejects.toThrow('protected KodaX state');
+  });
+
+  it('does not overlap a model-started shell effect', async () => {
+    const releaseShell = await acquireFileSystemMutationLease();
+    try {
+      await expect(toolWorktreeCreate(
+        { branch_name: 'lease-conflict' },
+        mockContext,
+      )).rejects.toThrow('filesystem effect is already active');
+    } finally {
+      await releaseShell();
+    }
+  });
+
+  it('does not overlap a direct file sink that could race checked-out aliases', async () => {
+    let enteredMutation: (() => void) | undefined;
+    const entered = new Promise<void>((resolve) => { enteredMutation = resolve; });
+    let finishMutation: (() => void) | undefined;
+    const finished = new Promise<void>((resolve) => { finishMutation = resolve; });
+    const mutation = withFileMutation('/tmp/ordinary.txt', async () => {
+      enteredMutation?.();
+      await finished;
+    });
+    await entered;
+    await expect(toolWorktreeCreate(
+      { branch_name: 'direct-lease-conflict' },
+      mockContext,
+    )).rejects.toThrow('filesystem effect is already active');
+    finishMutation?.();
+    await mutation;
+  });
+
+  it('keeps the namespace fence closed until a POSIX Git tree has a non-unknown drain proof', async () => {
+    vi.mocked(containWindowsEffectProcess).mockResolvedValueOnce(undefined as never);
+    vi.mocked(killChildProcessTree)
+      .mockResolvedValueOnce({ status: 'unknown' })
+      .mockResolvedValue({ status: 'already-exited' });
+
+    await expect(toolWorktreeCreate(
+      { branch_name: 'unknown-drain-proof' },
+      mockContext,
+    )).rejects.toThrow(/process tree.*proven drained/i);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    await expect(withFileMutation('/tmp/after-worktree-drain.txt', async () => 'ready'))
+      .resolves.toBe('ready');
+  });
 });
 
 describe('toolWorktreeRemove', () => {
+  it('hard-denies removing an ancestor that contains the Agent Home root', async () => {
+    const ancestor = path.resolve('/test/outer-worktree');
+    setAgentConfigHome(path.join(ancestor, 'agent-home'));
+
+    await expect(toolWorktreeRemove({
+      action: 'remove',
+      worktree_path: ancestor,
+      discard_changes: true,
+    }, mockContext)).rejects.toThrow(/protected KodaX state/);
+  });
+
+  it('refuses to remove the Runtime tree even with discard_changes', async () => {
+    const agentHome = path.resolve('/agent-home');
+    setAgentConfigHome(agentHome);
+    await expect(toolWorktreeRemove({
+      action: 'remove',
+      worktree_path: path.join(agentHome, 'runtime'),
+      discard_changes: true,
+    }, mockContext)).rejects.toThrow('protected KodaX state');
+  });
+
+  it('allows the controller to reclaim its own Runtime worktree', async () => {
+    const agentHome = path.resolve('/agent-home');
+    const workflowBase = path.join(agentHome, 'runtime', 'worktrees');
+    setAgentConfigHome(agentHome);
+    const result = await removeWorkflowWorktree(
+      path.join(workflowBase, '.kodax-worktree-child'),
+      { ...mockContext, workflowWorktreeBaseDir: workflowBase },
+    );
+    expect(JSON.parse(result).restored).toBe(true);
+  });
+
+  it('allows removing a model worktree from an ordinary Agent Home descendant', async () => {
+    const agentHome = path.resolve('/agent-home');
+    setAgentConfigHome(agentHome);
+    const result = await toolWorktreeRemove({
+      action: 'remove',
+      worktree_path: path.join(agentHome, 'sessions', '.kodax-worktree-child'),
+      discard_changes: true,
+    }, mockContext);
+    expect(JSON.parse(result).restored).toBe(true);
+  });
+
   it('returns kept message for action=keep', async () => {
     const result = await toolWorktreeRemove(
       { action: 'keep', worktree_path: '/test/worktree' },
@@ -175,17 +376,30 @@ describe('toolWorktreeRemove', () => {
     const parsed = JSON.parse(result);
     expect(parsed.restored).toBe(true);
   });
+
+  it('does not overlap a model-started shell effect', async () => {
+    const releaseShell = await acquireFileSystemMutationLease();
+    try {
+      await expect(toolWorktreeRemove({
+        action: 'remove',
+        worktree_path: '/test/worktree',
+        discard_changes: true,
+      }, mockContext)).rejects.toThrow('filesystem effect is already active');
+    } finally {
+      await releaseShell();
+    }
+  });
 });
 
 describe('toolWorktreeRemove with changes detection', () => {
   it('fails when worktree has uncommitted files', async () => {
     setMockExecFileImpl((cmd: string, args: string[], opts: Record<string, unknown>, cb: Function) => {
       if (args?.includes('status')) {
-        cb(null, { stdout: 'M file.ts\nA new.ts\n', stderr: '' });
+        cb(null, 'M file.ts\nA new.ts\n', '');
       } else if (args?.includes('rev-list')) {
-        cb(null, { stdout: '0\n', stderr: '' });
+        cb(null, '0\n', '');
       } else {
-        cb(null, { stdout: '', stderr: '' });
+        cb(null, '', '');
       }
     });
 
@@ -203,11 +417,11 @@ describe('toolWorktreeRemove with changes detection', () => {
   it('fails when worktree has local commits', async () => {
     setMockExecFileImpl((cmd: string, args: string[], opts: Record<string, unknown>, cb: Function) => {
       if (args?.includes('status')) {
-        cb(null, { stdout: '', stderr: '' });
+        cb(null, '', '');
       } else if (args?.includes('rev-list')) {
-        cb(null, { stdout: '3\n', stderr: '' });
+        cb(null, '3\n', '');
       } else {
-        cb(null, { stdout: '', stderr: '' });
+        cb(null, '', '');
       }
     });
 

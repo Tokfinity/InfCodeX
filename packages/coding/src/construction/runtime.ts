@@ -29,6 +29,7 @@ import { Runner, emitKodaXDiagnostic } from '@kodax-ai/agent';
 import type { LocalToolDefinition } from '../tools/types.js';
 import { registerTool } from '../tools/registry.js';
 import { safeFallbackToClassifierInput } from '../tools/classifier-projection.js';
+import { withFileMutation } from '../tools/_internal/file-mutation-queue.js';
 import type { KodaXToolDefinition } from '@kodax-ai/llm';
 
 import { buildAdmissionManifest } from './admission-bridge.js';
@@ -276,7 +277,7 @@ export async function stage(artifact: ConstructionArtifact): Promise<StagedHandl
     contentHash: undefined,
   };
 
-  await persistArtifact(filled);
+  await persistNewArtifact(filled);
   return { artifact: filled, stagedAt: Date.now() };
 }
 
@@ -1191,8 +1192,30 @@ function activeKey(artifact: ConstructionArtifact): string {
 
 async function persistArtifact(artifact: ConstructionArtifact): Promise<void> {
   const filePath = manifestPath(artifact);
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, JSON.stringify(artifact, null, 2), 'utf8');
+  await withFileMutation(filePath, async () => {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, JSON.stringify(artifact, null, 2), 'utf8');
+  });
+}
+
+async function persistNewArtifact(artifact: ConstructionArtifact): Promise<void> {
+  const filePath = manifestPath(artifact);
+  await withFileMutation(filePath, async () => {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    try {
+      await fs.writeFile(filePath, JSON.stringify(artifact, null, 2), {
+        encoding: 'utf8',
+        flag: 'wx',
+      });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      throw new ConstructionManifestError(
+        `Cannot stage '${artifact.name}@${artifact.version}': a manifest already exists at this version. `
+        + 'Constructed artifacts are version-immutable; bump the semver to publish a new variant.',
+        filePath,
+      );
+    }
+  });
 }
 
 /**

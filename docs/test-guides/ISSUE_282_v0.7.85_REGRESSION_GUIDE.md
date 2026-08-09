@@ -32,11 +32,11 @@ Required observations:
   it converges without a second Stop and preserves the Stop failure cause.
 - Spawn after self-fence returns `actor_settlement_not_persisted`, not
   `actor_owner_conflict`.
-- A query submitted as `after_turn` is accepted once, stays queued, and runs
-  only after same-owner repair establishes the logical root fence and the old
-  provider Promise has settled. An abort-ignoring provider cannot release the
-  Session route while a pre-fence tool or filesystem effect may still be in
-  flight; its post-fence callbacks and new effects remain suppressed.
+- A query submitted as `after_turn` is accepted once and stays queued until
+  same-owner repair plus the exact execution-lease drain establishes the logical
+  root fence. The old provider Promise need not settle. UI tool-start events and
+  permission waits do not hold leases; tools that actually entered execution do.
+  Duplicate provider tool ids still represent distinct concurrent leases.
 - Healthy after-turn input following a managed task defaults to coding mode;
   managed-mode inheritance occurs only for a successor draining behind the
   durability repair.
@@ -59,10 +59,13 @@ Required observations:
 3. Confirm that the root is aborted, the Run briefly reports factual unknown,
    and a new after-turn query is accepted without being executed early.
 4. Release the delayed save. Confirm automatic same-owner repair, zero active
-   non-root turns, one failed prior terminal, and one completed queued Run after
-   the old root Promise settles. Repeat with a provider Promise that ignores
-   AbortSignal and remains pending; the successor must remain queued until that
-   Promise settles.
+   non-root turns, one failed prior terminal, and one completed queued Run.
+   Repeat with a provider Promise that ignores AbortSignal and remains pending
+   but has no active tool execution; the repaired prior Run must still fail and
+   the successor must complete. Then keep two same-id tool executions active:
+   the successor must remain queued until both exact execution leases settle.
+   A tool-start event blocked at permission must not hold the route. In every
+   case, late callbacks and new effects from the fenced provider stay suppressed.
 5. Repeat without releasing the save. Confirm the Run remains unknown and Stop
    remains available; no successor Run starts and no completion is fabricated.
 6. Repeat with a genuinely different owner. Confirm the owner conflict remains
@@ -72,4 +75,5 @@ Required observations:
 
 All automated gates pass from source and from the packaged Worker/daemon bytes.
 No run emits more than one terminal event, no post-fence delta is replayed, and
-the Session is reused only after durable Actor convergence.
+the Session is reused only after durable Actor convergence and exact execution-
+lease drain.

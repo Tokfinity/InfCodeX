@@ -3,6 +3,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import type { ToolHandlerSync } from '../tools/types.js';
+import { withFileMutation } from '../tools/_internal/file-mutation-queue.js';
 import type { CreateCtxProxyOptions } from './ctx-proxy.js';
 import {
   disposeConstructedHandlerWorker,
@@ -41,9 +42,11 @@ export async function loadHandler(
 
   const cwd = scope.cwd ?? process.cwd();
   const dir = path.resolve(cwd, CONSTRUCTED_TOOLS_SUBPATH, scope.name);
-  await fs.mkdir(dir, { recursive: true });
   const modulePath = path.join(dir, `${scope.version}.mjs`);
-  await fs.writeFile(modulePath, source.code, 'utf8');
+  await withFileMutation(modulePath, async () => {
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(modulePath, source.code, 'utf8');
+  });
 
   const invoke = await prepareConstructedHandlerWorker({
     key: modulePath,

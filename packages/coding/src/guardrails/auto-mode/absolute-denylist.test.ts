@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -5,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { setAgentConfigHome } from '@kodax-ai/agent';
 import type { RunnerToolCall } from '@kodax-ai/agent';
 
-import { checkAbsoluteDeny } from './absolute-denylist.js';
+import { checkAbsoluteDeny, checkAgentHomeHardDeny } from './absolute-denylist.js';
 
 const PROJECT_ROOT = path.resolve('/tmp/kodax-tier0-test-project');
 const USER_KODAX = path.resolve('/tmp/kodax-tier0-test-user-home/.kodax');
@@ -160,10 +162,83 @@ describe('Tier 0 — user_kodax_write (file tools)', () => {
     expect(result.denied).toBe(true);
   });
 
-  it('ALLOWS edit to non-credential ~/.kodax/agents.md', () => {
-    const result = checkAbsoluteDeny(edit(path.join(USER_KODAX, 'agents.md')), PROJECT_ROOT);
-    expect(result.denied).toBe(false);
+  it.each([
+    ['agent home root', USER_KODAX],
+    ['runtime control plane', path.join(USER_KODAX, 'runtime', 'state.json')],
+    ['generic sensitive file', path.join(USER_KODAX, '.env')],
+  ])('BLOCKS edit to %s', (_label, target) => {
+    const result = checkAbsoluteDeny(edit(target), PROJECT_ROOT);
+    expect(result).toMatchObject({ denied: true, patternId: 'user_kodax_write' });
   });
+
+  it('separates hard Runtime/root denial from reviewable sensitive files', () => {
+    expect(checkAgentHomeHardDeny(write(USER_KODAX), PROJECT_ROOT).denied).toBe(true);
+    expect(checkAgentHomeHardDeny(
+      write(path.join(USER_KODAX, 'runtime', 'state.json')),
+      PROJECT_ROOT,
+    ).denied).toBe(true);
+    expect(checkAgentHomeHardDeny(
+      write(path.join(USER_KODAX, 'processes', 'children', 'forged.json')),
+      PROJECT_ROOT,
+    ).denied).toBe(true);
+    expect(checkAgentHomeHardDeny(
+      write(path.join(USER_KODAX, 'learned', 'projects', 'record.json')),
+      PROJECT_ROOT,
+    ).denied).toBe(true);
+    expect(checkAgentHomeHardDeny(
+      write(path.join(USER_KODAX, 'config.json')),
+      PROJECT_ROOT,
+    ).denied).toBe(false);
+    expect(checkAgentHomeHardDeny(
+      write(path.join(USER_KODAX, 'sessions', 'turn.json')),
+      PROJECT_ROOT,
+    ).denied).toBe(false);
+  });
+
+  it('hard-denies shell removal of Agent Home and Runtime selectors', () => {
+    expect(checkAgentHomeHardDeny(
+      bash(`rm -rf "${USER_KODAX}"`),
+      PROJECT_ROOT,
+    ).denied).toBe(true);
+    expect(checkAgentHomeHardDeny(
+      bash(`rm -rf "${USER_KODAX}"/*`),
+      PROJECT_ROOT,
+    ).denied).toBe(true);
+    expect(checkAgentHomeHardDeny(
+      bash(`Remove-Item -Recurse -Path "${path.join(USER_KODAX, 'runtime')}"`),
+      PROJECT_ROOT,
+    ).denied).toBe(true);
+  });
+
+  it.each([
+    ['agent definition', path.join(USER_KODAX, 'agents', 'reviewer.md')],
+    ['session artifact', path.join(USER_KODAX, 'sessions', 's.json')],
+    ['tool result', path.join(USER_KODAX, 'tool-results', 'out.txt')],
+    ['intermediate result', path.join(USER_KODAX, 'scratch', 'plan.json')],
+  ])('ALLOWS file-tool writes to non-protected %s', (_label, target) => {
+    expect(checkAbsoluteDeny(write(target), PROJECT_ROOT).denied).toBe(false);
+  });
+
+  it('ALLOWS editing an Agent definition', () => {
+    expect(checkAbsoluteDeny(
+      edit(path.join(USER_KODAX, 'agents', 'reviewer.md')),
+      PROJECT_ROOT,
+    ).denied).toBe(false);
+  });
+
+  it.each(['multi_edit', 'insert_after_anchor'])(
+    'BLOCKS %s writes to the Runtime control plane',
+    (name) => {
+      expect(checkAbsoluteDeny({
+        id: 'c',
+        name,
+        input: { path: path.join(USER_KODAX, 'runtime', 'state.json') },
+      }, PROJECT_ROOT)).toMatchObject({
+        denied: true,
+        patternId: 'user_kodax_write',
+      });
+    },
+  );
 
   it.runIf(process.platform === 'win32')('BLOCKS case-varied Windows user KodaX paths', () => {
     const result = checkAbsoluteDeny(
@@ -215,10 +290,268 @@ describe('Tier 0 — user_kodax_write (file tools)', () => {
     if (result.denied) expect(result.patternId).toBe('user_kodax_write');
   });
 
-  it('ALLOWS bash write to non-credential ~/.kodax/tool-results/x', () => {
-    const target = path.join(USER_KODAX, 'tool-results', 'out.txt');
-    const result = checkAbsoluteDeny(bash('echo x > "' + target + '"'), PROJECT_ROOT);
-    expect(result.denied).toBe(false);
+  it.each([
+    ['agent definition', path.join(USER_KODAX, 'agents', 'reviewer.md')],
+    ['intermediate result', path.join(USER_KODAX, 'scratch', 'out.txt')],
+  ])('ALLOWS bash write to non-protected %s', (_label, target) => {
+    expect(checkAbsoluteDeny(
+      bash('echo x > "' + target + '"'),
+      PROJECT_ROOT,
+    ).denied).toBe(false);
+  });
+
+  it.each([
+    ['agent home root', USER_KODAX],
+    ['runtime control plane', path.join(USER_KODAX, 'runtime')],
+  ])('BLOCKS bash deletion of %s', (_label, target) => {
+    const result = checkAbsoluteDeny(bash('rm -rf "' + target + '"'), PROJECT_ROOT);
+    expect(result).toMatchObject({ denied: true, patternId: 'user_kodax_write' });
+  });
+
+  it('ALLOWS deleting a non-protected intermediate subtree', () => {
+    const target = path.join(USER_KODAX, 'scratch');
+    expect(checkAbsoluteDeny(bash('rm -rf "' + target + '"'), PROJECT_ROOT).denied)
+      .toBe(false);
+  });
+
+  it.each([
+    ['agent-home parent', `rm -rf "${path.dirname(USER_KODAX)}"`],
+    ['all agent-home children', `rm -rf "${USER_KODAX}"/*`],
+    ['possible Runtime children', `rm -rf "${USER_KODAX}"/r*`],
+  ])('BLOCKS recursive deletion covering %s', (_label, command) => {
+    expect(checkAbsoluteDeny(bash(command), PROJECT_ROOT))
+      .toMatchObject({ denied: true, patternId: 'user_kodax_write' });
+  });
+
+  it('ALLOWS recursive deletion restricted to an intermediate subtree', () => {
+    const scratch = path.join(USER_KODAX, 'scratch');
+    expect(checkAbsoluteDeny(bash(`rm -rf "${scratch}"/*`), PROJECT_ROOT).denied)
+      .toBe(false);
+  });
+
+  it('BLOCKS deleting an intermediate subtree only when it contains protected state', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-tier0-descendant-'));
+    const agentHome = path.join(root, '.kodax');
+    const scratch = path.join(agentHome, 'scratch');
+    fs.mkdirSync(scratch, { recursive: true });
+    fs.writeFileSync(path.join(scratch, 'credentials.json'), 'secret');
+    setAgentConfigHome(agentHome);
+    try {
+      expect(checkAbsoluteDeny(bash(`rm -rf "${scratch}"`), PROJECT_ROOT))
+        .toMatchObject({ denied: true, patternId: 'user_kodax_write' });
+      expect(checkAbsoluteDeny(bash(`rm -rf "${scratch}"/*`), PROJECT_ROOT))
+        .toMatchObject({ denied: true, patternId: 'user_kodax_write' });
+      fs.rmSync(path.join(scratch, 'credentials.json'));
+      expect(checkAbsoluteDeny(bash(`rm -rf "${scratch}"`), PROJECT_ROOT).denied)
+        .toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+      setAgentConfigHome(USER_KODAX);
+    }
+  });
+
+  it('BLOCKS non-recursive selectors and traversal mutations only when they select protected descendants', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-tier0-selection-'));
+    const agentHome = path.join(root, '.kodax');
+    const scratch = path.join(agentHome, 'scratch');
+    const destination = path.join(root, 'backup');
+    const credential = path.join(scratch, 'credentials.json');
+    fs.mkdirSync(scratch, { recursive: true });
+    fs.writeFileSync(credential, 'secret');
+    setAgentConfigHome(agentHome);
+    try {
+      for (const command of [
+        `rm "${scratch}"/*`,
+        `mv "${scratch}" "${destination}"`,
+        `chmod -R 700 "${scratch}"`,
+        `chown -R user "${scratch}"`,
+        `Move-Item -Path "${scratch}" -Destination "${destination}"`,
+      ]) {
+        expect(checkAbsoluteDeny(bash(command), PROJECT_ROOT), command)
+          .toMatchObject({ denied: true, patternId: 'user_kodax_write' });
+      }
+      fs.rmSync(credential);
+      for (const command of [
+        `rm "${scratch}"/*`,
+        `mv "${scratch}" "${destination}"`,
+        `chmod -R 700 "${scratch}"`,
+        `chown -R user "${scratch}"`,
+      ]) {
+        expect(checkAbsoluteDeny(bash(command), PROJECT_ROOT).denied, command)
+          .toBe(false);
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+      setAgentConfigHome(USER_KODAX);
+    }
+  });
+
+  it('BLOCKS recursive Windows aliases, PowerShell arrays, and rmdir parent cleanup at protected boundaries', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-tier0-delete-alias-'));
+    const agentHome = path.join(root, '.kodax');
+    const scratch = path.join(agentHome, 'scratch');
+    fs.mkdirSync(path.join(scratch, 'a'), { recursive: true });
+    fs.writeFileSync(path.join(scratch, 'credentials.json'), 'secret');
+    setAgentConfigHome(agentHome);
+    try {
+      for (const command of [
+        `rmdir /s /q "${scratch}"`,
+        `rmdir -Recurse "${scratch}"`,
+        `ri -Recurse -LiteralPath "${scratch}"`,
+        `Remove-Item -Recurse -LiteralPath "${scratch}"`,
+        `Remove-Item -Recurse -Path "${scratch},${path.join(agentHome, 'runtime')}"`,
+        `rmdir -p "${path.join(scratch, 'a')}"`,
+        `rmdir --parents "${path.join(scratch, 'a')}"`,
+      ]) {
+        expect(checkAbsoluteDeny(bash(command), PROJECT_ROOT), command)
+          .toMatchObject({ denied: true, patternId: 'user_kodax_write' });
+      }
+      expect(checkAbsoluteDeny(
+        bash(`rmdir "${path.join(scratch, 'a')}"`),
+        PROJECT_ROOT,
+      ).denied).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+      setAgentConfigHome(USER_KODAX);
+    }
+  });
+
+  it('BLOCKS a symlinked write into the Runtime control plane', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-tier0-link-'));
+    const agentHome = path.join(root, '.kodax');
+    const runtime = path.join(agentHome, 'runtime');
+    const scratch = path.join(agentHome, 'scratch');
+    fs.mkdirSync(runtime, { recursive: true });
+    fs.mkdirSync(scratch, { recursive: true });
+    fs.symlinkSync(runtime, path.join(scratch, 'runtime-link'), process.platform === 'win32' ? 'junction' : 'dir');
+    setAgentConfigHome(agentHome);
+    try {
+      expect(checkAbsoluteDeny(write(
+        path.join(scratch, 'runtime-link', 'state.json'),
+      ), PROJECT_ROOT)).toMatchObject({
+        denied: true,
+        patternId: 'user_kodax_write',
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+      setAgentConfigHome(USER_KODAX);
+    }
+  });
+
+  it('ALLOWS unlinking an ordinary scratch symlink without following its Runtime target', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-tier0-unlink-'));
+    const agentHome = path.join(root, '.kodax');
+    const runtime = path.join(agentHome, 'runtime');
+    const scratch = path.join(agentHome, 'scratch');
+    const link = path.join(scratch, 'runtime-link');
+    fs.mkdirSync(runtime, { recursive: true });
+    fs.mkdirSync(scratch, { recursive: true });
+    fs.symlinkSync(runtime, link, process.platform === 'win32' ? 'junction' : 'dir');
+    setAgentConfigHome(agentHome);
+    try {
+      for (const command of [
+        `rm -rf "${link}"`,
+        `rm "${link}"`,
+        `Remove-Item -LiteralPath "${link}"`,
+      ]) {
+        expect(checkAbsoluteDeny(bash(command), PROJECT_ROOT).denied, command)
+          .toBe(false);
+        expect(checkAgentHomeHardDeny(bash(command), PROJECT_ROOT).denied, command)
+          .toBe(false);
+      }
+      expect(checkAgentHomeHardDeny(
+        bash(`rm "${path.join(link, 'state.json')}"`),
+        PROJECT_ROOT,
+      ).denied).toBe(true);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+      setAgentConfigHome(USER_KODAX);
+    }
+  });
+
+  it('follows only selector-matched directory links into Runtime', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-hard-selector-link-'));
+    const agentHome = path.join(root, '.kodax');
+    const runtime = path.join(agentHome, 'runtime');
+    const scratch = path.join(agentHome, 'scratch');
+    const runtimeLink = path.join(scratch, 'runtime-link');
+    fs.mkdirSync(runtime, { recursive: true });
+    fs.writeFileSync(path.join(runtime, 'state.json'), 'state');
+    fs.mkdirSync(path.join(scratch, 'ordinary-one'), { recursive: true });
+    fs.writeFileSync(path.join(scratch, 'ordinary-one', 'result.txt'), 'ok');
+    fs.symlinkSync(runtime, runtimeLink, process.platform === 'win32' ? 'junction' : 'dir');
+    setAgentConfigHome(agentHome);
+    try {
+      expect(checkAgentHomeHardDeny(
+        bash(`rm -f "${path.join(scratch, 'ordinary-*', '*')}"`),
+        PROJECT_ROOT,
+      ).denied).toBe(false);
+      expect(checkAgentHomeHardDeny(
+        bash(`rm -f "${path.join(scratch, 'runtime-*', '*')}"`),
+        PROJECT_ROOT,
+      ).denied).toBe(true);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+      setAgentConfigHome(USER_KODAX);
+    }
+  });
+
+  it('hard-denies recursive selectors and traversal mutations whose source contains Agent Home', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-hard-ancestor-'));
+    const owner = path.join(root, 'owner');
+    const agentHome = path.join(owner, '.kodax');
+    fs.mkdirSync(path.join(agentHome, 'runtime'), { recursive: true });
+    setAgentConfigHome(agentHome);
+    try {
+      for (const command of [
+        `rm -rf "${path.join(root, '*')}"`,
+        `Remove-Item -Recurse -Path "${path.join(root, '*')}"`,
+        `mv "${owner}" "${path.join(root, 'backup')}"`,
+        `chmod -R 700 "${path.join(root, '*')}"`,
+      ]) {
+        expect(checkAgentHomeHardDeny(bash(command), PROJECT_ROOT), command)
+          .toMatchObject({ denied: true, patternId: 'user_kodax_write' });
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+      setAgentConfigHome(USER_KODAX);
+    }
+  });
+
+  it('BLOCKS removing a configured Agent Home whose root is a symlink', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-tier0-home-link-'));
+    const realHome = path.join(root, 'real-home');
+    const workspace = path.join(root, 'workspace');
+    const linkedHome = path.join(workspace, 'agent-home-link');
+    fs.mkdirSync(path.join(realHome, 'scratch'), { recursive: true });
+    fs.mkdirSync(workspace, { recursive: true });
+    fs.symlinkSync(realHome, linkedHome, process.platform === 'win32' ? 'junction' : 'dir');
+    setAgentConfigHome(linkedHome);
+    try {
+      for (const command of [
+        `rm -rf "${linkedHome}"`,
+        `rm -rf "${workspace}"`,
+        `rm -rf "${workspace}"/*`,
+      ]) {
+        expect(checkAbsoluteDeny(bash(command), PROJECT_ROOT))
+          .toMatchObject({ denied: true, patternId: 'user_kodax_write' });
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+      setAgentConfigHome(USER_KODAX);
+    }
+  });
+
+  it.runIf(process.platform === 'win32')('BLOCKS Win32 aliases of protected paths', () => {
+    for (const target of [
+      path.join(USER_KODAX, 'runtime.', 'state.json'),
+      path.join(USER_KODAX, 'runtime ', 'state.json'),
+      path.join(USER_KODAX, 'config.json.'),
+      path.join(USER_KODAX, 'mcp-tokens.', 'token.json'),
+    ]) {
+      expect(checkAbsoluteDeny(write(target), PROJECT_ROOT))
+        .toMatchObject({ denied: true, patternId: 'user_kodax_write' });
+    }
   });
 });
 

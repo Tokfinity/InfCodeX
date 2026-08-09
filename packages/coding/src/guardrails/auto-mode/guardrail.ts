@@ -47,6 +47,7 @@ import type {
 } from '@kodax-ai/agent';
 
 import {
+  checkAgentHomeHardDeny,
   checkAbsoluteDeny,
   type AbsoluteDenyCheck,
   type AbsoluteDenyResult,
@@ -164,6 +165,8 @@ export interface AutoModeRulesContext {
 export type AutoModePermissionBoundary =
   | 'workspace'
   | 'system-temp'
+  | 'agent-home'
+  | 'agent-home-readonly'
   | 'outside-workspace'
   | 'protected'
   | 'unresolved';
@@ -255,6 +258,9 @@ export interface AutoModeGuardrailConfig {
 
   /** Whether ordinary bash calls can be enforced by an OS workspace sandbox. */
   readonly workspaceShellSandboxAvailable?: boolean;
+
+  /** Host invariant: every allowed Bash call must receive exact fail-closed admission. */
+  readonly requireWorkspaceShellSandbox?: boolean;
 
   /** Mint one exact bash call for workspace-sandboxed execution. */
   readonly admitWorkspaceSandboxCall?: (
@@ -425,6 +431,14 @@ export interface AutoModeGuardrailConfig {
    * (degrades to a synchronous classify — identical verdict outcome).
    */
   readonly speculativeWindowMs?: number;
+}
+
+export interface AgentHomeShellBoundaryGuardrailOptions {
+  readonly projectRoot: string;
+  readonly executionCwd: string;
+  readonly failClosedShellSandbox: boolean;
+  readonly effectTreeContainmentAvailable?: boolean;
+  readonly protectedReadReviewAvailable?: boolean;
 }
 
 /**
@@ -1328,6 +1342,90 @@ function isSandboxContainableMutation(
   return hasMutation;
 }
 
+function isStaticallyBoundShellCall(
+  permissionReview: AutoModePermissionReview,
+): boolean {
+  if (
+    permissionReview.analysis.status !== 'complete'
+    || permissionReview.analysis.binding !== 'exact'
+    || permissionReview.operations.length === 0
+  ) return false;
+  return permissionReview.operations.every((operation) => {
+    if (operation.kind === 'execute' || operation.kind === 'unknown') return false;
+    if ('target' in operation) return operation.target.boundary !== 'unresolved';
+    return 'source' in operation
+      && operation.source.boundary !== 'unresolved'
+      && operation.destination.boundary !== 'unresolved';
+  });
+}
+
+function hasProtectedShellRead(permissionReview: AutoModePermissionReview): boolean {
+  return permissionReview.operations.some((operation) => (
+    operation.kind === 'read' && operation.target.boundary === 'protected'
+  ));
+}
+
+export function createAgentHomeShellBoundaryGuardrail(
+  options: AgentHomeShellBoundaryGuardrailOptions,
+): ToolGuardrail {
+  const canContainOpaqueShell = options.failClosedShellSandbox
+    && options.effectTreeContainmentAvailable === true;
+  return {
+    kind: 'tool',
+    name: 'agent-home-shell-boundary',
+    async beforeTool(call): Promise<GuardrailVerdict> {
+      const bridgeTarget = resolveToolBridgeTarget(call);
+      const guardedCall = bridgeTarget?.ok ? bridgeTarget.call : call;
+      if (guardedCall.name !== 'bash') return { action: 'allow' };
+      const hardBoundary = checkAgentHomeHardDeny(
+        guardedCall,
+        options.projectRoot,
+        options.executionCwd,
+      );
+      if (hardBoundary.denied) {
+        return { action: 'block', reason: hardBoundary.reason };
+      }
+      try {
+        const review = await analyzeAutoModeCall(guardedCall, {
+          projectRoot: options.projectRoot,
+          executionCwd: options.executionCwd,
+          signals: [],
+        });
+        if (
+          review !== undefined
+          && hasProtectedShellRead(review)
+          && options.protectedReadReviewAvailable !== true
+        ) {
+          return {
+            action: 'block',
+            reason: 'Reading protected Agent Home data requires explicit host review.',
+          };
+        }
+        if (
+          canContainOpaqueShell
+          && options.protectedReadReviewAvailable === true
+        ) return { action: 'allow' };
+        if (review !== undefined && isStaticallyBoundShellCall(review)) {
+          return { action: 'allow' };
+        }
+      } catch {
+        if (
+          canContainOpaqueShell
+          && options.protectedReadReviewAvailable === true
+        ) return { action: 'allow' };
+      }
+      return {
+        action: 'block',
+        reason: options.failClosedShellSandbox && !canContainOpaqueShell
+          ? 'The opaque shell command requires authoritative process-tree containment.'
+          : options.failClosedShellSandbox
+            ? 'The opaque shell command requires explicit host review.'
+          : 'The opaque shell command requires a fail-closed OS sandbox.',
+      };
+    },
+  };
+}
+
 export function createAutoModeToolGuardrail(
   config: AutoModeGuardrailConfig,
 ): AutoModeToolGuardrail {
@@ -1390,6 +1488,23 @@ export function createAutoModeToolGuardrail(
     }
 
     const allowFinal = (): GuardrailVerdict => {
+      if (guardedCall.name === 'bash' && config.requireWorkspaceShellSandbox === true) {
+        if (permissionReview === undefined) {
+          return {
+            action: 'block',
+            reason: 'The shell command was not started because the required OS sandbox is unavailable.',
+          };
+        }
+        if (config.admitWorkspaceSandboxCall !== undefined) {
+          config.admitWorkspaceSandboxCall(guardedCall, permissionReview);
+          return { action: 'allow' };
+        }
+        if (isStaticallyBoundShellCall(permissionReview)) return { action: 'allow' };
+        return {
+          action: 'block',
+          reason: 'The opaque shell command was not started because the required OS sandbox is unavailable.',
+        };
+      }
       if (
         guardedCall.name === 'bash'
         && permissionReview
@@ -1453,6 +1568,11 @@ export function createAutoModeToolGuardrail(
         classifierFailureKind: 'provider_error',
       });
     };
+
+    const hardBoundary = checkAgentHomeHardDeny(guardedCall, projectRoot, executionCwd);
+    if (hardBoundary.denied) {
+      return { action: 'block', reason: hardBoundary.reason };
+    }
 
     // The historical "Tier 0" detector remains useful as deterministic facts,
     // but Auto[LLM] has one decision owner: the classifier. Only explicitly
@@ -1526,6 +1646,18 @@ export function createAutoModeToolGuardrail(
       if (action === '') {
         action = safeFallbackToClassifierInput(guardedCall.name, guardedCall.input);
       }
+      permissionReview = fallbackPermissionReview(
+        guardedCall.name,
+        action,
+        'analyzer_unavailable',
+      );
+    }
+    if (
+      !permissionReview
+      && guardedCall.name === 'bash'
+      && config.requireWorkspaceShellSandbox === true
+      && action !== ''
+    ) {
       permissionReview = fallbackPermissionReview(
         guardedCall.name,
         action,

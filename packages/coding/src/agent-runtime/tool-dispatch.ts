@@ -249,20 +249,29 @@ export async function executeToolCall(
   // branch carry it.
   const ctxWithToolHooks = createContextForToolCall(events, toolCall, ctx);
 
-  const result = await executeTool(toolCall.name, toolCall.input ?? {}, ctxWithToolHooks);
+  events.onToolExecutionStart?.(
+    { id: toolCall.id, name: toolCall.name },
+    toolMeta,
+  );
+  let result: string;
+  try {
+    result = await executeTool(toolCall.name, toolCall.input ?? {}, ctxWithToolHooks);
 
-  // MCP fallback: when a built-in tool fails, try to find a same-name MCP tool.
-  if (result.startsWith('[Tool Error]') && ctx.extensionRuntime) {
-    const fallbackResult = await tryMcpFallback(
-      toolCall.name,
-      toolCall.input ?? {},
-      ctx,
-    );
-    if (fallbackResult !== undefined) {
-      return fallbackResult;
+    // MCP fallback: when a built-in tool fails, try to find a same-name MCP tool.
+    if (result.startsWith('[Tool Error]') && ctx.extensionRuntime) {
+      const fallbackResult = await tryMcpFallback(
+        toolCall.name,
+        toolCall.input ?? {},
+        ctx,
+      );
+      if (fallbackResult !== undefined) result = fallbackResult;
     }
+  } finally {
+    events.onToolExecutionEnd?.(
+      { id: toolCall.id, name: toolCall.name },
+      toolMeta,
+    );
   }
-
   return result;
 }
 
@@ -415,12 +424,23 @@ async function executeBridgeToolCall(input: {
   }
 
   const ctxWithToolHooks = createContextForToolCall(input.events, targetCall, input.ctx);
-  let result = await executeTool(targetName, targetInput, ctxWithToolHooks);
-  if (result.startsWith('[Tool Error]') && input.ctx.extensionRuntime) {
-    const fallbackResult = await tryMcpFallback(targetName, targetInput, input.ctx);
-    if (fallbackResult !== undefined) {
-      result = fallbackResult;
+  const toolMeta = createToolEventMeta(input.events, targetCall.id);
+  input.events.onToolExecutionStart?.(
+    { id: targetCall.id, name: targetName },
+    toolMeta,
+  );
+  let result: string;
+  try {
+    result = await executeTool(targetName, targetInput, ctxWithToolHooks);
+    if (result.startsWith('[Tool Error]') && input.ctx.extensionRuntime) {
+      const fallbackResult = await tryMcpFallback(targetName, targetInput, input.ctx);
+      if (fallbackResult !== undefined) result = fallbackResult;
     }
+  } finally {
+    input.events.onToolExecutionEnd?.(
+      { id: targetCall.id, name: targetName },
+      toolMeta,
+    );
   }
   return result;
 }

@@ -2,11 +2,13 @@ import fs from 'node:fs';
 import os from 'os';
 import path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { setAgentConfigHome } from '@kodax-ai/agent';
 import {
   getDirectShellBypassBlockReason,
   getPlanModeBlockReason,
   isAlwaysConfirmPath,
   isBashReadCommand,
+  isBashReadCommandAutoAllowed,
   isBashWriteCommand,
   isCommandOnProtectedPath,
   isHelpCommand,
@@ -433,6 +435,31 @@ describe('isBashReadCommand — Windows search tools and pipe chains (Issue 129)
 
   it('rejects redirects to real files even with a read-only base command', () => {
     expect(isBashReadCommand('grep foo file > out.txt')).toBe(false);
+  });
+});
+
+describe('Agent Home permission narrowing', () => {
+  it('allows ordinary descendants while keeping sensitive reads reviewable', () => {
+    const projectRoot = createProjectRoot();
+    const agentHome = createTempDirSync('kodax-agent-home-');
+    createdRoots.push(agentHome);
+    fs.mkdirSync(path.join(agentHome, 'agents'), { recursive: true });
+    fs.mkdirSync(path.join(agentHome, 'mcp-tokens'), { recursive: true });
+    setAgentConfigHome(agentHome);
+    try {
+      const agentFile = path.join(agentHome, 'agents', 'reviewer.md');
+      const tokenFile = path.join(agentHome, 'mcp-tokens', 'token.json');
+      expect(isAlwaysConfirmPath(agentFile, projectRoot)).toBe(false);
+      expect(isAlwaysConfirmPath(path.join(agentHome, 'config.json'), projectRoot)).toBe(true);
+      expect(isAlwaysConfirmPath(
+        path.join(agentHome, 'processes', 'children', 'forged.json'),
+        projectRoot,
+      )).toBe(true);
+      expect(isBashReadCommandAutoAllowed(`type "${agentFile}"`, projectRoot)).toBe(true);
+      expect(isBashReadCommandAutoAllowed(`type "${tokenFile}"`, projectRoot)).toBe(false);
+    } finally {
+      setAgentConfigHome(undefined);
+    }
   });
 });
 

@@ -274,15 +274,36 @@ export interface SkillPathsConfig {
   learnedArea?: LearnedSkillDiscoveryConfig;
 }
 
-export interface LearnedSkillDiscoveryConfig {
+export interface LearnedSkillDiscoveryScope {
+  readonly configHomeHash: string;
+  readonly tenantHash: string;
+  readonly projectHash: string;
+}
+
+interface LearnedSkillDiscoveryConfigBase {
   readonly rootDir: string;
-  readonly expectedScope: {
-    readonly configHomeHash: string;
-    readonly tenantHash: string;
-    readonly projectHash: string;
-  };
+  /** Additional identity-specific Learned Areas, in fallback precedence order. */
+  readonly additionalRootDirs?: readonly string[];
   readonly testingBindings?: Readonly<Record<string, string>>;
   readonly now?: string;
+}
+
+export interface LearnedSkillDiscoveryConfig extends LearnedSkillDiscoveryConfigBase {
+  /**
+   * Primary identity scope. Kept required so existing consumers can both
+   * construct and read the original public configuration shape unchanged.
+   */
+  readonly expectedScope: LearnedSkillDiscoveryScope;
+  /**
+   * One or more identity scopes paired with rootDir/additionalRootDirs.
+   * Multi-scope support resolves the non-deterministic divergence between
+   * `remote:*` (git remote available) and `local:*` (git remote unavailable)
+   * project identities within the same repository.
+   */
+  readonly expectedScopes?: readonly [
+    LearnedSkillDiscoveryScope,
+    ...LearnedSkillDiscoveryScope[],
+  ];
 }
 
 // === Default Skill Paths ===

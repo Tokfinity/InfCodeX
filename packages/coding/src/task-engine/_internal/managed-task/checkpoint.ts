@@ -10,7 +10,7 @@
  * reason (task-engine state machines build these records inline).
  */
 
-import { mkdir, readdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
@@ -19,7 +19,12 @@ import type {
   KodaXManagedTask,
   KodaXOptions,
 } from '../../../types.js';
-import { getManagedTaskSurface, getManagedTaskWorkspaceRoot } from './workspace.js';
+import {
+  deleteManagedTaskFile,
+  getManagedTaskSurface,
+  getManagedTaskWorkspaceRoot,
+  writeManagedTaskFile as writeFile,
+} from './workspace.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -81,7 +86,6 @@ export async function writeCheckpoint(
   workspaceDir: string,
   checkpoint: ManagedTaskCheckpoint,
 ): Promise<void> {
-  await mkdir(workspaceDir, { recursive: true });
   await writeFile(
     path.join(workspaceDir, CHECKPOINT_FILE),
     `${JSON.stringify(checkpoint, null, 2)}\n`,
@@ -90,11 +94,7 @@ export async function writeCheckpoint(
 }
 
 export async function deleteCheckpoint(workspaceDir: string): Promise<void> {
-  try {
-    await unlink(path.join(workspaceDir, CHECKPOINT_FILE));
-  } catch {
-    // Checkpoint may already be gone — safe to ignore.
-  }
+  await deleteManagedTaskFile(path.join(workspaceDir, CHECKPOINT_FILE));
 }
 
 export async function findValidCheckpoint(

@@ -680,6 +680,13 @@ export function rememberChildProcessTree(child: ChildProcess): string | undefine
     || child.pid === undefined
   ) return undefined;
   const tracked = windowsCaptureByChild.get(child);
+  if (tracked !== undefined && !isChildProcessExited(child)) {
+    const refreshed = captureWindowsProcessTree(child.pid, tracked.root.creationTime);
+    if (refreshed !== undefined && refreshed !== null) {
+      windowsCaptureByChild.set(child, refreshed);
+    }
+    return tracked.root.creationTime;
+  }
   const snapshot = readWindowsProcessSnapshot();
   if (tracked !== undefined && isChildProcessExited(child)) {
     if (snapshot === undefined) return tracked.root.creationTime;

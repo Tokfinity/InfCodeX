@@ -1,7 +1,7 @@
 import path from 'node:path';
 import type { RunnerToolCall } from '@kodax-ai/agent';
 
-import { isAlwaysConfirmPath, isBashReadCommand } from './permission.js';
+import { isAlwaysConfirmPath, isBashReadCommandAutoAllowed } from './permission.js';
 import { computeConfirmTools, FILE_MODIFICATION_TOOLS } from './types.js';
 
 const ACCEPT_EDITS_CONFIRM_TOOLS = computeConfirmTools('accept-edits');
@@ -18,7 +18,8 @@ export function allowsAcceptEditsClassifierFallback(
 ): boolean {
   if (call.name === 'bash') {
     const command = typeof call.input.command === 'string' ? call.input.command : '';
-    return command.length > 0 && isBashReadCommand(command);
+    return command.length > 0
+      && isBashReadCommandAutoAllowed(command, projectRoot, executionCwd);
   }
 
   if (FILE_MODIFICATION_TOOLS.has(call.name)) {

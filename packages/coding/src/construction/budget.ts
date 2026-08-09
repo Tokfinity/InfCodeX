@@ -47,6 +47,9 @@
 
 import path from 'path';
 import fs from 'fs/promises';
+import { createHash } from 'node:crypto';
+import { acquireKodaXFileLock, getAgentConfigPath } from '@kodax-ai/agent';
+import { withFileMutation } from '../tools/_internal/file-mutation-queue.js';
 
 /**
  * Default cross-run self-modify budget. N=3 was chosen as the
@@ -147,27 +150,25 @@ export function remaining(state: BudgetState): number {
  * the post-write state so callers can immediately render `remaining`
  * to the user without an extra read.
  *
- * The "atomic" qualifier here is best-effort: KodaX is a single-user
- * CLI, concurrent writers are not a real-world concern. We perform
- * read-modify-write on a single small JSON file and rely on the OS's
- * single-process filesystem semantics. Windows' lack of a true
- * atomic-replace primitive is acknowledged but not worked around —
- * matches the rest of the construction runtime's persistence model.
+ * The complete read/check/write transaction holds a cross-process lock,
+ * so two Runtime or standalone owners cannot consume the same final slot.
  */
 export async function consumeBudget(
   name: string,
   io: BudgetIO = {},
 ): Promise<BudgetState> {
   const cwd = io.cwd ?? process.cwd();
-  const before = await readBudget(name, { cwd });
-  const next: BudgetState = {
-    name,
-    limit: before.limit,
-    count: before.count + 1,
-    lastModifiedAt: new Date().toISOString(),
-  };
-  await persist(cwd, next);
-  return next;
+  return withBudgetTransaction(cwd, name, (before) => {
+    if (before.count >= before.limit) {
+      throw new Error(`Self-modify budget exhausted for '${name}'.`);
+    }
+    return {
+      name,
+      limit: before.limit,
+      count: before.count + 1,
+      lastModifiedAt: new Date().toISOString(),
+    };
+  });
 }
 
 /**
@@ -182,20 +183,38 @@ export async function resetBudget(
   io: BudgetIO = {},
 ): Promise<BudgetState> {
   const cwd = io.cwd ?? process.cwd();
-  const before = await readBudget(name, { cwd });
-  const next: BudgetState = {
+  return withBudgetTransaction(cwd, name, (before) => ({
     name,
     limit: before.limit,
     count: 0,
     lastModifiedAt: new Date().toISOString(),
-  };
-  await persist(cwd, next);
-  return next;
+  }));
 }
 
-async function persist(cwd: string, state: BudgetState): Promise<void> {
-  const file = budgetPath(cwd, state.name);
-  await fs.mkdir(path.dirname(file), { recursive: true });
+function budgetLockPath(file: string): string {
+  const key = createHash('sha256').update(file).digest('hex');
+  return getAgentConfigPath('runtime', 'construction-budget-locks', `${key}.lock`);
+}
+
+async function withBudgetTransaction(
+  cwd: string,
+  name: string,
+  update: (before: BudgetState) => BudgetState,
+): Promise<BudgetState> {
+  const file = budgetPath(cwd, name);
+  return withFileMutation(file, async () => {
+    const release = await acquireKodaXFileLock(budgetLockPath(file), 5_000);
+    try {
+      const next = update(await readBudget(name, { cwd }));
+      await persist(file, next);
+      return next;
+    } finally {
+      await release();
+    }
+  });
+}
+
+async function persist(file: string, state: BudgetState): Promise<void> {
   // Persist only `name + count + lastModifiedAt`. We intentionally do
   // NOT write `limit` — see the module docstring: any value found on
   // disk is ignored, so writing it would only mislead operators
@@ -205,5 +224,6 @@ async function persist(cwd: string, state: BudgetState): Promise<void> {
     count: state.count,
     ...(state.lastModifiedAt ? { lastModifiedAt: state.lastModifiedAt } : {}),
   };
+  await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(file, JSON.stringify(payload, null, 2), 'utf8');
 }

@@ -42,10 +42,25 @@ describe('analyzePowerShellMutation', () => {
     });
   });
 
-  it('marks array/dynamic path syntax incomplete when quote provenance is unavailable', () => {
+  it('expands static Path arrays into independently reviewable operations', () => {
     expect(analyzePowerShellMutation([
       'Remove-Item', '-Path', 'one.txt,two.txt',
-    ])).toMatchObject({ status: 'incomplete' });
+    ])).toMatchObject({
+      status: 'complete',
+      operations: [
+        { kind: 'delete', target: 'one.txt' },
+        { kind: 'delete', target: 'two.txt' },
+      ],
+    });
+    expect(analyzePowerShellMutation([
+      'Set-Content', '-Path', 'sessions/a.json,tool-results/b.txt', '-Value', 'data',
+    ])).toMatchObject({
+      status: 'complete',
+      operations: [
+        { kind: 'write', target: 'sessions/a.json' },
+        { kind: 'write', target: 'tool-results/b.txt' },
+      ],
+    });
   });
 
   it('rejects bracket wildcards for Path while preserving exact LiteralPath targets', () => {

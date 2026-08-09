@@ -4,7 +4,10 @@ import type {
 } from '../types.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { resolveRepoIntelligenceStorageDir } from './internal.js';
+import {
+  probeRepoIntelligenceStorage,
+  resolveRepoIntelligenceStorageDir,
+} from './internal.js';
 import { DEFAULT_REPO_INTELLIGENCE_DIR } from './semantic-shared.js';
 import { getRepoIntelligenceWorkerPathForDiagnostics } from './semantic-worker-client.js';
 
@@ -150,14 +153,11 @@ export async function inspectRepoIntelligenceRuntime(
     `.repo-intelligence-status-${process.pid}-${Date.now()}.tmp`,
   );
   try {
-    await fs.mkdir(storageRoot, { recursive: true });
-    await fs.writeFile(probePath, 'ok', 'utf8');
+    await probeRepoIntelligenceStorage(storageRoot, probePath);
   } catch (error) {
     inspection.status = 'limited';
     inspection.error = error instanceof Error ? error.message : String(error);
     inspection.warnings.push(`Repo intelligence cache directory is not writable: ${storageRoot}`);
-  } finally {
-    await fs.rm(probePath, { force: true }).catch(() => undefined);
   }
   return inspection;
 }

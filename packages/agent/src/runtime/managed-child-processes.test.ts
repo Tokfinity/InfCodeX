@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import nodeFs from 'node:fs';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -21,15 +21,19 @@ const mutableNodeFs = createRequire(import.meta.url)('node:fs') as {
 };
 
 function childRegistryPath(home: string, pid: number, registrationId: string): string {
-  return path.join(home, 'processes', 'children', `${pid}.${registrationId}.json`);
+  return path.join(home, 'runtime', 'processes', 'children', `${pid}.${registrationId}.json`);
+}
+
+function legacyChildRegistryPath(home: string, fileName: string): string {
+  return path.join(home, 'processes', 'children', fileName);
 }
 
 function unresolvedRegistryPath(home: string, file: string): string {
-  return path.join(home, 'processes', 'children', '.unresolved', path.basename(file));
+  return path.join(home, 'runtime', 'processes', 'children', '.unresolved', path.basename(file));
 }
 
 async function registeredChildFiles(home: string, pid: number): Promise<string[]> {
-  const directory = path.join(home, 'processes', 'children');
+  const directory = path.join(home, 'runtime', 'processes', 'children');
   return (await readdir(directory))
     .filter((name) => name.startsWith(`${pid}.`) && name.endsWith('.json'))
     .map((name) => path.join(directory, name));
@@ -57,7 +61,7 @@ async function writeLegacyRegistryRecord(
   if (typeof pid !== 'number') {
     throw new Error('test registry record needs a numeric pid');
   }
-  const file = path.join(home, 'processes', 'children', `${pid}.json`);
+  const file = path.join(home, 'runtime', 'processes', 'children', `${pid}.json`);
   await mkdir(path.dirname(file), { recursive: true });
   await writeFile(file, JSON.stringify(record), 'utf8');
   return file;
@@ -127,6 +131,63 @@ describe('managed child process registry', () => {
     await expect(waitForExit(child)).resolves.toBeUndefined();
   });
 
+  it('quarantines unauthenticated pre-Runtime registry evidence without signaling its process', async () => {
+    tempHome = await mkdtemp(path.join(tmpdir(), 'kodax-managed-child-upgrade-'));
+    setAgentConfigHome(tempHome);
+    child = spawn(process.execPath, ['-e', PARENT_WATCHED_CHILD_SCRIPT], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    if (child.pid === undefined) throw new Error('child pid missing');
+    const unregister = registerManagedChildProcess(child, {
+      kind: 'pre-runtime-registry-child',
+      command: process.execPath,
+      args: ['-e', PARENT_WATCHED_CHILD_SCRIPT],
+    }, { manualUnregister: true });
+    const [currentFile] = await registeredChildFiles(tempHome, child.pid);
+    if (currentFile === undefined) throw new Error('managed child record missing');
+    const record = JSON.parse(await readFile(currentFile, 'utf8')) as Record<string, unknown>;
+    record.ownerPid = findDeadPid();
+    delete record.ownerProcessStartIdentity;
+    const legacyFile = legacyChildRegistryPath(tempHome, path.basename(currentFile));
+    await mkdir(path.dirname(legacyFile), { recursive: true });
+    await writeFile(legacyFile, JSON.stringify(record), 'utf8');
+    unregister();
+
+    await expect(cleanupRegisteredManagedChildren({ includeCurrentOwner: true }))
+      .resolves.toMatchObject({ killed: 0, skipped: 1 });
+    expect(() => process.kill(child!.pid!, 0)).not.toThrow();
+    await expect(readFile(legacyFile, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(unresolvedRegistryPath(tempHome, legacyFile), 'utf8'))
+      .resolves.toContain('pre-runtime-registry-child');
+  });
+
+  it('does not traverse a legacy registry symlink or move files outside Agent Home', async () => {
+    tempHome = await mkdtemp(path.join(tmpdir(), 'kodax-managed-child-legacy-link-'));
+    const victim = await mkdtemp(path.join(tmpdir(), 'kodax-managed-child-victim-'));
+    setAgentConfigHome(tempHome);
+    const victimRecord = path.join(victim, 'unrelated.json');
+    await writeFile(victimRecord, '{}', 'utf8');
+    const processes = path.join(tempHome, 'processes');
+    await mkdir(processes, { recursive: true });
+    await symlink(victim, path.join(processes, 'children'), process.platform === 'win32' ? 'junction' : 'dir');
+
+    try {
+      await expect(cleanupRegisteredManagedChildren()).resolves.toEqual({
+        killed: 0,
+        pruned: 0,
+        skipped: 0,
+      });
+      await expect(readFile(victimRecord, 'utf8')).resolves.toBe('{}');
+      await expect(readFile(
+        unresolvedRegistryPath(tempHome, victimRecord),
+        'utf8',
+      )).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(victim, { recursive: true, force: true });
+    }
+  });
+
   it('strictly cleans a current-owner child after its registry file is corrupted', async () => {
     tempHome = await mkdtemp(path.join(tmpdir(), 'kodax-managed-child-'));
     setAgentConfigHome(tempHome);
@@ -179,6 +240,29 @@ describe('managed child process registry', () => {
       requireCurrentOwnerCleanup: true,
     })).resolves.toMatchObject({ killed: 1, skipped: 0 });
     await expect(waitForExit(child)).resolves.toBeUndefined();
+  });
+
+  it('rejects an external-effect gate when durable registration fails', async () => {
+    tempHome = await mkdtemp(path.join(tmpdir(), 'kodax-managed-child-'));
+    setAgentConfigHome(tempHome);
+    child = spawn(process.execPath, ['-e', PARENT_WATCHED_CHILD_SCRIPT], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    const writeFileSync = mutableNodeFs.writeFileSync;
+    mutableNodeFs.writeFileSync = (() => {
+      throw Object.assign(new Error('registry unavailable'), { code: 'ENOSPC' });
+    }) as typeof nodeFs.writeFileSync;
+    syncBuiltinESMExports();
+    try {
+      expect(() => registerManagedChildProcess(child!, {
+        kind: 'external-effect-gate',
+        command: process.execPath,
+      }, { requireDurableRecord: true })).toThrow('registry unavailable');
+    } finally {
+      mutableNodeFs.writeFileSync = writeFileSync;
+      syncBuiltinESMExports();
+    }
   });
 
   it('surfaces an unreadable registry during strict final cleanup', async () => {

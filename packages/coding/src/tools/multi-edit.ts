@@ -19,7 +19,6 @@
 import fs from 'fs/promises';
 import fsSync from 'fs';
 import type { KodaXToolExecutionContext } from '../types.js';
-import { getFileBackups } from './write.js';
 import { generateDiff, countChanges } from './diff.js';
 import { resolveExecutionPath } from '../runtime-paths.js';
 import { formatDiffPreview } from './truncate.js';
@@ -28,7 +27,7 @@ import {
   findUniqueNormalizedBlockMatch,
   findUniqueUnicodeNormalizedBlockMatch,
 } from './text-anchor.js';
-import { withFileMutation } from './_internal/file-mutation-queue.js';
+import { recordFileBackup, withFileMutation } from './_internal/file-mutation-queue.js';
 import { buildStaleWriteReason } from '../multi-instance/content-hash-cache.js';
 import { memoryMutationDenial } from './memory-mutation-guard.js';
 import { formatActiveFileWarning } from '../multi-instance/active-file-warning.js';
@@ -118,8 +117,7 @@ export async function toolMultiEdit(
       return `[Tool Error] multi_edit: all ${edits.length} edits produced no net change. Check old_string / new_string values.`;
     }
 
-    ctx.backups.set(filePath, originalContent);
-    getFileBackups().set(filePath, originalContent);
+    recordFileBackup(ctx.backups, filePath, originalContent);
     await fs.writeFile(filePath, runningContent, 'utf-8');
 
     // FEATURE_125 v0.7.41 — update content-hash cache with the post-batch

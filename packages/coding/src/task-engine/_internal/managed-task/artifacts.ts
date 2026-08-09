@@ -23,7 +23,6 @@
  * workspaceDir contains the same snapshot files the legacy path produced.
  */
 
-import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import type {
@@ -37,6 +36,7 @@ import type {
   KodaXTaskStatus,
   KodaXTaskVerificationContract,
 } from '../../../types.js';
+import { writeManagedTaskFile as writeFile } from './workspace.js';
 import { formatOptionalListSection } from './formatting.js';
 
 export function mergeEvidenceArtifacts(
@@ -310,7 +310,6 @@ export async function writeManagedTaskSnapshotArtifacts(
   workspaceDir: string,
   task: KodaXManagedTask,
 ): Promise<void> {
-  await mkdir(workspaceDir, { recursive: true });
   await writeFile(
     path.join(workspaceDir, 'contract.json'),
     `${JSON.stringify(task.contract, null, 2)}\n`,

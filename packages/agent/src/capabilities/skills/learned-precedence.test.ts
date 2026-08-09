@@ -43,6 +43,71 @@ const learnedSpec: DeclarativeSkillSpec = {
 };
 
 describe('learned Skill precedence', () => {
+  it('fails fast when physical roots do not have one paired expected scope each', async () => {
+    const primaryRootDir = await mkdtemp(join(tmpdir(), 'kodax-learned-invalid-pairing-'));
+    const secondaryRootDir = await mkdtemp(join(tmpdir(), 'kodax-learned-invalid-pairing-'));
+    tempRoots.push(primaryRootDir, secondaryRootDir);
+
+    for (const learnedArea of [
+      {
+        rootDir: primaryRootDir,
+        expectedScope: scope,
+        expectedScopes: [] as unknown as [typeof scope, ...(typeof scope)[]],
+      },
+      {
+        rootDir: primaryRootDir,
+        additionalRootDirs: [secondaryRootDir],
+        expectedScope: scope,
+        expectedScopes: [scope],
+      },
+    ]) {
+      const registry = new SkillRegistry(undefined, {
+        projectPaths: [],
+        userPaths: [],
+        pluginPaths: [],
+        builtinPath: join(primaryRootDir, 'builtin'),
+        learnedArea,
+      });
+      await expect(registry.discover()).rejects.toThrow(/expected scope|physical root/i);
+    }
+  });
+
+  it('keeps the legacy single expectedScope configuration source-compatible', async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'kodax-learned-legacy-scope-'));
+    tempRoots.push(rootDir);
+    const artifact = await stageLearnedSkillRevision(rootDir, 'lc_legacy_scope', learnedSpec);
+    const store = new LearnedAreaStore(rootDir);
+    await store.initialize();
+    const record = createLearnedSkillRecord({
+      capabilityId: 'lc_legacy_scope',
+      displayName: 'Verify release',
+      scope,
+      artifact,
+      provenance: {
+        jobId: 'job-legacy',
+        inputHash: 'd'.repeat(64),
+        decisionId: 'decision-legacy',
+        actionId: 'action-legacy',
+      },
+      now: '2026-07-27T00:00:00.000Z',
+    });
+    await store.writeCapability({
+      ...record,
+      lifecycle: 'active_learned',
+      canary: { ...record.canary, verifiedSuccesses: 1 },
+    });
+
+    const registry = new SkillRegistry(undefined, {
+      projectPaths: [],
+      userPaths: [],
+      pluginPaths: [],
+      builtinPath: join(rootDir, 'builtin'),
+      learnedArea: { rootDir, expectedScope: scope },
+    });
+    await registry.discover();
+    expect(registry.has('verify-release')).toBe(true);
+  });
+
   it('keeps the legacy SkillSource union exhaustive while exposing learned discovery', () => {
     const labels: Record<SkillSource, string> = {
       project: 'project',
@@ -105,6 +170,7 @@ describe('learned Skill precedence', () => {
       learnedArea: {
         rootDir,
         expectedScope: scope,
+        expectedScopes: [scope],
         now: '2026-07-27T00:01:01.000Z',
         testingBindings: {},
       },
@@ -120,6 +186,7 @@ describe('learned Skill precedence', () => {
       learnedArea: {
         rootDir,
         expectedScope: scope,
+        expectedScopes: [scope],
         now: '2026-07-27T00:01:01.000Z',
         testingBindings: { lc_verify_release: binding?.bindingId ?? '' },
       },
@@ -168,7 +235,7 @@ describe('learned Skill precedence', () => {
       userPaths: [],
       pluginPaths: [],
       builtinPath: join(rootDir, 'builtin'),
-      learnedArea: { rootDir, expectedScope: scope },
+      learnedArea: { rootDir, expectedScope: scope, expectedScopes: [scope] },
     });
     await registry.discover();
     expect(registry.get('verify-release')?.source).toBe('project');
@@ -179,12 +246,89 @@ describe('learned Skill precedence', () => {
       userPaths: [],
       pluginPaths: [],
       builtinPath: join(rootDir, 'builtin'),
-      learnedArea: { rootDir, expectedScope: scope },
+      learnedArea: { rootDir, expectedScope: scope, expectedScopes: [scope] },
     });
     await learnedOnly.discover();
     expect(learnedOnly.has('verify-release')).toBe(false);
     expect(await store.readCapability('lc_verify_release')).toMatchObject({
       lifecycle: 'quarantined',
     });
+  });
+
+  it('discovers a learned skill from a secondary physical Learned Area root', async () => {
+    const primaryRootDir = await mkdtemp(join(tmpdir(), 'kodax-learned-primary-root-'));
+    const secondaryRootDir = await mkdtemp(join(tmpdir(), 'kodax-learned-secondary-root-'));
+    tempRoots.push(primaryRootDir, secondaryRootDir);
+
+    // The record is written under the "remote" scope (as drain would do
+    // when git remote is available).
+    const remoteScope: LearnedCapabilityScope = {
+      configHomeHash: 'a'.repeat(64),
+      tenantHash: 'b'.repeat(64),
+      projectHash: 'd'.repeat(64),
+    };
+    const localScope: LearnedCapabilityScope = {
+      configHomeHash: 'a'.repeat(64),
+      tenantHash: 'b'.repeat(64),
+      projectHash: 'c'.repeat(64),
+    };
+
+    const artifact = await stageLearnedSkillRevision(secondaryRootDir, 'lc_multi_scope', learnedSpec);
+    const store = new LearnedAreaStore(secondaryRootDir);
+    await store.initialize();
+    await store.writeCapability(createLearnedSkillRecord({
+      capabilityId: 'lc_multi_scope',
+      displayName: 'Verify release',
+      scope: remoteScope,
+      artifact,
+      provenance: {
+        jobId: 'job-multi',
+        inputHash: 'e'.repeat(64),
+        decisionId: 'decision-multi',
+        actionId: 'action-multi',
+      },
+      now: '2026-07-27T00:00:00.000Z',
+    }));
+    await admitLearnedSkillBinding(store, 'lc_multi_scope', {
+      bindingId: 'binding-multi',
+      ownerSessionRef: 'owner-multi',
+      now: new Date('2026-07-27T00:01:00.000Z'),
+      ttlMs: 60_000,
+    });
+
+    // The matching record is physically absent from primaryRootDir.
+    const registry = new SkillRegistry(undefined, {
+      projectPaths: [],
+      userPaths: [],
+      pluginPaths: [],
+      builtinPath: join(primaryRootDir, 'builtin'),
+      learnedArea: {
+        rootDir: primaryRootDir,
+        additionalRootDirs: [secondaryRootDir],
+        expectedScope: localScope,
+        expectedScopes: [localScope, remoteScope],
+        now: '2026-07-27T00:01:01.000Z',
+        testingBindings: { lc_multi_scope: 'binding-multi' },
+      },
+    });
+    await registry.discover();
+    expect(registry.has('verify-release')).toBe(true);
+
+    // Control: without the secondary root the record is not discoverable.
+    const registryLocalOnly = new SkillRegistry(undefined, {
+      projectPaths: [],
+      userPaths: [],
+      pluginPaths: [],
+      builtinPath: join(primaryRootDir, 'builtin'),
+      learnedArea: {
+        rootDir: primaryRootDir,
+        expectedScope: localScope,
+        expectedScopes: [localScope],
+        now: '2026-07-27T00:01:01.000Z',
+        testingBindings: { lc_multi_scope: 'binding-multi' },
+      },
+    });
+    await registryLocalOnly.discover();
+    expect(registryLocalOnly.has('verify-release')).toBe(false);
   });
 });

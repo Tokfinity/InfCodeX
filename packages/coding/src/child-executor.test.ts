@@ -12,6 +12,8 @@ vi.mock('./agent.js', () => ({
 }));
 
 vi.mock('./tools/worktree.js', () => ({
+  createWorkflowWorktree: vi.fn(),
+  removeWorkflowWorktree: vi.fn(),
   toolWorktreeCreate: vi.fn(),
   toolWorktreeRemove: vi.fn(),
 }));
@@ -39,12 +41,12 @@ import {
   registerConstructedAgent,
 } from './construction/agent-resolver.js';
 import type { AgentArtifact } from './construction/types.js';
-import { toolWorktreeCreate, toolWorktreeRemove } from './tools/worktree.js';
+import { createWorkflowWorktree, removeWorkflowWorktree } from './tools/worktree.js';
 import { TOOL_OUTPUT_DIR_ENV } from './tools/truncate.js';
 
 const mockRunKodaX = runKodaX as ReturnType<typeof vi.fn>;
-const mockToolWorktreeCreate = vi.mocked(toolWorktreeCreate);
-const mockToolWorktreeRemove = vi.mocked(toolWorktreeRemove);
+const mockToolWorktreeCreate = vi.mocked(createWorkflowWorktree);
+const mockToolWorktreeRemove = vi.mocked(removeWorkflowWorktree);
 
 function createBundle(overrides: Partial<KodaXChildContextBundle> = {}): KodaXChildContextBundle {
   return {
@@ -1064,11 +1066,7 @@ describe('executeChildAgents — workflow accounting and isolation cleanup', () 
 
     expect(result.results[0]?.status).toBe('completed');
     expect(mockToolWorktreeRemove).toHaveBeenCalledWith(
-      {
-        action: 'remove',
-        worktree_path: '/tmp/kodax-worktree-cb-worktree',
-        discard_changes: false,
-      },
+      '/tmp/kodax-worktree-cb-worktree',
       expect.objectContaining({ executionCwd: '/test/repo' }),
     );
   });
@@ -1193,7 +1191,7 @@ describe('executeChildAgents', () => {
     );
 
     expect(mockToolWorktreeCreate).toHaveBeenCalledWith(
-      { description: 'workflow-cb-base', base_dir: '/runs/p/r1/worktrees' },
+      { description: 'workflow-cb-base' },
       expect.objectContaining({ workflowWorktreeBaseDir: '/runs/p/r1/worktrees' }),
     );
   });

@@ -286,6 +286,7 @@ async function importMainWithMocks(options: {
   vi.doMock('@kodax-ai/coding', () => ({
     runKodaX: vi.fn(),
     runManagedTask,
+    awaitLatestCodingMemoryReviewDrain: vi.fn(async () => undefined),
     KodaXClient: class KodaXClient {},
     KodaXEvents: class KodaXEvents {},
     KodaXAgentMode: {},

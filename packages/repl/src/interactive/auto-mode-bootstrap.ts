@@ -186,6 +186,7 @@ export async function bootstrapAutoMode(
         deps.executionCwd,
       ),
       workspaceShellSandboxAvailable: deps.workspaceShellSandboxAvailable,
+      requireWorkspaceShellSandbox: true,
       admitWorkspaceSandboxCall: deps.admitWorkspaceSandboxCall,
       log: deps.log,
       onEngineChange: deps.onEngineChange,

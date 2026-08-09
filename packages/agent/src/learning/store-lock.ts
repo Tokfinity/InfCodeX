@@ -31,17 +31,30 @@ export async function withLearningFileLock<T>(
   operation: () => Promise<T>,
   acquireTimeoutMs = LOCK_ACQUIRE_TIMEOUT_MS,
 ): Promise<T> {
-  await mkdir(dirname(lockPath), { recursive: true });
-  const lock = await acquireLock(lockPath, acquireTimeoutMs);
+  const release = await acquireLearningFileLock(lockPath, acquireTimeoutMs);
   try {
     return await operation();
   } finally {
+    await release();
+  }
+}
+
+export async function acquireLearningFileLock(
+  lockPath: string,
+  acquireTimeoutMs = LOCK_ACQUIRE_TIMEOUT_MS,
+): Promise<() => Promise<void>> {
+  await mkdir(dirname(lockPath), { recursive: true });
+  const lock = await acquireLock(lockPath, acquireTimeoutMs);
+  let released = false;
+  return async () => {
+    if (released) return;
+    released = true;
     try {
       await lock.handle.close();
     } finally {
       await releaseLock(lockPath, lock.token);
     }
-  }
+  };
 }
 
 async function acquireLock(

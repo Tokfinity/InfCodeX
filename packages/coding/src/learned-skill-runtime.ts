@@ -16,6 +16,7 @@ import {
   releaseLearnedSkillBinding,
   resolveProjectLearnedAreaRoot,
   type ISkillRegistry,
+  type LearnedCapabilityScope,
   type MemoryContextIdentity,
   type Skill,
   type SkillContext,
@@ -37,6 +38,12 @@ export interface CodingLearnedSkillBinding {
     | 'completeLearnedSkillOutcomes'
   >;
   release(): Promise<void>;
+}
+
+interface PreparedLearnedStore {
+  readonly store: LearnedAreaStore;
+  readonly scope: LearnedCapabilityScope;
+  readonly testingCapabilityIds: string[];
 }
 
 export async function prepareCodingLearnedSkillBinding(
@@ -77,33 +84,57 @@ async function prepareCodingLearnedSkillBindingUnsafe(
   pinnedRegistry: ISkillRegistry | undefined,
 ): Promise<CodingLearnedSkillBinding> {
   const projectRoot = resolveExecutionCwd(options.context);
-  const rootDir = resolveProjectLearnedAreaRoot(identity.configHome, {
+  const localProjectId = `local:${path.resolve(projectRoot).toLowerCase()}`;
+  const projectIds = [...new Set([identity.projectId, localProjectId])];
+  const scopes = projectIds.map((projectId) => createLearnedCapabilityScope(identity.configHome, {
     tenantId: identity.tenantId,
-    projectId: identity.projectId,
-  });
-  const store = new LearnedAreaStore(rootDir);
-  await store.initialize();
-  const scope = createLearnedCapabilityScope(identity.configHome, {
+    projectId,
+  }));
+  const rootDirs = projectIds.map((projectId) => resolveProjectLearnedAreaRoot(identity.configHome, {
     tenantId: identity.tenantId,
-    projectId: identity.projectId,
-  });
-  await migrateLegacyLearnedSkillsForProject(identity.configHome, store, scope);
+    projectId,
+  }));
+  const expectedScopes: readonly [LearnedCapabilityScope, ...LearnedCapabilityScope[]] = [
+    scopes[0]!,
+    ...scopes.slice(1),
+  ];
+  const stores: PreparedLearnedStore[] = rootDirs.map((rootDir, index) => ({
+    store: new LearnedAreaStore(rootDir),
+    scope: scopes[index]!,
+    testingCapabilityIds: [],
+  }));
   const bindingId = `root_${randomUUID()}`;
   const testingBindings: Record<string, string> = {};
-  const testingCapabilityIds: string[] = [];
-  for (const record of await store.listCapabilities()) {
-    if (record.schemaVersion !== 2 || record.lifecycle !== 'testing') continue;
-    const admitted = await admitLearnedSkillBinding(store, record.capabilityId, {
-      bindingId,
-      ownerSessionRef: rootSessionId,
-    });
-    if (admitted === undefined) continue;
-    testingBindings[record.capabilityId] = bindingId;
-    testingCapabilityIds.push(record.capabilityId);
+  const storeByCapabilityId = new Map<string, LearnedAreaStore>();
+  try {
+    await Promise.all(stores.map(async ({ store }) => store.initialize()));
+    const primaryStore = stores[0]!.store;
+    await migrateLegacyLearnedSkillsForProject(identity.configHome, primaryStore, scopes[0]!);
+    for (const prepared of stores) {
+      for (const record of await prepared.store.listCapabilities()) {
+        if (record.schemaVersion !== 2
+          || !sameScope(record.scope, prepared.scope)
+          || storeByCapabilityId.has(record.capabilityId)) continue;
+        storeByCapabilityId.set(record.capabilityId, prepared.store);
+        if (record.lifecycle !== 'testing') continue;
+        const admitted = await admitLearnedSkillBinding(prepared.store, record.capabilityId, {
+          bindingId,
+          ownerSessionRef: rootSessionId,
+        });
+        if (admitted === undefined) continue;
+        testingBindings[record.capabilityId] = bindingId;
+        prepared.testingCapabilityIds.push(record.capabilityId);
+      }
+    }
+  } catch (error) {
+    await safeReleaseStores(stores, bindingId);
+    throw error;
   }
   const learnedArea = {
-    rootDir,
-    expectedScope: scope,
+    rootDir: rootDirs[0]!,
+    additionalRootDirs: rootDirs.slice(1),
+    expectedScope: scopes[0]!,
+    expectedScopes,
     testingBindings,
   };
   const learnedRegistry = pinnedRegistry === undefined
@@ -112,7 +143,7 @@ async function prepareCodingLearnedSkillBindingUnsafe(
         projectPaths: [],
         userPaths: [],
         pluginPaths: [],
-        builtinPath: path.join(rootDir, '.no-formal-skills'),
+        builtinPath: path.join(rootDirs[0]!, '.no-formal-skills'),
         learnedArea,
       });
   const registry = pinnedRegistry === undefined
@@ -122,16 +153,18 @@ async function prepareCodingLearnedSkillBindingUnsafe(
     ? undefined
     : createFormalProjectRegistry(projectRoot, identity.configHome);
   try {
-    await reconcileLearnedSkillBindingOutcomes(store, {
+    await Promise.all(stores.map(({ store }) => reconcileLearnedSkillBindingOutcomes(store, {
       sessionId: rootSessionId,
       bindingId,
-    });
+    })));
     await formalInventory?.discover();
     if (learnedRegistry !== undefined) await learnedRegistry.discover();
     else await registry.discover();
     for (const metadata of registry.list()) {
       if (metadata.source !== 'learned' || metadata.learned === undefined) continue;
-      await recordLearnedSkillOffered(store, {
+      const capabilityStore = storeByCapabilityId.get(metadata.learned.capabilityId);
+      if (capabilityStore === undefined) continue;
+      await recordLearnedSkillOffered(capabilityStore, {
         sessionId: rootSessionId,
         bindingId,
         capabilityId: metadata.learned.capabilityId,
@@ -140,7 +173,7 @@ async function prepareCodingLearnedSkillBindingUnsafe(
       });
     }
   } catch (error) {
-    await releaseAll(store, testingCapabilityIds, bindingId);
+    await safeReleaseStores(stores, bindingId);
     throw error;
   }
   return {
@@ -161,7 +194,11 @@ async function prepareCodingLearnedSkillBindingUnsafe(
             learnedRegistry.getSystemPromptSnippet().trim(),
           ].filter((section): section is string => Boolean(section)).join('\n\n'),
       admitLearnedSkillInvocation: async (input) => {
-        const receipt = await admitAndRecordLearnedSkillInvocation(store, {
+        const capabilityStore = storeByCapabilityId.get(input.capabilityId);
+        if (capabilityStore === undefined) {
+          throw new Error(`Learned Skill capability is outside this project binding: ${input.capabilityId}`);
+        }
+        const receipt = await admitAndRecordLearnedSkillInvocation(capabilityStore, {
           sessionId: rootSessionId,
           ownerSessionRef: rootSessionId,
           bindingId,
@@ -172,24 +209,33 @@ async function prepareCodingLearnedSkillBindingUnsafe(
         return { invocationId: receipt.invocationId };
       },
       completeLearnedSkillOutcomes: async (input) => {
-        await completeLearnedSkillSessionOutcomes(store, {
+        await Promise.all(stores.map(({ store }) => completeLearnedSkillSessionOutcomes(store, {
           ...input,
           sessionId: rootSessionId,
           bindingId,
-        });
+        })));
       },
     },
     release: async () => {
       try {
-        await reconcileLearnedSkillBindingOutcomes(store, {
+        await Promise.all(stores.map(({ store }) => reconcileLearnedSkillBindingOutcomes(store, {
           sessionId: rootSessionId,
           bindingId,
-        });
+        })));
       } finally {
-        await releaseAll(store, testingCapabilityIds, bindingId);
+        await releaseStores(stores, bindingId);
       }
     },
   };
+}
+
+function sameScope(
+  left: { readonly configHomeHash: string; readonly tenantHash: string; readonly projectHash: string },
+  right: { readonly configHomeHash: string; readonly tenantHash: string; readonly projectHash: string },
+): boolean {
+  return left.configHomeHash === right.configHomeHash
+    && left.tenantHash === right.tenantHash
+    && left.projectHash === right.projectHash;
 }
 
 function errorMessage(error: unknown): string {
@@ -285,4 +331,27 @@ async function releaseAll(
   await Promise.all(capabilityIds.map((capabilityId) => (
     releaseLearnedSkillBinding(store, capabilityId, bindingId)
   )));
+}
+
+async function releaseStores(stores: readonly PreparedLearnedStore[], bindingId: string): Promise<void> {
+  await Promise.all(stores.map(({ store, testingCapabilityIds }) => (
+    releaseAll(store, testingCapabilityIds, bindingId)
+  )));
+}
+
+async function safeReleaseStores(
+  stores: readonly PreparedLearnedStore[],
+  bindingId: string,
+): Promise<void> {
+  const results = await Promise.allSettled(stores.map(({ store, testingCapabilityIds }) => (
+    releaseAll(store, testingCapabilityIds, bindingId)
+  )));
+  for (const result of results) {
+    if (result.status !== 'rejected') continue;
+    emitKodaXDiagnostic({
+      source: 'coding:learned-skills',
+      level: 'warn',
+      message: `Learned Skill binding cleanup requires lease recovery: ${errorMessage(result.reason)}`,
+    });
+  }
 }

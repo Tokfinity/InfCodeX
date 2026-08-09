@@ -1309,12 +1309,18 @@ async function genericRun<TData>(
           return;
         }
       }
-      let result = await executeRunnerToolCall(call, currentAgent, {
-        agent: currentAgent,
-        abortSignal: opts.abortSignal,
-        agentSpan,
-        transcript,
-      });
+      let result: RunnerToolResult;
+      opts.toolObserver?.onToolExecutionStart?.(call);
+      try {
+        result = await executeRunnerToolCall(call, currentAgent, {
+          agent: currentAgent,
+          abortSignal: opts.abortSignal,
+          agentSpan,
+          transcript,
+        });
+      } finally {
+        opts.toolObserver?.onToolExecutionEnd?.(call);
+      }
       throwIfAborted();
       if (guardrailSlots.tool.length > 0) {
         // Per-invocation: pass the CURRENT agent (may differ from

@@ -6,6 +6,7 @@ import { cleanupRegisteredManagedChildren, setAgentConfigHome } from '@kodax-ai/
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { KodaXShellSandbox } from '../types.js';
 import { toolBash } from './bash.js';
+import { withFileMutation } from './_internal/file-mutation-queue.js';
 
 const WINDOWS_PROCESS_TREE_EXIT_WAIT_MS = process.platform === 'win32' ? 30_000 : 15_000;
 const WINDOWS_PROCESS_TREE_TEST_TIMEOUT_MS = process.platform === 'win32' ? 60_000 : 30_000;
@@ -14,6 +15,23 @@ const BACKGROUND_CHILD_MARKER = 'child-pid:';
 function nodeOutputCommand(stdout: string, commandMarker = ''): string {
   const encoded = Buffer.from(stdout, 'utf-8').toString('base64');
   return `node -e "const marker='${commandMarker}'; void marker; process.stdout.write(Buffer.from('${encoded}','base64'))"`;
+}
+
+function passthroughShellSandbox(): KodaXShellSandbox {
+  return {
+    failClosed: true,
+    prepare: async (input) => input.executable === undefined
+      ? undefined
+      : {
+          executable: input.executable,
+          args: input.args ?? [],
+          env: input.env,
+          ...(input.windowsVerbatimArguments === undefined
+            ? {}
+            : { windowsVerbatimArguments: input.windowsVerbatimArguments }),
+          cleanup: async () => undefined,
+        },
+  };
 }
 
 function completedCommandBody(result: string): string {
@@ -178,6 +196,35 @@ describe('toolBash', () => {
       reason: 'prepare_failed',
       execution: 'normal_permission_policy',
     });
+  });
+
+  it('does not execute when a required sandbox cannot be prepared', async () => {
+    const prepare = vi.fn(async () => {
+      throw new Error('sandbox unavailable');
+    });
+    const command = nodeOutputCommand('must not execute');
+
+    const result = await toolBash({ command }, {
+      backups: new Map(),
+      toolCallId: 'bash-sandbox-required',
+      shellSandbox: { failClosed: true, prepare },
+    });
+
+    expect(result).toContain('[Error] Command was not started');
+    expect(result).toContain('sandbox unavailable');
+    expect(result).not.toContain('must not execute');
+  });
+
+  it('does not execute when a required sandbox declines the selected call', async () => {
+    const command = nodeOutputCommand('must not execute');
+    const result = await toolBash({ command }, {
+      backups: new Map(),
+      toolCallId: 'bash-sandbox-required-missing',
+      shellSandbox: { failClosed: true, prepare: async () => undefined },
+    });
+
+    expect(result).toContain('[Error] Command was not started');
+    expect(result).not.toContain('must not execute');
   });
 
   it('keeps Provider credentials out of legacy sandbox input and fallback execution', async () => {
@@ -398,6 +445,7 @@ describe('toolBash', () => {
     const result = await toolBash({ command }, {
       backups: new Map(),
       executionCwd: tempDir,
+      shellSandbox: passthroughShellSandbox(),
       maximumInputTokens: 1,
       toolCallId: 'bash-oversize',
       recordToolResultArtifact,
@@ -626,7 +674,7 @@ describe('toolBash', () => {
     const controller = new AbortController();
     const delayedCloseMs = process.platform === 'win32' ? 2_800 : 1_800;
     const lateChunkMs = process.platform === 'win32' ? 2_200 : 1_200;
-    const abortWatchdog = setTimeout(() => controller.abort(), 1_000);
+    const abortWatchdog = setTimeout(() => controller.abort(), 5_000);
     const originalEmit = ChildProcess.prototype.emit;
     const delayedPids = new Set<number>();
     const recoveryPaths: string[] = [];
@@ -636,7 +684,6 @@ describe('toolBash', () => {
       ...args: unknown[]
     ): boolean {
       const shouldDelay = event === 'close'
-        && this.spawnargs.some((arg) => arg.includes(marker))
         && this.pid !== undefined
         && !delayedPids.has(this.pid);
       if (!shouldDelay) {
@@ -657,6 +704,7 @@ describe('toolBash', () => {
       const result = await toolBash({ command, timeout: 10 }, {
         backups: new Map(),
         executionCwd: tempDir,
+        shellSandbox: passthroughShellSandbox(),
         abortSignal: controller.signal,
         reportToolProgress: (progress) => {
           if (progress.includes(marker)) controller.abort();
@@ -697,6 +745,7 @@ describe('toolBash', () => {
     const result = await toolBash({ command, run_in_background: true }, {
       backups: new Map(),
       executionCwd: tempDir,
+      shellSandbox: passthroughShellSandbox(),
     });
 
     expect(result).toContain('Command started in background');
@@ -721,6 +770,70 @@ describe('toolBash', () => {
     }
     expect(content).toContain('bg-output');
     expect(content).toContain('[Exit:');
+    await expect(withFileMutation(path.join(tempDir, 'after-fast-background.txt'), async () => 'ready'))
+      .resolves.toBe('ready');
+  });
+
+  it.runIf(process.platform === 'win32')(
+    'keeps a passthrough sandbox inside the per-effect Job until detached descendants drain',
+    async () => {
+      const sentinel = path.join(tempDir, 'passthrough-detached-child.txt');
+      const childScript = Buffer.from(
+        `setTimeout(() => require('node:fs').writeFileSync(${JSON.stringify(sentinel)}, 'alive'), 2500)`,
+        'utf8',
+      ).toString('base64');
+      const rootScript = Buffer.from([
+        "const {spawn}=require('node:child_process')",
+        `const child=spawn(process.execPath,['-e',${JSON.stringify(`eval(Buffer.from('${childScript}','base64').toString())`)}],{detached:true,stdio:'ignore',windowsHide:true})`,
+        'child.unref()',
+      ].join(';'), 'utf8').toString('base64');
+
+      await toolBash({
+        command: `node -e "eval(Buffer.from('${rootScript}','base64').toString())"`,
+      }, {
+        backups: new Map(),
+        executionCwd: tempDir,
+        shellSandbox: passthroughShellSandbox(),
+      });
+      await expect(withFileMutation(path.join(tempDir, 'after-passthrough.txt'), async () => 'ready'))
+        .resolves.toBe('ready');
+      await new Promise((resolve) => setTimeout(resolve, 3_000));
+      await expect(fs.readFile(sentinel, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    },
+    WINDOWS_PROCESS_TREE_TEST_TIMEOUT_MS,
+  );
+
+  it('releases the filesystem-effect lease when background log creation fails', async () => {
+    const originalTemp = process.env.TEMP;
+    const originalTmp = process.env.TMP;
+    const originalTmpdir = process.env.TMPDIR;
+    const missingTemp = path.join(tempDir, 'missing-temp');
+    process.env.TEMP = missingTemp;
+    process.env.TMP = missingTemp;
+    process.env.TMPDIR = missingTemp;
+    try {
+      const failed = await toolBash({
+        command: nodeOutputCommand('must-not-start'),
+        run_in_background: true,
+      }, {
+        backups: new Map(),
+        executionCwd: tempDir,
+      });
+      expect(failed).toContain('output file could not be created');
+    } finally {
+      if (originalTemp === undefined) delete process.env.TEMP;
+      else process.env.TEMP = originalTemp;
+      if (originalTmp === undefined) delete process.env.TMP;
+      else process.env.TMP = originalTmp;
+      if (originalTmpdir === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = originalTmpdir;
+    }
+
+    const result = await toolBash({ command: nodeOutputCommand('lease-released') }, {
+      backups: new Map(),
+      executionCwd: tempDir,
+    });
+    expect(completedCommandBody(result)).toContain('lease-released');
   });
 
   it('registers background commands for managed cleanup', async () => {

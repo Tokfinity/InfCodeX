@@ -186,6 +186,7 @@ import {
   FILE_MODIFICATION_TOOLS,
   isBashWriteCommand,
   isBashReadCommand,
+  isBashReadCommandAutoAllowed,
   getPlanModeBlockReason,
   replBashPathSignalCollector,
 } from "../permission/index.js";
@@ -7209,7 +7210,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       // Safe read-only bash commands are auto-allowed before protected path checks.
       if (tool === 'bash') {
         const command = (input.command as string) ?? '';
-        if (isBashReadCommand(command)) {
+        if (isBashReadCommandAutoAllowed(
+          command,
+          gitRoot ?? process.cwd(),
+          context.runtimeInfo?.executionCwd ?? gitRoot ?? process.cwd(),
+        )) {
           return true; // Auto-allowed for safe read-only commands in all modes
         }
       }

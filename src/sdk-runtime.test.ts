@@ -10155,10 +10155,13 @@ describe("createKodaXRuntime", () => {
     }
   });
 
-  it("automatically repairs a live same-owner unknown Run and restores Session reuse", async () => {
+  it("retries a transient repair load error and restores Session reuse", async () => {
     vi.useFakeTimers();
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
     const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
+    const originalPeek = FileSessionStorage.prototype.peek;
+    let failRepairLoad = false;
+    let repairLoadFailures = 0;
     let releaseLateSettlement: (() => void) | undefined;
     const lateSettlement = new Promise<void>((resolve) => {
       releaseLateSettlement = resolve;
@@ -10183,6 +10186,16 @@ describe("createKodaXRuntime", () => {
         await lateSettlement;
       }
       await originalSave.call(this, id, snapshot, expectedRevision);
+    });
+    const peek = vi.spyOn(
+      FileSessionStorage.prototype,
+      "peek",
+    ).mockImplementation(async function (this: FileSessionStorage, id: string) {
+      if (failRepairLoad && repairLoadFailures === 0) {
+        repairLoadFailures += 1;
+        throw new Error("transient Actor repair load failure");
+      }
+      return originalPeek.call(this, id);
     });
     const runtime = await createKodaXRuntime({
       homeDir: tempRoot,
@@ -10222,6 +10235,7 @@ describe("createKodaXRuntime", () => {
           retryable: false,
         },
       });
+      failRepairLoad = true;
       releaseLateSettlement?.();
       vi.useRealTimers();
       await flushMicrotasks();
@@ -10259,8 +10273,10 @@ describe("createKodaXRuntime", () => {
         mode: "managed_task",
       });
       await expect(next.result).resolves.toMatchObject({ phase: "completed" });
+      expect(repairLoadFailures).toBe(1);
     } finally {
       releaseLateSettlement?.();
+      peek.mockRestore();
       save.mockRestore();
       vi.useRealTimers();
       await runtime.close();
@@ -10472,7 +10488,7 @@ describe("createKodaXRuntime", () => {
     }
   });
 
-  it("keeps the successor queued until an abort-ignoring fenced root provider settles", async () => {
+  it("fails and drains after repair when the fenced root provider never settles", async () => {
     vi.useFakeTimers();
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
     const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
@@ -10485,6 +10501,8 @@ describe("createKodaXRuntime", () => {
     let lateAskUser: Promise<string> | undefined;
     let lateExitPlanMode: Promise<boolean | "not-in-plan-mode"> | undefined;
     let resolveRoot: ((result: KodaXResult) => void) | undefined;
+    let settleFirstInFlightTool: (() => void) | undefined;
+    let settleInFlightTool: (() => void) | undefined;
     let rootInvocation = 0;
     const externalOnTextDelta = vi.fn();
     const externalOnTurnCompleted = vi.fn();
@@ -10533,6 +10551,39 @@ describe("createKodaXRuntime", () => {
         }
         return new Promise<KodaXResult>((resolve) => {
           resolveRoot = resolve;
+          options.events?.onToolUseStart?.({
+            id: "tool-before-durability-fence",
+            name: "host_write",
+            input: { path: "effect.txt" },
+          });
+          options.events?.onToolUseStart?.({
+            id: "permission-pending-tool",
+            name: "host_write",
+            input: { path: "never-executed.txt" },
+          });
+          options.events?.onToolExecutionStart?.({
+            id: "tool-before-durability-fence",
+            name: "host_write",
+          });
+          options.events?.onToolExecutionStart?.({
+            id: "tool-before-durability-fence",
+            name: "host_write",
+          });
+          settleFirstInFlightTool = () => options.events?.onToolExecutionEnd?.({
+            id: "tool-before-durability-fence",
+            name: "host_write",
+          });
+          settleInFlightTool = () => {
+            options.events?.onToolExecutionEnd?.({
+              id: "tool-before-durability-fence",
+              name: "host_write",
+            });
+            options.events?.onToolResult?.({
+              id: "tool-before-durability-fence",
+              name: "host_write",
+              content: "settled",
+            });
+          };
           const observeFence = (): void => {
             rootAborted = true;
             const error = new Error("Provider observed Actor durability fence");
@@ -10650,21 +10701,18 @@ describe("createKodaXRuntime", () => {
       });
       await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
         phase: "unknown",
-        lifecycleError: { code: "actor_settlement_not_persisted" },
       });
       await expect(runtime.runs.get(queuedInput.runId)).resolves.toMatchObject({
         phase: "queued",
       });
-      expect(rootInvocation).toBe(1);
-      resolveRoot?.({
-        success: true,
-        lastText: "Executor returned after the Actor durability fence",
-        messages: [],
-        sessionId: session.id,
+      settleFirstInFlightTool?.();
+      await expect(runtime.runs.get(queuedInput.runId)).resolves.toMatchObject({
+        phase: "queued",
       });
+      settleInFlightTool?.();
       await expect(expectSettles(
         run.result,
-        "repaired Run after its abort-ignoring provider settled",
+        "repaired Run while its abort-ignoring provider remains pending",
         500,
       )).resolves.toMatchObject({
         phase: "failed",
@@ -10709,7 +10757,7 @@ describe("createKodaXRuntime", () => {
     }
   });
 
-  it("repairs a Stop-before-self-fence race without overlapping its queued successor", async () => {
+  it("repairs a Stop-before-self-fence race without waiting for its root provider", async () => {
     vi.useFakeTimers();
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
     const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
@@ -10808,42 +10856,9 @@ describe("createKodaXRuntime", () => {
           activeNonRootTurns: 0,
         });
       });
-      await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
-        phase: "unknown",
-        lifecycleError: { code: "actor_settlement_not_persisted" },
-      });
-      await expect(runtime.runs.get(queuedInput.runId)).resolves.toMatchObject({
-        phase: "queued",
-      });
-      expect(rootInvocation).toBe(1);
-      await expect(runtime.runs.abort(run.runId)).resolves.toMatchObject({
-        accepted: false,
-      });
-      const directSuccessor = await runtime.runs.start({
-        sessionId: session.id,
-        prompt: "also stay queued behind the repaired Root fence",
-        mode: "managed_task",
-      });
-      await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
-        phase: "unknown",
-        lifecycleError: { code: "actor_settlement_not_persisted" },
-      });
-      await expect(runtime.runs.get(queuedInput.runId)).resolves.toMatchObject({
-        phase: "queued",
-      });
-      await expect(runtime.runs.get(directSuccessor.runId)).resolves.toMatchObject({
-        phase: "queued",
-      });
-      expect(rootInvocation).toBe(1);
-      finishRoot?.({
-        success: true,
-        lastText: "Executor completed after Stop and Actor repair",
-        messages: [],
-        sessionId: session.id,
-      });
       await expect(expectSettles(
         run.result,
-        "Stop repaired after the provider settles",
+        "Stop repaired while its provider remains pending",
         500,
       )).resolves.toMatchObject({
         phase: "failed",
@@ -10852,6 +10867,15 @@ describe("createKodaXRuntime", () => {
       });
       await expect(runtime.runs.await(queuedInput.runId)).resolves.toMatchObject({
         phase: "completed",
+      });
+      expect(rootInvocation).toBe(2);
+      await expect(runtime.runs.abort(run.runId)).resolves.toMatchObject({
+        accepted: false,
+      });
+      const directSuccessor = await runtime.runs.start({
+        sessionId: session.id,
+        prompt: "run after the repaired Root fence",
+        mode: "managed_task",
       });
       await expect(runtime.runs.await(directSuccessor.runId)).resolves.toMatchObject({
         phase: "completed",
@@ -16061,6 +16085,74 @@ describe("createKodaXRuntime", () => {
       await fs.rm(lockPath, { force: true });
       await runtime.close();
     }
+  });
+
+  it("sandboxes shared Runtime Bash outside Auto mode without requiring an Auto admission", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const projectRoot = path.join(tempRoot, "accept-edits-project");
+    await fs.mkdir(projectRoot, { recursive: true });
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "sessions"),
+      defaultProvider: "mock-provider",
+      sharedDaemonHost: true,
+    });
+    const session = await runtime.sessions.create({ title: "Sandbox accept-edits Bash" });
+    await runtime.sessions.updateSettings(session.id, {
+      permissionMode: "accept-edits",
+      executionCwd: projectRoot,
+    });
+    const callerPrepare = vi.fn<KodaXShellSandbox["prepare"]>();
+    let runOptions: KodaXOptions | undefined;
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => {
+      runOptions = options;
+      return fakeRunningSession(options, new Promise<KodaXResult>(() => undefined));
+    });
+    const handle = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "wait",
+      permissionBroker: "client",
+      options: {
+        context: {
+          executionCwd: projectRoot,
+          gitRoot: projectRoot,
+          shellSandbox: { prepare: callerPrepare },
+        },
+      },
+    });
+    if (!runOptions) throw new Error("expected Runtime run options");
+
+    const { getAgentConfigHome } = await import("@kodax-ai/agent");
+    const protectedRead = runOptions.events?.beforeToolExecute?.(
+      "bash",
+      { command: `type "${path.join(getAgentConfigHome(), "config.json")}"` },
+      { sessionId: session.id, toolId: "bash_protected_read" },
+    );
+    await flushMicrotasks();
+    const [pendingRead] = await runtime.permissions.listPending({ runId: handle.runId });
+    expect(pendingRead).toMatchObject({ toolName: "bash" });
+    if (!pendingRead) throw new Error("expected protected-read approval");
+    await runtime.permissions.respond(pendingRead.id, { type: "allow_once" });
+    await expect(protectedRead).resolves.toBe(true);
+
+    const observations: KodaXToolSandboxObservationUpdate[] = [];
+    const invocation = await runOptions.context?.shellSandbox?.prepare({
+      toolCallId: "bash_accept_edits",
+      toolInput: { command: "git status --short" },
+      command: "git status --short",
+      cwd: projectRoot,
+      env: process.env,
+      reportObservation: (observation) => observations.push(observation),
+    });
+
+    expect(callerPrepare).not.toHaveBeenCalled();
+    expect(runOptions.context?.shellSandbox?.processTreeContainment).toBe(
+      process.platform === "linux" ? "root-exit-drains" : undefined,
+    );
+    expect(observations.at(-1)?.state).not.toBe("not_selected");
+    await invocation?.cleanup();
+    await runtime.runs.abort(handle.runId);
+    await runtime.close();
   });
 
   it("runs explicit auto engines inside Runtime and brokers only guardrail escalation", async () => {

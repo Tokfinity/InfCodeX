@@ -25,6 +25,7 @@ import {
   type MemoryContextIdentity,
   type KodaXMemoryOutcomeDigest,
   type MemoryReviewTrigger,
+  type EpisodeReviewDrainOptions,
   type EpisodeReviewDrainEligibility,
   type EpisodeReviewDrainResult,
   type KodaXSessionStorage,
@@ -32,6 +33,7 @@ import {
   type MemoryController,
   type MemoryEpisodeReviewResult,
   type MemoryReviewPlan,
+  type NormalizedLearnedSkillDecision,
   type PendingEpisodeReview,
   type PendingEpisodeReviewV2,
   type UnifiedLearningReviewModelInput,
@@ -385,8 +387,7 @@ async function drainStartedCodingMemoryReviewInbox(
   currentSessionId: string,
   drainDeadlineAtMs: number | undefined,
 ): Promise<EpisodeReviewDrainResult | undefined> {
-  const result = await drainPendingEpisodeReviews(identity, {
-    maxEntries: 2,
+  const drainOptions: Omit<EpisodeReviewDrainOptions, 'maxEntries'> = {
     ...(drainDeadlineAtMs === undefined ? {} : { deadlineAtMs: drainDeadlineAtMs }),
     revalidate: async (entry) => entry.ownerSessionRef === currentSessionId
       ? 'defer'
@@ -464,7 +465,27 @@ async function drainStartedCodingMemoryReviewInbox(
             }),
       });
     },
-  });
+  };
+  const result = {
+    reviewed: 0,
+    discarded: 0,
+    deferred: 0,
+    failed: 0,
+    failures: [] as Array<EpisodeReviewDrainResult['failures'][number]>,
+  };
+  for (const ownerIdentity of reviewInboxOwnerIdentities(options, identity)) {
+    const spent = result.reviewed + result.discarded + result.failed;
+    if (spent >= 2) break;
+    const partial = await drainPendingEpisodeReviews(ownerIdentity, {
+      ...drainOptions,
+      maxEntries: 2 - spent,
+    });
+    result.reviewed += partial.reviewed;
+    result.discarded += partial.discarded;
+    result.deferred += partial.deferred;
+    result.failed += partial.failed;
+    result.failures.push(...partial.failures);
+  }
   if (result.reviewed > 0 || result.discarded > 0 || result.failed > 0) {
     emitResilienceDebug('[memory:review-inbox:drain]', { ...result });
   }
@@ -499,6 +520,17 @@ async function drainStartedCodingMemoryReviewInbox(
   return result;
 }
 
+function reviewInboxOwnerIdentities(
+  options: KodaXOptions,
+  identity: MemoryContextIdentity,
+): readonly MemoryContextIdentity[] {
+  if (identity.projectId === undefined) return [identity];
+  const projectRoot = resolveExecutionCwd(options.context);
+  const localProjectId = `local:${path.resolve(projectRoot).toLowerCase()}`;
+  if (identity.projectId === localProjectId) return [identity];
+  return [identity, { ...identity, projectId: localProjectId }];
+}
+
 function isReviewEnvelope(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object'
     && value !== null
@@ -524,7 +556,7 @@ async function buildUnifiedReviewInput(
     entry,
     resolveExecutionCwd(options.context),
   );
-  const exactInvokedSkill = await exactInvokedSkillForEpisode(identity, entry);
+  const exactInvokedSkill = await exactInvokedSkillForEpisode(options, identity, entry);
   const evidence = entry.digest.evidence ?? [];
   const expectedVerdict = entry.digest.outcome === 'succeeded' ? 'passed' : 'failed';
   const verifiedOutcome = evidence.some((item) => (
@@ -576,19 +608,87 @@ function explicitSkillPreservationRequested(
 }
 
 async function exactInvokedSkillForEpisode(
+  options: KodaXOptions,
   identity: MemoryContextIdentity,
   entry: PendingEpisodeReviewV2,
 ): Promise<LearningReviewEvidencePacket['exactInvokedSkill']> {
-  if (identity.configHome === undefined || identity.projectId === undefined) return null;
-  const store = new LearnedAreaStore(resolveProjectLearnedAreaRoot(identity.configHome, {
-    tenantId: identity.tenantId,
-    projectId: identity.projectId,
-  }));
-  await store.initialize();
   if (entry.digest.episodeId === undefined) return null;
-  return exactInvokedSkillSnapshotForSession(store, entry.ownerSessionRef, {
-    bindingId: entry.digest.episodeId,
-  });
+  for (const area of await openProjectLearnedAreas(options, identity)) {
+    const snapshot = await exactInvokedSkillSnapshotForSession(
+      area.store,
+      entry.ownerSessionRef,
+      { bindingId: entry.digest.episodeId },
+    );
+    if (snapshot !== null) {
+      const record = await area.store.readCapability(snapshot.capabilityId);
+      if (record?.schemaVersion === 2 && sameLearnedScope(record.scope, area.scope)) {
+        return snapshot;
+      }
+    }
+  }
+  return null;
+}
+
+interface ProjectLearnedArea {
+  readonly projectId: string;
+  readonly store: LearnedAreaStore;
+  readonly scope: ReturnType<typeof createLearnedCapabilityScope>;
+}
+
+async function openProjectLearnedAreas(
+  options: KodaXOptions,
+  identity: MemoryContextIdentity,
+): Promise<readonly ProjectLearnedArea[]> {
+  if (identity.projectId === undefined) return [];
+  const configHome = identity.configHome ?? options.context?.configHome ?? getAgentConfigPath();
+  const projectRoot = resolveExecutionCwd(options.context);
+  const localProjectId = `local:${path.resolve(projectRoot).toLowerCase()}`;
+  const projectIds = [...new Set([identity.projectId, localProjectId])];
+  const areas = projectIds.map((projectId): ProjectLearnedArea => ({
+    projectId,
+    store: new LearnedAreaStore(resolveProjectLearnedAreaRoot(configHome, {
+      tenantId: identity.tenantId,
+      projectId,
+    })),
+    scope: createLearnedCapabilityScope(configHome, {
+      tenantId: identity.tenantId,
+      projectId,
+    }),
+  }));
+  await Promise.all(areas.map(async ({ store }) => store.initialize()));
+  return areas;
+}
+
+async function selectProjectLearnedArea(
+  areas: readonly ProjectLearnedArea[],
+  capability: NormalizedLearnedSkillDecision,
+): Promise<ProjectLearnedArea> {
+  const primary = areas[0];
+  if (primary === undefined) throw new Error('project Learned Area is unavailable');
+  if (capability.targetCapabilityId === undefined) return primary;
+  let firstOwningArea: ProjectLearnedArea | undefined;
+  for (const area of areas) {
+    const record = await area.store.readCapability(capability.targetCapabilityId);
+    if (record?.schemaVersion !== 2 || !sameLearnedScope(record.scope, area.scope)) continue;
+    firstOwningArea ??= area;
+    const revisionMatches = capability.expectedRevision === undefined
+      || (record.schemaVersion === 2
+        && record.artifact.contentRevision === capability.expectedRevision);
+    const fingerprintMatches = capability.expectedFingerprint === undefined
+      || (record.schemaVersion === 2
+        && record.artifact.fingerprint === capability.expectedFingerprint);
+    if (revisionMatches && fingerprintMatches) return area;
+  }
+  return firstOwningArea ?? primary;
+}
+
+function sameLearnedScope(
+  left: ReturnType<typeof createLearnedCapabilityScope>,
+  right: ReturnType<typeof createLearnedCapabilityScope>,
+): boolean {
+  return left.configHomeHash === right.configHomeHash
+    && left.tenantHash === right.tenantHash
+    && left.projectHash === right.projectHash;
 }
 
 async function priorOutcomeDigests(
@@ -717,12 +817,12 @@ async function applyUnifiedSkillDecision(
         return [capabilityId];
       });
     }
-    const rootDir = resolveProjectLearnedAreaRoot(configHome, {
-      tenantId: identity.tenantId,
-      projectId: identity.projectId,
+    const areas = await openProjectLearnedAreas(options, {
+      ...identity,
+      configHome,
     });
-    const store = new LearnedAreaStore(rootDir);
-    await store.initialize();
+    const area = await selectProjectLearnedArea(areas, capability);
+    const store = area.store;
     if ((capability.disposition === 'discard' || capability.spec === undefined)
       && capability.quarantineExactInvokedRevision === true
       && capability.targetCapabilityId !== undefined
@@ -744,10 +844,7 @@ async function applyUnifiedSkillDecision(
     }
     if (capability.spec === undefined || capability.disposition === 'discard') return [];
     const record = await commitLearnedSkillRevision(store, {
-      scope: createLearnedCapabilityScope(configHome, {
-        tenantId: identity.tenantId,
-        projectId: identity.projectId,
-      }),
+      scope: area.scope,
       spec: capability.spec,
       disposition: capability.disposition,
       operation: capability.operation,
@@ -804,17 +901,22 @@ function isPersistedMemoryReviewPlan(value: unknown): value is MemoryReviewPlan 
 
 function isCommittedSkillDecision(
   value: unknown,
-): value is import('@kodax-ai/agent').NormalizedLearnedSkillDecision & {
-  readonly operation: 'create' | 'patch';
-} {
-  return typeof value === 'object'
+): value is import('@kodax-ai/agent').NormalizedLearnedSkillDecision & (
+  | { readonly disposition: 'discard' }
+  | {
+      readonly disposition: 'ready' | 'project_canary';
+      readonly operation: 'create' | 'patch';
+    }
+) {
+  if (!(typeof value === 'object'
     && value !== null
     && 'disposition' in value
     && (value.disposition === 'discard'
       || value.disposition === 'ready'
-      || value.disposition === 'project_canary')
-    && 'operation' in value
-    && (value.operation === 'create' || value.operation === 'patch');
+      || value.disposition === 'project_canary'))) return false;
+  return value.disposition === 'discard'
+    || ('operation' in value
+      && (value.operation === 'create' || value.operation === 'patch'));
 }
 
 function requiredUnifiedReviewCarriers(

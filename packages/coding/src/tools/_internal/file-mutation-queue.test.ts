@@ -1,17 +1,43 @@
 /**
  * FEATURE_131 v0.7.36 Part A — file-mutation-queue contract tests.
  */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+import { acquireKodaXFileLock, setAgentConfigHome } from '@kodax-ai/agent';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   _peekFileMutationQueueSizeForTests,
   _resetFileMutationQueueForTests,
+  acquireFileSystemMutationLease,
   normalizePathForKey,
   withFileMutation,
 } from './file-mutation-queue.js';
 
+let configHome: string;
+
+function effectRuntimeDirectory(): string {
+  const workerScope = process.env.VITEST_WORKER_ID === undefined
+    ? undefined
+    : `${process.env.VITEST_WORKER_ID}-${process.pid}`.replace(/[^a-z0-9_-]/gi, '_');
+  return path.join(
+    configHome,
+    'runtime',
+    ...(workerScope === undefined ? [] : [`test-filesystem-effects-${workerScope}`]),
+  );
+}
+
+beforeEach(() => {
+  configHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-file-effects-'));
+  setAgentConfigHome(configHome);
+});
+
 afterEach(() => {
   _resetFileMutationQueueForTests();
   delete process.env.KODAX_PATH_KEY_PLATFORM;
+  setAgentConfigHome(undefined);
+  fs.rmSync(configHome, { recursive: true, force: true });
 });
 
 describe('normalizePathForKey — POSIX mode', () => {
@@ -123,16 +149,181 @@ describe('withFileMutation — same path serialization', () => {
 
 describe('withFileMutation — different path concurrency', () => {
   it('runs different paths concurrently (wall-clock ≈ slowest, not the sum)', async () => {
-    const start = Date.now();
-    await Promise.all([
-      withFileMutation('/tmp/a.txt', () => new Promise<void>((r) => setTimeout(r, 30))),
-      withFileMutation('/tmp/b.txt', () => new Promise<void>((r) => setTimeout(r, 30))),
-      withFileMutation('/tmp/c.txt', () => new Promise<void>((r) => setTimeout(r, 30))),
+    let active = 0;
+    let maxActive = 0;
+    let releaseMutations: (() => void) | undefined;
+    const released = new Promise<void>((resolve) => { releaseMutations = resolve; });
+    let allEntered: (() => void) | undefined;
+    const entered = new Promise<void>((resolve) => { allEntered = resolve; });
+    const mutation = async (): Promise<void> => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      if (active === 3) allEntered?.();
+      await released;
+      active -= 1;
+    };
+    const mutations = Promise.all([
+      withFileMutation('/tmp/a.txt', mutation),
+      withFileMutation('/tmp/b.txt', mutation),
+      withFileMutation('/tmp/c.txt', mutation),
     ]);
-    const elapsed = Date.now() - start;
-    // Sequential would be 90ms+; concurrent is ~30ms. Allow 80ms
-    // headroom for slow CI without making the test flaky.
-    expect(elapsed).toBeLessThan(80);
+    const concurrent = await Promise.race([
+      entered.then(() => true),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), 1_000)),
+    ]);
+    releaseMutations?.();
+    await mutations;
+    expect(concurrent).toBe(true);
+    expect(maxActive).toBe(3);
+  });
+});
+
+describe('cross-process filesystem effect lease', () => {
+  it('fails quickly instead of waiting behind a long-lived shell effect', async () => {
+    const releaseShell = await acquireFileSystemMutationLease();
+    const start = Date.now();
+    try {
+      await expect(withFileMutation('/tmp/a.txt', async () => 'written'))
+        .rejects.toThrow('filesystem effect is already active');
+      expect(Date.now() - start).toBeLessThan(2_000);
+    } finally {
+      await releaseShell();
+    }
+  });
+
+  it('does not admit a shell effect while a direct mutation is active', async () => {
+    let enterMutation: (() => void) | undefined;
+    const entered = new Promise<void>((resolve) => { enterMutation = resolve; });
+    let finishMutation: (() => void) | undefined;
+    const finished = new Promise<void>((resolve) => { finishMutation = resolve; });
+    const mutation = withFileMutation('/tmp/a.txt', async () => {
+      enterMutation?.();
+      await finished;
+    });
+    await entered;
+    await expect(acquireFileSystemMutationLease())
+      .rejects.toThrow('filesystem effect is already active');
+    finishMutation?.();
+    await mutation;
+  });
+
+  it('removes a crashed process marker before admitting new work', async () => {
+    const runtimeDirectory = effectRuntimeDirectory();
+    await fs.promises.mkdir(runtimeDirectory, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(runtimeDirectory, 'model-filesystem-effects.json'),
+      JSON.stringify({
+        direct: [{ pid: 2_147_483_647, token: 'crashed-direct' }],
+        shells: [],
+      }),
+      'utf8',
+    );
+
+    await expect(withFileMutation('/tmp/recovered.txt', async () => 'recovered'))
+      .resolves.toBe('recovered');
+  });
+
+  it('recovers a pre-bind shell marker after managed cleanup proves no child remains', async () => {
+    const runtimeDirectory = effectRuntimeDirectory();
+    await fs.promises.mkdir(runtimeDirectory, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(runtimeDirectory, 'model-filesystem-effects.json'),
+      JSON.stringify({
+        direct: [],
+        shells: [{ pid: 2_147_483_647, token: 'crashed-unbound-shell' }],
+      }),
+      'utf8',
+    );
+
+    await expect(withFileMutation('/tmp/recovered-after-pre-bind-crash.txt', async () => 'safe'))
+      .resolves.toBe('safe');
+  });
+
+  it('keeps the fence while an abandoned owner\'s bound effect process is alive', async () => {
+    const runtimeDirectory = effectRuntimeDirectory();
+    await fs.promises.mkdir(runtimeDirectory, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(runtimeDirectory, 'model-filesystem-effects.json'),
+      JSON.stringify({
+        direct: [],
+        shells: [{
+          pid: 2_147_483_647,
+          token: 'crashed-owner-live-effect',
+          effectPid: process.pid,
+          posixProcessGroup: false,
+          windowsJobContained: false,
+        }],
+      }),
+      'utf8',
+    );
+
+    await expect(withFileMutation('/tmp/must-remain-fenced.txt', async () => 'unsafe'))
+      .rejects.toThrow('filesystem effect is already active');
+  });
+
+  it('recovers an abandoned namespace marker after managed cleanup converges', async () => {
+    const runtimeDirectory = effectRuntimeDirectory();
+    await fs.promises.mkdir(runtimeDirectory, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(runtimeDirectory, 'model-filesystem-effects.json'),
+      JSON.stringify({
+        direct: [],
+        namespaces: [{ pid: 2_147_483_647, token: 'crashed-namespace' }],
+        shells: [],
+      }),
+      'utf8',
+    );
+
+    const releaseShell = await acquireFileSystemMutationLease();
+    await releaseShell();
+  });
+
+  it('allows independent shell effects to overlap', async () => {
+    const releaseFirst = await acquireFileSystemMutationLease();
+    const releaseSecond = await acquireFileSystemMutationLease();
+    await releaseSecond();
+    await releaseFirst();
+  });
+
+  it('requires and records a fresh completion proof after rebinding one lease', async () => {
+    const releaseEffect = await acquireFileSystemMutationLease();
+    await releaseEffect.bindEffectProcess(process.pid, false);
+    await releaseEffect.finishEffectProcess();
+    await releaseEffect.bindEffectProcess(process.pid, false);
+    await releaseEffect.finishEffectProcess();
+
+    await expect(releaseEffect()).resolves.toBeUndefined();
+  });
+
+  it('releases against the Agent Home captured when the lease was acquired', async () => {
+    const releaseEffect = await acquireFileSystemMutationLease();
+    setAgentConfigHome(path.join(configHome, 'next-agent-home'));
+
+    await expect(releaseEffect()).resolves.toBeUndefined();
+  });
+
+  it('retries a transient release failure without another lifecycle event', async () => {
+    const releaseEffect = await acquireFileSystemMutationLease();
+    const coordinatorPath = path.join(
+      effectRuntimeDirectory(),
+      'model-filesystem-effects.lock',
+    );
+    const releaseCoordinator = await acquireKodaXFileLock(coordinatorPath, 1_000);
+    const coordinatorReleased = new Promise<void>((resolve, reject) => {
+      setTimeout(() => {
+        releaseCoordinator().then(resolve, reject);
+      }, 1_100);
+    });
+    await expect(releaseEffect()).resolves.toBeUndefined();
+    await coordinatorReleased;
+    const statePath = path.join(
+      effectRuntimeDirectory(),
+      'model-filesystem-effects.json',
+    );
+    expect(fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath, 'utf8')) : undefined)
+      .toBeUndefined();
+    await expect(withFileMutation('/tmp/after-release-retry.txt', async () => 'recovered'))
+      .resolves.toBe('recovered');
   });
 });
 
@@ -151,5 +342,45 @@ describe('withFileMutation — cleanup', () => {
     // Allow the microtask to run so the finally fires.
     await new Promise<void>((r) => setTimeout(r, 0));
     expect(_peekFileMutationQueueSizeForTests()).toBe(0);
+  });
+});
+
+describe('withFileMutation — Agent Home execution boundary', () => {
+  it('allows an approved sensitive-file mutation to reach the sink', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-mutation-sensitive-'));
+    setAgentConfigHome(home);
+    try {
+      await expect(withFileMutation(path.join(home, 'config.json'), async () => 'written'))
+        .resolves.toBe('written');
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('hard-denies Runtime even after the guardrail stage', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-mutation-runtime-'));
+    setAgentConfigHome(home);
+    try {
+      await expect(withFileMutation(path.join(home, 'runtime', 'state.json'), async () => 'written'))
+        .rejects.toThrow('protected KodaX state');
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('hard-denies the lexical Runtime entry when it is a symlink outside Agent Home', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-mutation-runtime-link-'));
+    const home = path.join(root, 'home');
+    const outside = path.join(root, 'outside');
+    fs.mkdirSync(home);
+    fs.mkdirSync(outside);
+    fs.symlinkSync(outside, path.join(home, 'runtime'), process.platform === 'win32' ? 'junction' : 'dir');
+    setAgentConfigHome(home);
+    try {
+      await expect(withFileMutation(path.join(home, 'runtime', 'state.json'), async () => 'written'))
+        .rejects.toThrow('protected KodaX state');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

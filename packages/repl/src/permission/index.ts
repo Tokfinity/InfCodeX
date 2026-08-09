@@ -27,6 +27,7 @@ export {
   getDirectShellBypassBlockReason,
   isBashWriteCommand,
   isBashReadCommand,
+  isBashReadCommandAutoAllowed,
   collectBashWriteTargets,
   isPathInsideProject,
   getBashOutsideProjectWriteRisk,

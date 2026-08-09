@@ -5,12 +5,14 @@ import {
   readFile,
   readdir,
   rm,
+  symlink,
   utimes,
   writeFile,
 } from 'fs/promises';
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
+import { setAgentConfigHome } from '@kodax-ai/agent';
 
 import {
   resolveRepoIntelligenceStorageDir,
@@ -76,6 +78,7 @@ describe('writeJsonFileAtomic', () => {
   });
 
   afterEach(async () => {
+    setAgentConfigHome(undefined);
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -85,6 +88,21 @@ describe('writeJsonFileAtomic', () => {
 
     expect(JSON.parse(await readFile(target, 'utf8'))).toEqual({ a: 1 });
     expect(tempFiles(await readdir(dir))).toEqual([]);
+  });
+
+  it('rejects a computed cache path that aliases the Agent Runtime tree', async () => {
+    const agentHome = path.join(dir, 'agent-home');
+    const runtime = path.join(agentHome, 'runtime');
+    const cacheAlias = path.join(dir, 'workspace', '.agent', 'repo-intelligence');
+    await mkdir(runtime, { recursive: true });
+    await mkdir(path.dirname(cacheAlias), { recursive: true });
+    await symlink(runtime, cacheAlias, process.platform === 'win32' ? 'junction' : 'dir');
+    setAgentConfigHome(agentHome);
+
+    await expect(
+      writeJsonFileAtomic(path.join(cacheAlias, 'manifest.json'), { version: 1 }),
+    ).rejects.toThrow('protected KodaX state');
+    await expect(readFile(path.join(runtime, 'manifest.json'), 'utf8')).rejects.toBeTruthy();
   });
 
   it('uses distinct temp files for same-millisecond concurrent writes', async () => {

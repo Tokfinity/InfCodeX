@@ -1,5 +1,6 @@
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
-import { basename, dirname, join, resolve } from 'node:path';
+import { lstatSync, realpathSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import type {
   LearnedCapabilityRecord,
@@ -12,6 +13,7 @@ import {
   learningEventKindForRecord,
 } from './center-types.js';
 import { withLearningFileLock } from './store-lock.js';
+import { getAgentConfigHome } from '../runtime/agent-home.js';
 
 export interface LearnedAreaPaths {
   readonly root: string;
@@ -40,6 +42,7 @@ function assertSafeFileKey(value: string, label: string): void {
 }
 
 async function writeJsonAtomic(filePath: string, value: unknown): Promise<void> {
+  assertLearnedStoreTarget(filePath);
   await mkdir(dirname(filePath), { recursive: true });
   const tempPath = join(
     dirname(filePath),
@@ -88,6 +91,48 @@ function assertCapability(value: unknown, filePath: string): LearnedCapabilityRe
     throw new LearningCapabilityError('store_integrity_error', `invalid capability record in ${filePath}`);
   }
   return value as unknown as LearnedCapabilityRecord;
+}
+
+function canonicalExistingPath(targetPath: string): string {
+  const suffix: string[] = [];
+  let current = resolve(targetPath);
+  for (;;) {
+    try {
+      lstatSync(current);
+      return join(realpathSync.native(current), ...suffix);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      const parent = dirname(current);
+      if (parent === current) throw error;
+      suffix.unshift(basename(current));
+      current = parent;
+    }
+  }
+}
+
+function pathContains(root: string, target: string): boolean {
+  const candidate = relative(root, target);
+  return candidate === '' || (
+    candidate !== '..'
+    && !candidate.startsWith(`..${sep}`)
+    && !isAbsolute(candidate)
+  );
+}
+
+function pathsEqual(left: string, right: string): boolean {
+  return relative(left, right) === '';
+}
+
+function assertLearnedStoreTarget(targetPath: string): void {
+  const home = canonicalExistingPath(getAgentConfigHome());
+  const target = canonicalExistingPath(targetPath);
+  const runtime = join(home, 'runtime');
+  if (pathsEqual(target, home) || pathContains(runtime, target)) {
+    throw new LearningCapabilityError(
+      'store_integrity_error',
+      `learned Area path aliases protected Runtime state: ${targetPath}`,
+    );
+  }
 }
 
 function isValidV2Capability(value: Record<string, unknown>): boolean {
@@ -203,6 +248,7 @@ export class LearnedAreaStore {
   }
 
   async initialize(): Promise<void> {
+    for (const target of Object.values(this.paths)) assertLearnedStoreTarget(target);
     await Promise.all(Object.values(this.paths).map((path) => mkdir(path, { recursive: true })));
     await this.withOwnerMutation(async () => {
       for (const record of await this.listCapabilities()) await this.ensureCurrentEvent(record);

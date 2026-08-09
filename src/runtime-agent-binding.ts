@@ -21,6 +21,7 @@ import {
   type AgentDispatchContext,
   type Agent,
   type ISkillRegistry,
+  type LearnedCapabilityScope,
   type Skill,
   type SkillContext,
   type SkillMetadata,
@@ -191,10 +192,7 @@ interface BindingResources {
   readonly skillSetRevision: string;
   readonly skillRegistry: ISkillRegistry;
   readonly protectedFormalSkillNames: readonly string[];
-  readonly learnedSkills?: {
-    readonly store: LearnedAreaStore;
-    readonly testingCapabilityIds: readonly string[];
-  };
+  readonly learnedSkills?: PreparedProjectLearnedSkills;
   readonly skillScriptRunner?: KodaXSkillScriptRunner;
   readonly remoteContracts: ReadonlyMap<string, RuntimeRemoteToolContract>;
   readonly toolRegistrations: ReadonlyMap<string, string>;
@@ -379,6 +377,18 @@ class PinnedSkillRegistry implements ISkillRegistry {
   }
 }
 
+interface PreparedLearnedStore {
+  readonly store: LearnedAreaStore;
+  readonly scope: ReturnType<typeof createLearnedCapabilityScope>;
+  readonly testingCapabilityIds: string[];
+}
+
+interface PreparedProjectLearnedSkills {
+  readonly stores: readonly PreparedLearnedStore[];
+  readonly storeByCapabilityId: ReadonlyMap<string, LearnedAreaStore>;
+  readonly discovery: NonNullable<import('@kodax-ai/agent').SkillPathsConfig['learnedArea']>;
+}
+
 class CompositeSkillRegistry implements ISkillRegistry {
   constructor(
     private readonly formal: ISkillRegistry,
@@ -426,10 +436,7 @@ async function resolveSkills(input: {
   readonly refs: readonly RuntimeEffectiveSkillRef[];
   readonly revision: string;
   readonly protectedFormalSkillNames: readonly string[];
-  readonly learnedSkills?: {
-    readonly store: LearnedAreaStore;
-    readonly testingCapabilityIds: readonly string[];
-  };
+  readonly learnedSkills?: PreparedProjectLearnedSkills;
 }> {
   const projectRoot = input.workspace.mode === 'fixed' ? input.workspace.root : undefined;
   const defaults = getDefaultSkillPaths(projectRoot);
@@ -487,8 +494,9 @@ async function resolveSkills(input: {
         ? {}
         : {
             learnedSkills: {
-              store: learned.store,
-              testingCapabilityIds: learned.testingCapabilityIds,
+              stores: learned.stores,
+              storeByCapabilityId: learned.storeByCapabilityId,
+              discovery: learned.discovery,
             },
           }),
     };
@@ -516,28 +524,34 @@ async function tryPrepareProjectLearnedSkills(
 }
 
 async function releaseResolvedLearnedSkills(
-  learned: {
-    readonly store: LearnedAreaStore;
-    readonly testingCapabilityIds: readonly string[];
-  } | undefined,
+  learned: PreparedProjectLearnedSkills | undefined,
   bindingId: string | undefined,
 ): Promise<void> {
   if (learned === undefined || bindingId === undefined) return;
-  await Promise.all(learned.testingCapabilityIds.map((capabilityId) => (
-    releaseLearnedSkillBinding(learned.store, capabilityId, bindingId)
+  await Promise.all(learned.stores.flatMap(({ store, testingCapabilityIds }) => (
+    testingCapabilityIds.map((capabilityId) => (
+      releaseLearnedSkillBinding(store, capabilityId, bindingId)
+    ))
   )));
 }
 
 async function safeReleaseResolvedLearnedSkills(
-  learned: {
-    readonly store: LearnedAreaStore;
-    readonly testingCapabilityIds: readonly string[];
-  } | undefined,
+  learned: PreparedProjectLearnedSkills | undefined,
   bindingId: string | undefined,
 ): Promise<void> {
-  if (learned === undefined || bindingId === undefined) return;
-  const results = await Promise.allSettled(learned.testingCapabilityIds.map((capabilityId) => (
-    releaseLearnedSkillBinding(learned.store, capabilityId, bindingId)
+  if (learned === undefined) return;
+  await safeReleasePreparedStores(learned.stores, bindingId);
+}
+
+async function safeReleasePreparedStores(
+  stores: readonly PreparedLearnedStore[],
+  bindingId: string | undefined,
+): Promise<void> {
+  if (bindingId === undefined) return;
+  const results = await Promise.allSettled(stores.flatMap(({ store, testingCapabilityIds }) => (
+    testingCapabilityIds.map((capabilityId) => (
+      releaseLearnedSkillBinding(store, capabilityId, bindingId)
+    ))
   )));
   for (const result of results) {
     if (result.status !== 'rejected') continue;
@@ -558,44 +572,79 @@ async function prepareProjectLearnedSkills(input: {
   readonly projectRoot: string;
   readonly bindingId?: string;
   readonly ownerSessionRef?: string;
-}): Promise<{
-  readonly store: LearnedAreaStore;
-  readonly testingCapabilityIds: readonly string[];
-  readonly discovery: NonNullable<import('@kodax-ai/agent').SkillPathsConfig['learnedArea']>;
-}> {
+}): Promise<PreparedProjectLearnedSkills> {
   const tenantId = `local:${input.configHome}`;
   const remote = tryGitRemote(input.projectRoot)?.trim();
-  const projectId = remote === undefined
-    ? `local:${path.resolve(input.projectRoot).toLowerCase()}`
+  const remoteProjectId = remote === undefined
+    ? undefined
     : canonicalMemoryProjectId(remote);
-  const rootDir = resolveProjectLearnedAreaRoot(input.configHome, { tenantId, projectId });
-  const store = new LearnedAreaStore(rootDir);
-  await store.initialize();
-  const scope = createLearnedCapabilityScope(input.configHome, { tenantId, projectId });
-  await migrateLegacyLearnedSkillsForProject(input.configHome, store, scope);
+  const localProjectId = `local:${path.resolve(input.projectRoot).toLowerCase()}`;
+  const primaryProjectId = remoteProjectId ?? localProjectId;
+  const projectIds = [...new Set([primaryProjectId, localProjectId])];
+  const scopes = projectIds.map((projectId) => createLearnedCapabilityScope(
+    input.configHome,
+    { tenantId, projectId },
+  ));
+  const rootDirs = projectIds.map((projectId) => resolveProjectLearnedAreaRoot(
+    input.configHome,
+    { tenantId, projectId },
+  ));
+  const expectedScopes: readonly [LearnedCapabilityScope, ...LearnedCapabilityScope[]] = [
+    scopes[0]!,
+    ...scopes.slice(1),
+  ];
+  const stores: PreparedLearnedStore[] = rootDirs.map((rootDir, index) => ({
+    store: new LearnedAreaStore(rootDir),
+    scope: scopes[index]!,
+    testingCapabilityIds: [],
+  }));
   const testingBindings: Record<string, string> = {};
-  const testingCapabilityIds: string[] = [];
-  if (input.bindingId !== undefined && input.ownerSessionRef !== undefined) {
-    for (const record of await store.listCapabilities()) {
-      if (record.schemaVersion !== 2 || record.lifecycle !== 'testing') continue;
-      const admission = await admitLearnedSkillBinding(store, record.capabilityId, {
-        bindingId: input.bindingId,
-        ownerSessionRef: input.ownerSessionRef,
-      });
-      if (admission === undefined) continue;
-      testingBindings[record.capabilityId] = admission.bindingId;
-      testingCapabilityIds.push(record.capabilityId);
+  const storeByCapabilityId = new Map<string, LearnedAreaStore>();
+  try {
+    await Promise.all(stores.map(async ({ store }) => store.initialize()));
+    await migrateLegacyLearnedSkillsForProject(input.configHome, stores[0]!.store, scopes[0]!);
+    for (const prepared of stores) {
+      for (const record of await prepared.store.listCapabilities()) {
+        if (record.schemaVersion !== 2
+          || !sameLearnedScope(record.scope, prepared.scope)
+          || storeByCapabilityId.has(record.capabilityId)) continue;
+        storeByCapabilityId.set(record.capabilityId, prepared.store);
+        if (record.lifecycle !== 'testing'
+          || input.bindingId === undefined
+          || input.ownerSessionRef === undefined) continue;
+        const admission = await admitLearnedSkillBinding(prepared.store, record.capabilityId, {
+          bindingId: input.bindingId,
+          ownerSessionRef: input.ownerSessionRef,
+        });
+        if (admission === undefined) continue;
+        testingBindings[record.capabilityId] = admission.bindingId;
+        prepared.testingCapabilityIds.push(record.capabilityId);
+      }
     }
+  } catch (error) {
+    await safeReleasePreparedStores(stores, input.bindingId);
+    throw error;
   }
   return {
-    store,
-    testingCapabilityIds,
+    stores,
+    storeByCapabilityId,
     discovery: {
-      rootDir,
-      expectedScope: scope,
+      rootDir: rootDirs[0]!,
+      additionalRootDirs: rootDirs.slice(1),
+      expectedScope: scopes[0]!,
+      expectedScopes,
       testingBindings,
     },
   };
+}
+
+function sameLearnedScope(
+  left: { readonly configHomeHash: string; readonly tenantHash: string; readonly projectHash: string },
+  right: { readonly configHomeHash: string; readonly tenantHash: string; readonly projectHash: string },
+): boolean {
+  return left.configHomeHash === right.configHomeHash
+    && left.tenantHash === right.tenantHash
+    && left.projectHash === right.projectHash;
 }
 
 function validateRemoteContract(
@@ -939,10 +988,10 @@ export function createRuntimeAgentBindingService(
       learnedArea: learned.discovery,
     });
     try {
-      await reconcileLearnedSkillBindingOutcomes(learned.store, {
+      await Promise.all(learned.stores.map(({ store }) => reconcileLearnedSkillBindingOutcomes(store, {
         sessionId,
         bindingId: runBindingId,
-      });
+      })));
       await learnedRegistry.discover();
     } catch (error: unknown) {
       await safeReleaseResolvedLearnedSkills(learned, runBindingId);
@@ -957,7 +1006,9 @@ export function createRuntimeAgentBindingService(
     try {
       for (const metadata of registry.list()) {
         if (metadata.source !== 'learned' || metadata.learned === undefined) continue;
-        await recordLearnedSkillOffered(learned.store, {
+        const capabilityStore = learned.storeByCapabilityId.get(metadata.learned.capabilityId);
+        if (capabilityStore === undefined) continue;
+        await recordLearnedSkillOffered(capabilityStore, {
           sessionId,
           bindingId: runBindingId,
           capabilityId: metadata.learned.capabilityId,
@@ -989,7 +1040,11 @@ export function createRuntimeAgentBindingService(
         admitLearnedSkillInvocation: async (
           input: Parameters<NonNullable<KodaXContextOptions['admitLearnedSkillInvocation']>>[0],
         ) => {
-          const receipt = await admitAndRecordLearnedSkillInvocation(learned.store, {
+          const capabilityStore = learned.storeByCapabilityId.get(input.capabilityId);
+          if (capabilityStore === undefined) {
+            throw new Error(`Learned Skill capability is outside this project binding: ${input.capabilityId}`);
+          }
+          const receipt = await admitAndRecordLearnedSkillInvocation(capabilityStore, {
             sessionId,
             ownerSessionRef: sessionId,
             capabilityId: input.capabilityId,
@@ -1002,11 +1057,11 @@ export function createRuntimeAgentBindingService(
         completeLearnedSkillOutcomes: async (
           input: Parameters<NonNullable<KodaXContextOptions['completeLearnedSkillOutcomes']>>[0],
         ) => {
-          await completeLearnedSkillSessionOutcomes(learned.store, {
+          await Promise.all(learned.stores.map(({ store }) => completeLearnedSkillSessionOutcomes(store, {
             ...input,
             sessionId,
             bindingId: runBindingId,
-          });
+          })));
         },
       },
       registry,
@@ -1016,10 +1071,10 @@ export function createRuntimeAgentBindingService(
       ],
       release: async () => {
         try {
-          await reconcileLearnedSkillBindingOutcomes(learned.store, {
+          await Promise.all(learned.stores.map(({ store }) => reconcileLearnedSkillBindingOutcomes(store, {
             sessionId,
             bindingId: runBindingId,
-          });
+          })));
         } catch (error: unknown) {
           emitKodaXDiagnostic({
             source: 'runtime:learned-skills',

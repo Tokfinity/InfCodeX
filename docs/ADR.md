@@ -1,6 +1,50 @@
 # KodaX Architecture Decision Records
 
-> Last updated: 2026-08-07
+> Last updated: 2026-08-09
+>
+> **v0.7.85 Issue 282 convergence addendum:** progress batching is owned by one
+> Actor controller tree, and terminal persistence receives its own ambiguity
+> deadline only after reaching the mutation-queue head. A durability fence
+> aborts both child work and the root executor, suppresses post-fence effects,
+> and automatically reconciles only an exact same-owner late snapshot. A
+> pre-fence Promise fact may survive; otherwise the Run fails with
+> `actor_settlement_not_persisted`. Hosts require these semantics through
+> `actorSettlementConvergence:1`. Same-owner repair closes new effect admission;
+> the Session route converges after every exact tool execution admitted before
+> the fence has settled. A queued successor may then start even if an
+> abort-ignoring provider leaves its Promise pending. UI tool-start events and
+> permission waits are not effect leases, and the fenced provider cannot publish
+> callbacks or start new Runtime-mediated effects.
+> Healthy after-turn input keeps coding-mode defaults and inherits predecessor
+> mode only when it actually drains behind this repair.
+>
+> **v0.7.85 permission and learned-root review addendum:** agent-home Rules
+> authorization preserves ordinary working-data access while protecting the
+> home root from whole-tree removal, hard-denying Runtime mutations, and
+> reviewing credentials/security config plus generic sensitive names.
+> The pre-Runtime `processes/children` registry is also host-owned control
+> state: model writes are hard-denied, and unauthenticated records left in its
+> historically writable location are quarantined without signaling a process.
+> Learned Area persistence is likewise host-owned: model writes to `learned/`
+> are hard-denied, while Memory/Skill lifecycle code remains its sole writer.
+> `agents/*.md`, Sessions, tool results, and intermediate
+> artifacts remain writable without approval. Learned project identity may name
+> distinct remote and local hashed roots; discovery traverses both and every
+> lifecycle mutation returns to the record's owning store. The legacy public
+> `expectedScope` spelling remains accepted alongside optional multi-scope
+> configuration.
+> Model-issued opaque shell execution requires a fail-closed OS sandbox with
+> authoritative process-tree containment. Runtime provides Linux PID-namespace
+> containment and a Windows per-effect Job in every permission mode. macOS and
+> legacy custom adapters that do not declare the optional containment capability
+> fail closed for opaque Bash while retaining completely modeled exact commands.
+> The coding entry installs this boundary independently of
+> Auto guardrails; standalone callers without an adapter retain only completely
+> modeled exact shell commands. Windows grants verified ordinary children, not
+> the Agent Home directory object, preserving child writes without granting
+> whole-root deletion. Shell effects and privileged direct-file sinks use a
+> cross-process category lease so neither can overlap the other's canonical
+> path validation/write window; same-category work remains concurrent.
 >
 > **v0.7.84 release addendum:** Agent progress persistence is bounded to one
 > in-flight durable projection plus one latest replacement. Terminal settlement

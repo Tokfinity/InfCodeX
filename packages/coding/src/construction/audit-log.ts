@@ -38,6 +38,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import crypto from 'crypto';
 import { emitKodaXDiagnostic } from '@kodax-ai/agent';
+import { withFileMutation } from '../tools/_internal/file-mutation-queue.js';
 
 import type { AgentContent } from './types.js';
 
@@ -123,9 +124,11 @@ export async function appendAuditEntry(
 ): Promise<void> {
   const cwd = options.cwd ?? process.cwd();
   const filePath = path.resolve(cwd, AUDIT_LOG_SUBPATH);
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
   const line = JSON.stringify(entry) + '\n';
-  await fs.appendFile(filePath, line, 'utf8');
+  await withFileMutation(filePath, async () => {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.appendFile(filePath, line, 'utf8');
+  });
 }
 
 export interface ReadOptions {
