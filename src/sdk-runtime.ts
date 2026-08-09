@@ -682,6 +682,7 @@ export interface ConnectKodaXRuntimeOptions {
 
 /** SDK facts that embedders can inspect before auto-starting a daemon. */
 export const KODAX_RUNTIME_SDK_CAPABILITIES = Object.freeze({
+  actorSettlementConvergence: 1,
   daemonOrphanExit: 1,
   daemonShutdownVerification: 1,
   managedRunDurability: 1,
@@ -728,6 +729,8 @@ export interface RuntimeCapabilityRequirements {
   readonly durableRecoveryQueries?: 1;
   /** Require durable accepted-input and completed-turn boundaries for managed Runs. */
   readonly managedRunDurability?: 1;
+  /** Require fail-closed root fencing plus automatic same-owner Actor settlement repair. */
+  readonly actorSettlementConvergence?: 1;
   /** Require Session-local sequences, epoch-bound cursors, and scoped event access. */
   readonly sessionEventJournal?: 1;
   readonly daemonManagement?: 1;
@@ -1899,6 +1902,7 @@ export type RuntimeTerminalCode =
   | "credential_unavailable"
   | "host_not_dispatched"
   | "host_outcome_unknown"
+  | "actor_settlement_not_persisted"
   | "control_history_untrusted";
 
 export interface RuntimeTerminalFact {
@@ -2889,7 +2893,13 @@ interface RuntimeRunRecord {
   actorFinalizationAbortController?: AbortController;
   actorTurnBaseline?: ReadonlySet<string>;
   actorCancellation?: Promise<void>;
+  actorDurabilityFailure?: RuntimeRunFailureFact;
+  actorDurabilityRecovery?: Promise<void>;
+  actorDurabilityPreservesExecutorFact?: boolean;
+  capturedExecutorResult?: KodaXResult;
+  capturedExecutorFailure?: RuntimeRunFailureFact;
   mode: RuntimeRunMode;
+  readonly inheritModeAfterDurabilityRepair?: boolean;
   readonly origin?: RuntimeRunStatus["origin"];
   readonly continuation?: Omit<RuntimeContinuationStatus, "state">;
   readonly interruptInputs: RuntimeInterruptInputRecord[];
@@ -3211,6 +3221,8 @@ const RUNTIME_TRANSCRIPT_SNAPSHOT_DIR_PREFIX =
   "kodax-transcript-snapshots-";
 const RUNTIME_ACTOR_CANCELLATION_FINALIZATION_MS = 5_000;
 const RUNTIME_ACTOR_FINALIZATION_MS = 30_000;
+const RUNTIME_ACTOR_REPAIR_INITIAL_RETRY_MS = 100;
+const RUNTIME_ACTOR_REPAIR_MAX_RETRY_MS = 30_000;
 const RUNTIME_SESSION_CAPTURE_RETRY_DELAYS_MS = [5, 15] as const;
 const RUNTIME_LEGACY_LINEAGE_FALLBACK_TIMESTAMP = "1970-01-01T00:00:00.000Z";
 
@@ -3332,6 +3344,7 @@ export async function createKodaXRuntime(
         sessionEventJournal: 1 as const,
         ...(autoStart
           ? {
+            actorSettlementConvergence: 1 as const,
             managedRunDurability: 1 as const,
             runtimeAutoModeGuardrail: 4 as const,
             runtimeEventCoalescing: 1 as const,
@@ -3406,6 +3419,13 @@ export async function createKodaXRuntime(
       completedTurnBeforeEvent: true,
       deliveredInputBeforeEvent: true,
       persistenceFailure: "fail_closed",
+    },
+    actorSettlementConvergence: {
+      version: 1,
+      rootFence: "fail_closed",
+      sameOwnerRepair: "automatic",
+      unknownAfterTurnQueue: true,
+      terminal: "failed",
     },
     sessionEventJournal: {
       version: 1,
@@ -3552,6 +3572,10 @@ export async function createKodaXRuntime(
       },
     };
   };
+  let fenceRunAfterActorSettlementUnknown: (
+    record: RuntimeRunRecord,
+    health: AgentControllerHealth,
+  ) => void = () => undefined;
   const onActorHealthChanged = (
     sessionId: string,
     health: AgentControllerHealth,
@@ -3567,6 +3591,9 @@ export async function createKodaXRuntime(
         || isTerminalRunPhase(run.phase)
       ) {
         continue;
+      }
+      if (health.state === "unknown") {
+        fenceRunAfterActorSettlementUnknown(run, health);
       }
       if (run.stop?.state === "unknown") {
         delete run.actorHealthBaseState;
@@ -3599,6 +3626,10 @@ export async function createKodaXRuntime(
         continue;
       }
       if (health.state === "healthy") {
+        if (run.actorDurabilityFailure !== undefined) {
+          delete run.actorHealthBaseState;
+          continue;
+        }
         const prior = run.actorHealthBaseState;
         if (prior === undefined) continue;
         run.phase = prior.phase;
@@ -3615,7 +3646,7 @@ export async function createKodaXRuntime(
             lifecycleError: run.lifecycleError,
           };
         }
-        if (run.phase !== "queued" || health.state === "unknown") {
+        if (run.phase !== "queued") {
           run.phase = health.state;
         }
         run.stage = health.state;
@@ -3776,6 +3807,9 @@ export async function createKodaXRuntime(
     agentPlane,
     defaultAgentContext: options.externalAgents?.defaultContext,
     actorRegistry,
+    setActorSettlementFenceHandler(handler) {
+      fenceRunAfterActorSettlementUnknown = handler;
+    },
     waitForActorHealthResolution,
     waitForActorHealthChange,
     settingsOwner,
@@ -4180,6 +4214,7 @@ function assertRuntimeCapabilities(
     requirements?.sharedSessionSettings === undefined &&
     requirements?.durableRecoveryQueries === undefined &&
     requirements?.managedRunDurability === undefined &&
+    requirements?.actorSettlementConvergence === undefined &&
     requirements?.sessionEventJournal === undefined &&
     requirements?.daemonManagement === undefined &&
     requirements?.daemonOrphanExit === undefined &&
@@ -4235,6 +4270,7 @@ function assertRuntimeCapabilities(
     ["sharedSessionSettings", requirements.sharedSessionSettings],
     ["durableRecoveryQueries", requirements.durableRecoveryQueries],
     ["managedRunDurability", requirements.managedRunDurability],
+    ["actorSettlementConvergence", requirements.actorSettlementConvergence],
     ["sessionEventJournal", requirements.sessionEventJournal],
     ["daemonManagement", requirements.daemonManagement],
     ["daemonOrphanExit", requirements.daemonOrphanExit],
@@ -4562,6 +4598,7 @@ async function connectKodaXRuntimeInternal(
         sessionEventJournal: 1 as const,
         ...(options.autoStart === true
           ? {
+            actorSettlementConvergence: 1 as const,
             managedRunDurability: 1 as const,
             runtimeAutoModeGuardrail: 4 as const,
             runtimeEventCoalescing: 1 as const,
@@ -4572,6 +4609,10 @@ async function connectKodaXRuntimeInternal(
           : {}),
       };
     const requiredUpgrade = [
+      {
+        name: "actorSettlementConvergence",
+        version: requirements?.actorSettlementConvergence,
+      },
       {
         name: "managedRunDurability",
         version: requirements?.managedRunDurability,
@@ -7106,6 +7147,9 @@ function createRuntimeSessionService(
 
 function createRuntimeRunService(deps: {
   readonly actorRegistry: RuntimeAgentActorRegistry;
+  readonly setActorSettlementFenceHandler: (
+    handler: (record: RuntimeRunRecord, health: AgentControllerHealth) => void,
+  ) => void;
   readonly waitForActorHealthResolution: (
     sessionId: string,
     observed: AgentControllerHealth,
@@ -7340,31 +7384,107 @@ function createRuntimeRunService(deps: {
   const requestManagedActorCancellation = (
     record: RuntimeRunRecord,
     reason: string,
-  ): Promise<void> => {
+  ): Promise<{ readonly error?: Error }> => {
     const actorSession = record.actorSession;
     const baseline = record.actorTurnBaseline;
     if (
-      record.mode !== "managed_task"
-      || record.stop === undefined
-      || actorSession === undefined
+      actorSession === undefined
       || baseline === undefined
     ) {
-      return Promise.resolve();
+      return Promise.resolve({});
     }
     const previous = record.actorCancellation ?? Promise.resolve();
     const cancellation = previous
       .then(() => actorSession.quiesce(reason, baseline))
+      .then(() => ({}))
       .catch((error: unknown) => {
+        const normalized = normalizeError(error);
         emitKodaXDiagnostic({
           source: "runtime.run.actor-cancellation",
           level: "error",
           message: `Failed to cooperatively cancel Actor descendants for Runtime run ${record.runId}.`,
-          detail: error,
+          detail: normalized,
         });
+        return { error: normalized };
       });
-    record.actorCancellation = cancellation;
+    record.actorCancellation = cancellation.then(() => undefined);
     return cancellation;
   };
+
+  const actorDurabilityFailureApplies = (record: RuntimeRunRecord): boolean =>
+    record.actorDurabilityFailure !== undefined
+    && record.actorDurabilityPreservesExecutorFact !== true;
+  const executorPromiseSettled = (record: RuntimeRunRecord): boolean =>
+    record.capturedExecutorResult !== undefined
+    || record.capturedExecutorFailure !== undefined;
+  const recoverActorDurability = async (
+    record: RuntimeRunRecord,
+    reason: string,
+  ): Promise<void> => {
+    let retryMs = RUNTIME_ACTOR_REPAIR_INITIAL_RETRY_MS;
+    for (;;) {
+      const attempt = await requestManagedActorCancellation(record, reason);
+      if (
+        deps.isClosed()
+        || record.terminalEmitted
+        || record.actorDurabilityFailure === undefined
+        || record.actorSession?.health().state === "healthy"
+      ) return;
+      if (attempt.error?.name !== "AgentSettlementAttemptTimeoutError") return;
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, retryMs);
+        timer.unref?.();
+      });
+      retryMs = Math.min(retryMs * 2, RUNTIME_ACTOR_REPAIR_MAX_RETRY_MS);
+    }
+  };
+
+  deps.setActorSettlementFenceHandler((
+    record: RuntimeRunRecord,
+    health: AgentControllerHealth,
+  ): void => {
+    if (
+      record.phase === "queued"
+      || record.actorDurabilityFailure !== undefined
+      || record.terminalEmitted
+    ) return;
+    const message = health.message
+      ?? "Actor settlement persistence is unknown; Runtime stopped the owning Run.";
+    const error = new Error(message);
+    error.name = "AgentSettlementPersistenceError";
+    record.actorDurabilityFailure = {
+      phase: "failed",
+      error,
+      terminal: {
+        code: "actor_settlement_not_persisted",
+        effectOutcome: "unknown",
+        message,
+      },
+    };
+    record.actorDurabilityPreservesExecutorFact =
+      record.capturedExecutorResult !== undefined
+      || record.capturedExecutorFailure !== undefined;
+    record.interruptInputOpen = false;
+    terminalizeQueuedInterruptInputs(record);
+    releaseAbortSignalSubscription(record);
+    record.running?.abort(error);
+    record.abortController?.abort(error);
+    deps.permissions.rejectForRun(record.runId, message);
+    deps.userInputs.rejectForRun(record.runId, message);
+    record.start?.options.guardrails
+      ?.find(isRuntimeAutoModeGuardrail)
+      ?.clearAllowedCalls();
+    const recovery = recoverActorDurability(record, message);
+    record.actorDurabilityRecovery = recovery;
+    void recovery.then(() => {
+      if (record.actorDurabilityRecovery === recovery) {
+        record.actorDurabilityRecovery = undefined;
+      }
+      if (record.actorSession?.health().state === "healthy") {
+        finishRecoveredUnconfirmedRun(record);
+      }
+    });
+  });
 
   const awaitActorFinalization = async (
     record: RuntimeRunRecord,
@@ -7455,6 +7575,13 @@ function createRuntimeRunService(deps: {
             resolveAbort = undefined;
             healthChange.close();
           }
+          continue;
+        }
+        if (
+          observed.state === "unknown"
+          && record.actorDurabilityRecovery !== undefined
+        ) {
+          await record.actorDurabilityRecovery;
           continue;
         }
         if (observed.state === "unknown") return observed;
@@ -7610,6 +7737,14 @@ function createRuntimeRunService(deps: {
         );
         return;
       }
+      if (actorDurabilityFailureApplies(record)) {
+        if (!executorPromiseSettled(record)) return;
+        finishRun(
+          record,
+          applyRunFailureFact(record, record.actorDurabilityFailure),
+        );
+        return;
+      }
       if (latched.signal === "failed") {
         finishRun(
           record,
@@ -7656,6 +7791,9 @@ function createRuntimeRunService(deps: {
     record: RuntimeRunRecord,
     error: unknown,
   ): RuntimeRunFailureFact => {
+    if (actorDurabilityFailureApplies(record)) {
+      return record.actorDurabilityFailure;
+    }
     const trustedManagedAbort =
       record.mode === "managed_task"
       && record.stop !== undefined
@@ -7742,9 +7880,20 @@ function createRuntimeRunService(deps: {
     reason: string,
     drain: boolean,
   ): RuntimeRunResult => {
+    if (
+      actorDurabilityFailureApplies(record)
+      && executorPromiseSettled(record)
+      && canApplyExecutorTerminalSignal(record)
+    ) {
+      return applyRunFailureFact(record, record.actorDurabilityFailure);
+    }
     const executorSignal = record.executorTerminalSignal;
     if (
       executorSignal !== undefined
+      && (
+        record.actorDurabilityFailure === undefined
+        || executorPromiseSettled(record)
+      )
       && !record.terminalEmitted
       && canApplyExecutorTerminalSignal(record)
     ) {
@@ -7826,7 +7975,10 @@ function createRuntimeRunService(deps: {
         phase: record.phase,
         ...(record.stop !== undefined ? { stop: record.stop } : {}),
       };
-      if (!drain) {
+      const retainDurabilityFence =
+        actorDurabilityFailureApplies(record)
+        && !executorPromiseSettled(record);
+      if (!drain && !retainDurabilityFence) {
         resolveRunStart(record, result);
         releaseActiveQueueRoute(record);
         releaseActiveRun(record);
@@ -7858,11 +8010,21 @@ function createRuntimeRunService(deps: {
   ): void => {
     const unconfirmed = record.unconfirmedResult;
     if (
-      unconfirmed === undefined
-      || record.terminalEmitted
+      record.terminalEmitted
       || !canApplyExecutorTerminalSignal(record)
     ) return;
-    const value = unconfirmed.result;
+    if (actorDurabilityFailureApplies(record)) {
+      // Actor repair proves the tree is durable, not that an already-started
+      // root effect has stopped. Keep the Session route fenced until the root
+      // executor Promise settles so a queued successor cannot overlap it.
+      if (!executorPromiseSettled(record)) return;
+      finishRun(
+        record,
+        applyRunFailureFact(record, record.actorDurabilityFailure),
+      );
+      return;
+    }
+    const value = record.capturedExecutorResult ?? unconfirmed?.result;
     if (value !== undefined) {
       const phase = value.interrupted
         ? "interrupted"
@@ -7896,7 +8058,7 @@ function createRuntimeRunService(deps: {
       });
       return;
     }
-    const failure = record.unconfirmedFailure;
+    const failure = record.capturedExecutorFailure ?? record.unconfirmedFailure;
     if (failure !== undefined) {
       finishRun(record, applyRunFailureFact(record, failure));
       return;
@@ -7927,7 +8089,7 @@ function createRuntimeRunService(deps: {
     record.interruptInputOpen = record.actorSession !== undefined;
     record.queuedAt = undefined;
     record.runningAt = new Date().toISOString();
-    if (record.mode === "managed_task" && record.actorSession !== undefined) {
+    if (record.actorSession !== undefined) {
       record.actorTurnBaseline = new Set(
         record.actorSession.rootControl().list().actors.flatMap((actor) =>
           actor.currentTurnId === undefined ? [] : [actor.currentTurnId]
@@ -8156,6 +8318,7 @@ function createRuntimeRunService(deps: {
       registerActiveQueueRoute(record);
       void managedResult
         .then(async (value): Promise<RuntimeRunResult> => {
+          record.capturedExecutorResult = value;
           const phase = record.terminalEmitted
             ? record.phase
             : value.interrupted
@@ -8177,6 +8340,9 @@ function createRuntimeRunService(deps: {
           if (actorHealth.state === "unknown") {
             return unknownActorSettlementResult(record, value);
           }
+          if (actorDurabilityFailureApplies(record)) {
+            return applyRunFailureFact(record, record.actorDurabilityFailure);
+          }
           markRunTerminal(
             deps.bus,
             deps.persistence,
@@ -8197,6 +8363,7 @@ function createRuntimeRunService(deps: {
         })
         .catch(async (error: unknown) => {
           const failure = captureRunFailureFact(record, error);
+          record.capturedExecutorFailure = failure;
           const actorHealth = await awaitActorFinalization(record);
           if (actorHealth.state === "unknown") {
             record.unconfirmedFailure = failure;
@@ -8246,6 +8413,7 @@ function createRuntimeRunService(deps: {
     registerActiveQueueRoute(record);
     void running.result
       .then(async (value): Promise<RuntimeRunResult> => {
+        record.capturedExecutorResult = value;
         const phase = record.terminalEmitted
           ? record.phase
           : value.interrupted
@@ -8256,6 +8424,9 @@ function createRuntimeRunService(deps: {
         const actorHealth = await awaitActorFinalization(record);
         if (actorHealth.state === "unknown") {
           return unknownActorSettlementResult(record, value);
+        }
+        if (actorDurabilityFailureApplies(record)) {
+          return applyRunFailureFact(record, record.actorDurabilityFailure);
         }
         markRunTerminal(deps.bus, deps.persistence, record, phase);
         return {
@@ -8268,6 +8439,7 @@ function createRuntimeRunService(deps: {
       })
       .catch(async (error: unknown) => {
         const failure = captureRunFailureFact(record, error);
+        record.capturedExecutorFailure = failure;
         const actorHealth = await awaitActorFinalization(record);
         if (actorHealth.state === "unknown") {
           record.unconfirmedFailure = failure;
@@ -8286,6 +8458,7 @@ function createRuntimeRunService(deps: {
       return undefined;
     } catch (error) {
       const failure = captureRunFailureFact(record, error);
+      record.capturedExecutorFailure = failure;
       void awaitActorFinalization(record).then((actorHealth) => {
         if (actorHealth.state === "unknown") {
           record.unconfirmedFailure = failure;
@@ -8309,6 +8482,15 @@ function createRuntimeRunService(deps: {
     if (!next || next.phase !== "queued") {
       drainNext(sessionId);
       return;
+    }
+    if (next.inheritModeAfterDurabilityRepair === true) {
+      const predecessor = next.continuation === undefined
+        ? undefined
+        : deps.runs.get(next.continuation.afterRunId);
+      if (predecessor?.actorDurabilityFailure !== undefined) {
+        next.mode = predecessor.mode;
+        publishRunUpdate(next);
+      }
     }
     startRecord(next);
   };
@@ -8491,7 +8673,15 @@ function createRuntimeRunService(deps: {
         `Runtime continuation target ${record.runId} does not belong to session ${sessionId}`,
       );
     }
-    if (!isActiveRunPhase(record.phase) && record.phase !== "queued") {
+    const awaitingDurabilityRepair =
+      record.phase === "unknown"
+      && record.actorDurabilityFailure !== undefined
+      && !record.terminalEmitted;
+    if (
+      !isActiveRunPhase(record.phase)
+      && record.phase !== "queued"
+      && !awaitingDurabilityRepair
+    ) {
       throw new RuntimeContinuationStaleError(record.runId);
     }
   };
@@ -8545,6 +8735,10 @@ function createRuntimeRunService(deps: {
     );
     const actorSession =
       options.agentMode === "sa" ? undefined : ownedActorSession;
+    const queuesBehindDurabilityRepair =
+      requiredAfterRun?.phase === "unknown"
+      && requiredAfterRun.actorDurabilityFailure !== undefined
+      && !requiredAfterRun.terminalEmitted;
     if (actorSession !== undefined) {
       const observedHealth = actorSession.health();
       const health = observedHealth.state === "recovering"
@@ -8553,7 +8747,7 @@ function createRuntimeRunService(deps: {
             observedHealth,
           )
         : observedHealth;
-      if (health.state === "unknown") {
+      if (health.state === "unknown" && !queuesBehindDurabilityRepair) {
         throw Object.assign(
           new Error(
             health.message
@@ -8719,7 +8913,12 @@ function createRuntimeRunService(deps: {
       ...(options.reasoningMode !== undefined
         ? { reasoning: options.reasoningMode }
         : {}),
-      mode: input.mode ?? "coding",
+      mode: input.mode
+        ?? (queuesBehindDurabilityRepair ? requiredAfterRun?.mode : undefined)
+        ?? "coding",
+      ...(requiredAfterRun !== undefined && input.mode === undefined
+        ? { inheritModeAfterDurabilityRepair: true }
+        : {}),
       ...((input as RuntimeTrustedStartRunInput).providerCredential !==
       undefined
         ? {
@@ -8902,7 +9101,15 @@ function createRuntimeRunService(deps: {
         };
       }
 
-      if (!isActiveRunPhase(afterRun.phase) && afterRun.phase !== "queued") {
+      const queuesBehindDurabilityRepair =
+        afterRun.phase === "unknown"
+        && afterRun.actorDurabilityFailure !== undefined
+        && !afterRun.terminalEmitted;
+      if (
+        !isActiveRunPhase(afterRun.phase)
+        && afterRun.phase !== "queued"
+        && !queuesBehindDurabilityRepair
+      ) {
         return {
           accepted: false,
           delivery: input.delivery,
@@ -9148,7 +9355,9 @@ function createRuntimeRunService(deps: {
           run,
           "runtime run aborted",
         );
-        void actorCancellation.then(() => finishRecoveredUnconfirmedRun(run));
+        void actorCancellation.then((attempt) => {
+          if (attempt.error === undefined) finishRecoveredUnconfirmedRun(run);
+        });
         deps.permissions.rejectForRun(run.runId, "runtime run aborted");
         deps.userInputs.rejectForRun(run.runId, "runtime run aborted");
         run.start?.options.guardrails
@@ -14701,6 +14910,7 @@ function isRuntimeTerminalCode(value: unknown): value is RuntimeTerminalCode {
     value === "credential_unavailable" ||
     value === "host_not_dispatched" ||
     value === "host_outcome_unknown" ||
+    value === "actor_settlement_not_persisted" ||
     value === "control_history_untrusted"
   );
 }
@@ -15938,11 +16148,16 @@ function wrapKodaXEvents(input: {
     runId: record.runId,
     turnId: meta?.turnId ?? record.turnId,
   });
+  const externalCallbacks = (): KodaXEvents | undefined =>
+    record.actorDurabilityFailure === undefined ? original : undefined;
+  const actorDurabilityFenced = (): boolean =>
+    record.actorDurabilityFailure !== undefined;
   const emit = (
     type: RuntimeEventType,
     payload: unknown,
     meta?: Partial<KodaXActivityEventMeta>,
   ): void => {
+    if (record.actorDurabilityFailure !== undefined) return;
     bus.emit(
       type,
       redactScopedProviderCredential(payload),
@@ -15955,11 +16170,12 @@ function wrapKodaXEvents(input: {
     }
   };
   const managedStopDecision = (): string | undefined =>
-    record.mode === "managed_task"
+    record.actorDurabilityFailure?.terminal.message
+    ?? (record.mode === "managed_task"
       && record.stop !== undefined
       && record.abortController?.signal.aborted === true
       ? record.stop.reason
-      : undefined;
+      : undefined);
   const runWithUserInputPhase = async <T>(
     kind: RuntimeUserInputKind,
     options: unknown,
@@ -15967,6 +16183,7 @@ function wrapKodaXEvents(input: {
     execute: (() => Promise<T>) | undefined,
     dismissed: T,
   ): Promise<T> => {
+    if (managedStopDecision() !== undefined) return dismissed;
     const previousPhase = record.phase;
     if (record.phase === "running") {
       onPhase("waiting_user_input");
@@ -16042,82 +16259,72 @@ function wrapKodaXEvents(input: {
   return {
     ...original,
     onTextDelta(text, meta) {
+      if (actorDurabilityFenced()) return;
       resumeFromTransientPhase();
       emit("assistant.delta", { text, meta }, meta);
-      original?.onTextDelta?.(text, meta);
+      externalCallbacks()?.onTextDelta?.(text, meta);
     },
     onThinkingDelta(text, meta) {
+      if (actorDurabilityFenced()) return;
       resumeFromTransientPhase();
       emit("thinking.delta", { text, meta }, meta);
-      original?.onThinkingDelta?.(text, meta);
+      externalCallbacks()?.onThinkingDelta?.(text, meta);
     },
     onThinkingEnd(thinking, meta) {
       emit("thinking.finished", { thinking, meta }, meta);
-      original?.onThinkingEnd?.(thinking, meta);
+      externalCallbacks()?.onThinkingEnd?.(thinking, meta);
     },
     onToolUseStart(tool, meta) {
+      if (actorDurabilityFenced()) return;
       onPhase(tool.name === "wait_agent" ? "waiting_agent" : "running");
       emit("tool.started", { tool, meta }, meta);
-      original?.onToolUseStart?.(tool, meta);
+      externalCallbacks()?.onToolUseStart?.(tool, meta);
     },
     onToolProgress(update, meta) {
       emit("tool.progress", { update, meta }, meta);
-      original?.onToolProgress?.(update, meta);
+      externalCallbacks()?.onToolProgress?.(update, meta);
     },
     onToolSandboxObservation(update, meta) {
       emit("tool.sandbox", { update, meta }, meta);
-      original?.onToolSandboxObservation?.(update, meta);
+      externalCallbacks()?.onToolSandboxObservation?.(update, meta);
     },
     onToolInputDelta(toolName, partialJson, meta) {
       emit("tool.progress", { toolName, partialJson, meta }, meta);
-      original?.onToolInputDelta?.(toolName, partialJson, meta);
+      externalCallbacks()?.onToolInputDelta?.(toolName, partialJson, meta);
     },
     onToolResult(result, meta) {
+      if (actorDurabilityFenced()) return;
       if (result.name === "wait_agent") onPhase("running");
       emit("tool.finished", { result, meta }, meta);
-      original?.onToolResult?.(result, meta);
+      externalCallbacks()?.onToolResult?.(result, meta);
     },
     onStreamEnd(meta) {
       emit("run.progress", { kind: "stream_end", meta }, meta);
-      original?.onStreamEnd?.(meta);
+      externalCallbacks()?.onStreamEnd?.(meta);
     },
     onChildActivityEnd(meta) {
       emit("child_activity.finished", { meta }, meta);
-      original?.onChildActivityEnd?.(meta);
+      externalCallbacks()?.onChildActivityEnd?.(meta);
     },
     onSessionStart(info) {
+      if (record.actorDurabilityFailure !== undefined) return;
       record.provider = info.provider;
-      bus.emit("session.loaded", redactScopedProviderCredential(info), {
-        sessionId: info.sessionId,
-        runId: record.runId,
-        turnId: info.turnId ?? record.turnId,
-      });
-      original?.onSessionStart?.(info);
+      emit("session.loaded", info, info);
+      externalCallbacks()?.onSessionStart?.(info);
     },
     onTurnStarted(event) {
+      if (record.actorDurabilityFailure !== undefined) return;
       record.turnId = event.turnId;
-      bus.emit("turn.started", redactScopedProviderCredential(event), {
-        sessionId: event.sessionId,
-        runId: record.runId,
-        turnId: event.turnId,
-      });
-      original?.onTurnStarted?.(event);
+      emit("turn.started", event, event);
+      externalCallbacks()?.onTurnStarted?.(event);
     },
     onTurnCompleted(event) {
-      bus.emit("turn.completed", redactScopedProviderCredential(event), {
-        sessionId: event.sessionId,
-        runId: record.runId,
-        turnId: event.turnId,
-      });
-      original?.onTurnCompleted?.(event);
+      emit("turn.completed", event, event);
+      externalCallbacks()?.onTurnCompleted?.(event);
     },
     onTurnFailed(event) {
-      bus.emit("turn.failed", redactScopedProviderCredential(event), {
-        sessionId: event.sessionId,
-        runId: record.runId,
-        turnId: event.turnId,
-      });
-      original?.onTurnFailed?.(event);
+      emit("turn.failed", event, event);
+      externalCallbacks()?.onTurnFailed?.(event);
     },
     onIterationStart(iter, maxIter, meta) {
       emit(
@@ -16125,22 +16332,22 @@ function wrapKodaXEvents(input: {
         { kind: "iteration_start", iter, maxIter, meta },
         meta,
       );
-      original?.onIterationStart?.(iter, maxIter, meta);
+      externalCallbacks()?.onIterationStart?.(iter, maxIter, meta);
     },
     onIterationEnd(info) {
       emit("run.progress", { kind: "iteration_end", info }, info);
-      original?.onIterationEnd?.(info);
+      externalCallbacks()?.onIterationEnd?.(info);
     },
     onCompactStart(meta) {
       emit("context.compaction.started", { meta }, meta);
-      original?.onCompactStart?.(meta);
+      externalCallbacks()?.onCompactStart?.(meta);
     },
     onCompact(estimatedTokens, meta) {
-      original?.onCompact?.(estimatedTokens, meta);
+      externalCallbacks()?.onCompact?.(estimatedTokens, meta);
     },
     onCompactStats(info) {
       emit("context.compaction.stats", info, info);
-      original?.onCompactStats?.(info);
+      externalCallbacks()?.onCompactStats?.(info);
     },
     async onCompactedMessages(messages, update, meta) {
       const boundedUpdate =
@@ -16175,7 +16382,7 @@ function wrapKodaXEvents(input: {
         },
         meta,
       );
-      await original?.onCompactedMessages?.(messages, update, meta);
+      await externalCallbacks()?.onCompactedMessages?.(messages, update, meta);
     },
     onContextCompactionFinished(event) {
       const afterRevision = event.contextRevision ?? 0;
@@ -16191,16 +16398,17 @@ function wrapKodaXEvents(input: {
         },
         event,
       );
-      original?.onContextCompactionFinished?.(event);
+      externalCallbacks()?.onContextCompactionFinished?.(event);
     },
     onCompactEnd(meta, result) {
       emit("context.compaction.ended", {
         meta,
         ...(result ?? {}),
       }, meta);
-      original?.onCompactEnd?.(meta, result);
+      externalCallbacks()?.onCompactEnd?.(meta, result);
     },
     onMidTurnUserMessages(contents, meta) {
+      if (actorDurabilityFenced()) return;
       onMidTurnUserMessages(
         meta?.queuedMessageIds ?? [],
         meta?.queuedMessageEntryIds,
@@ -16210,11 +16418,11 @@ function wrapKodaXEvents(input: {
         { kind: "mid_turn_user_messages", contents, meta },
         meta,
       );
-      original?.onMidTurnUserMessages?.(contents, meta);
+      externalCallbacks()?.onMidTurnUserMessages?.(contents, meta);
     },
     onRetry(reason, attempt, maxAttempts, meta) {
       emit("provider.retry", { reason, attempt, maxAttempts, meta }, meta);
-      original?.onRetry?.(reason, attempt, maxAttempts, meta);
+      externalCallbacks()?.onRetry?.(reason, attempt, maxAttempts, meta);
     },
     onProviderRateLimit(attempt, maxRetries, delayMs, meta) {
       emit(
@@ -16228,11 +16436,11 @@ function wrapKodaXEvents(input: {
         },
         meta,
       );
-      original?.onProviderRateLimit?.(attempt, maxRetries, delayMs, meta);
+      externalCallbacks()?.onProviderRateLimit?.(attempt, maxRetries, delayMs, meta);
     },
     onRetryAfter(payload, meta) {
       emit("provider.retry", { retryAfter: payload, meta }, meta);
-      original?.onRetryAfter?.(payload, meta);
+      externalCallbacks()?.onRetryAfter?.(payload, meta);
     },
     onReasoningEffortRejected(event) {
       emit(
@@ -16240,69 +16448,119 @@ function wrapKodaXEvents(input: {
         { kind: "reasoning_effort_rejected", event },
         event,
       );
-      original?.onReasoningEffortRejected?.(event);
+      externalCallbacks()?.onReasoningEffortRejected?.(event);
     },
     onRepoIntelligenceTrace(event) {
       emit("repo_intelligence.trace", event, event);
-      original?.onRepoIntelligenceTrace?.(event);
+      externalCallbacks()?.onRepoIntelligenceTrace?.(event);
     },
     onContextBudgetSnapshot(event) {
       const attributed = withRuntimeDiagnosticIdentity(event, record.sessionId);
       emit("context.budget.snapshot", attributed, attributed);
-      original?.onContextBudgetSnapshot?.(attributed);
+      externalCallbacks()?.onContextBudgetSnapshot?.(attributed);
     },
     onPromptCacheDiagnostics(event) {
       const attributed = withRuntimeDiagnosticIdentity(event, record.sessionId);
       emit("provider.cache.diagnostics", attributed, attributed);
-      original?.onPromptCacheDiagnostics?.(attributed);
+      externalCallbacks()?.onPromptCacheDiagnostics?.(attributed);
     },
     onToolExposurePlanned(event) {
       const attributed = withRuntimeDiagnosticIdentity(event, record.sessionId);
       emit("tool.exposure.planned", attributed, attributed);
-      original?.onToolExposurePlanned?.(attributed);
+      externalCallbacks()?.onToolExposurePlanned?.(attributed);
     },
     onContextCompactionSkipped(event) {
       const attributed = withRuntimeDiagnosticIdentity(event, record.sessionId);
       emit("context.compaction.skipped", attributed, attributed);
-      original?.onContextCompactionSkipped?.(attributed);
+      externalCallbacks()?.onContextCompactionSkipped?.(attributed);
     },
     onSidecarMessage(event) {
       emit("sidecar.message", event, event);
-      original?.onSidecarMessage?.(event);
+      externalCallbacks()?.onSidecarMessage?.(event);
     },
     onTodoUpdate(items, meta) {
       emit("todo.updated", { items, meta }, meta);
-      original?.onTodoUpdate?.(items, meta);
+      externalCallbacks()?.onTodoUpdate?.(items, meta);
     },
     onTodoDriftWarning(event) {
       emit("todo.warning", event, event);
-      original?.onTodoDriftWarning?.(event);
+      externalCallbacks()?.onTodoDriftWarning?.(event);
     },
     onProviderRecovery(event, meta) {
+      if (actorDurabilityFenced()) return;
       onPhase("recovering");
       emit("provider.recovery", { event, meta }, meta);
-      original?.onProviderRecovery?.(event, meta);
+      externalCallbacks()?.onProviderRecovery?.(event, meta);
     },
     onEffectiveConfig(config) {
       emit("config.effective", config, config);
-      original?.onEffectiveConfig?.(config);
+      externalCallbacks()?.onEffectiveConfig?.(config);
     },
     onWorkflowProcessEvent(event) {
       const mapped = workflowEventType(event);
-      bus.emit(mapped, redactScopedProviderCredential(event), {
+      emit(mapped, event, {
         sessionId: event.snapshot.hostMetadata?.sessionId ?? record.sessionId,
-        runId: record.runId,
-        turnId: record.turnId,
       });
-      original?.onWorkflowProcessEvent?.(event);
+      externalCallbacks()?.onWorkflowProcessEvent?.(event);
     },
+    onWorkflowAgentDigest(event) {
+      externalCallbacks()?.onWorkflowAgentDigest?.(event);
+    },
+    onScoutSuspiciousCompletion(payload) {
+      externalCallbacks()?.onScoutSuspiciousCompletion?.(payload);
+    },
+    hasPendingInputs() {
+      return externalCallbacks()?.hasPendingInputs?.() ?? false;
+    },
+    ...(original?.exitPlanMode === undefined
+      ? {}
+      : {
+          exitPlanMode: (plan: string): Promise<boolean | "not-in-plan-mode"> =>
+            actorDurabilityFenced()
+              ? Promise.resolve(false)
+              : original.exitPlanMode!(plan),
+        }),
+    ...(original?.onMemoryReview === undefined
+      ? {}
+      : {
+          onMemoryReview: (...args: Parameters<NonNullable<KodaXEvents["onMemoryReview"]>>) => {
+            externalCallbacks()?.onMemoryReview?.(...args);
+          },
+        }),
+    ...(original?.onMemoryNotice === undefined
+      ? {}
+      : {
+          onMemoryNotice: (...args: Parameters<NonNullable<KodaXEvents["onMemoryNotice"]>>) => {
+            externalCallbacks()?.onMemoryNotice?.(...args);
+          },
+        }),
+    ...(original?.onMemoryOutcomeDigest === undefined
+      ? {}
+      : {
+          onMemoryOutcomeDigest: (
+            ...args: Parameters<NonNullable<KodaXEvents["onMemoryOutcomeDigest"]>>
+          ) => {
+            externalCallbacks()?.onMemoryOutcomeDigest?.(...args);
+          },
+        }),
+    ...(original?.onMemoryReviewReceipt === undefined
+      ? {}
+      : {
+          onMemoryReviewReceipt: (
+            ...args: Parameters<NonNullable<KodaXEvents["onMemoryReviewReceipt"]>>
+          ) => {
+            externalCallbacks()?.onMemoryReviewReceipt?.(...args);
+          },
+        }),
     onComplete(meta) {
+      if (actorDurabilityFenced()) return;
       record.interruptInputOpen = false;
       onExecutorTerminal("completed");
       emit("run.progress", { kind: "complete", meta }, meta);
-      original?.onComplete?.(meta);
+      externalCallbacks()?.onComplete?.(meta);
     },
     onError(error, meta) {
+      if (actorDurabilityFenced()) return;
       record.interruptInputOpen = false;
       onExecutorTerminal("failed", error);
       const trustedManagedAbort =
@@ -16321,9 +16579,10 @@ function wrapKodaXEvents(input: {
         },
         meta,
       );
-      original?.onError?.(error, meta);
+      externalCallbacks()?.onError?.(error, meta);
     },
     onManagedTaskStatus(status) {
+      if (actorDurabilityFenced()) return;
       if (record.mode === "managed_task" && status.phase === "completed") {
         record.interruptInputOpen = false;
         onPhase("running");
@@ -16340,7 +16599,7 @@ function wrapKodaXEvents(input: {
         );
       }
       emit("run.progress", { kind: "managed_task_status", status }, status);
-      original?.onManagedTaskStatus?.(status);
+      externalCallbacks()?.onManagedTaskStatus?.(status);
     },
     beforeToolExecute: async (
       tool: string,

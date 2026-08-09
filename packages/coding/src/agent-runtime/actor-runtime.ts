@@ -432,46 +432,25 @@ function createDurableProgressProjector(
   report(summary: string): void;
   finish(): void;
 } {
-  // Progress is a bounded observation, not a terminal fact. Keep at most one
-  // durable write in flight and one latest replacement so terminal settlement
-  // cannot start behind an unbounded fire-and-forget mutation queue.
-  let pending: string | undefined;
-  let draining: Promise<void> | undefined;
+  // Progress is a bounded observation, not a terminal fact. The Actor controller
+  // owns tree-wide batching so every executor, including custom ones, shares the
+  // same persistence backpressure boundary.
   let finished = false;
-  const drain = async (): Promise<void> => {
-    while (pending !== undefined) {
-      const summary = pending;
-      pending = undefined;
-      try {
-        await input.reportProgress({ kind: 'status', summary });
-      } catch (error: unknown) {
-        emitKodaXDiagnostic({
-          source: 'coding:actors',
-          level: 'warn',
-          message: `${label} progress projection failed: ${error instanceof Error ? error.message : String(error)}`,
-        });
-      }
-    }
-  };
-  const start = (): void => {
-    if (finished || draining !== undefined || pending === undefined) return;
-    const current = drain().finally(() => {
-      if (draining === current) draining = undefined;
+  const report = (summary: string): void => {
+    void input.reportProgress({ kind: 'status', summary }).catch((error: unknown) => {
+      emitKodaXDiagnostic({
+        source: 'coding:actors',
+        level: 'warn',
+        message: `${label} progress projection failed: ${error instanceof Error ? error.message : String(error)}`,
+      });
     });
-    draining = current;
   };
   return {
     report(summary) {
       if (finished) return;
-      pending = summary;
-      start();
+      report(summary);
     },
     finish() {
-      // Terminal settlement is stronger than pending observational progress.
-      // Reject new reports but do not await the in-flight drainer. It may still
-      // project its one latest replacement; the controller serializes terminal
-      // settlement without letting this adapter wait forever. If persistence
-      // stalls, the controller deadline can now surface unknown health.
       finished = true;
     },
   };

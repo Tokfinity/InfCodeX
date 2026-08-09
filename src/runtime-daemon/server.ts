@@ -1574,7 +1574,14 @@ async function dispatchRuntimeDaemonRequest(
           `Runtime continuation target ${afterRunId} does not belong to session ${sessionId}.`,
         );
       }
-      if (!isActiveRuntimeRunPhase(afterRun.phase)) {
+      const queuesBehindActorDurabilityRepair =
+        delivery === "after_turn"
+        && afterRun.phase === "unknown"
+        && afterRun.lifecycleError?.code === "actor_settlement_not_persisted";
+      if (
+        !isActiveRuntimeRunPhase(afterRun.phase)
+        && !queuesBehindActorDurabilityRepair
+      ) {
         return {
           accepted: false,
           delivery,
@@ -2141,6 +2148,7 @@ function runtimeDaemonCapabilities(
   delete safeOverrides.actorControlPlane;
   delete safeOverrides.integrationConfigResilience;
   delete safeOverrides.managedRunDurability;
+  delete safeOverrides.actorSettlementConvergence;
   delete safeOverrides.sessionEventJournal;
   delete safeOverrides.daemonOrphanExit;
   delete safeOverrides.daemonShutdownVerification;
@@ -2171,6 +2179,13 @@ function runtimeDaemonCapabilities(
       completedTurnBeforeEvent: true,
       deliveredInputBeforeEvent: true,
       persistenceFailure: "fail_closed",
+    },
+    actorSettlementConvergence: {
+      version: 1,
+      rootFence: "fail_closed",
+      sameOwnerRepair: "automatic",
+      unknownAfterTurnQueue: true,
+      terminal: "failed",
     },
     sessionEventJournal: {
       version: 1,

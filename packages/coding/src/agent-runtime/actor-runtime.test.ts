@@ -541,7 +541,7 @@ describe('F270 coding Actor runtime adapter', () => {
     );
   });
 
-  it('does not wait forever for durable progress before attempting terminal settlement', async () => {
+  it('does not spend the terminal persistence deadline waiting behind durable progress', async () => {
     vi.useFakeTimers();
     let releaseFirstProgressSave: (() => void) | undefined;
     let markFirstProgressSaveStarted: (() => void) | undefined;
@@ -595,23 +595,69 @@ describe('F270 coding Actor runtime adapter', () => {
       await vi.advanceTimersByTimeAsync(6_000);
 
       expect(session.health()).toMatchObject({
-        state: 'unknown',
-        code: 'actor_settlement_not_persisted',
+        state: 'recovering',
       });
 
       releaseFirstProgressSave?.();
       await vi.runAllTimersAsync();
-      await session.quiesce('repair after delayed progress persistence');
       await vi.waitFor(() => {
         expect(root.output(turn.actorPath, turn.turnId)).toMatchObject({
-          state: 'interrupted',
-          error: 'repair after delayed progress persistence',
+          state: 'completed',
+          output: 'done',
         });
       });
       expect(progressSaveCount).toBe(1);
       expect(session.health()).toEqual({ state: 'healthy' });
     } finally {
       releaseFirstProgressSave?.();
+      vi.useRealTimers();
+    }
+  });
+
+  it('fails closed when a durable progress predecessor never releases the settlement queue', async () => {
+    vi.useFakeTimers();
+    let releaseProgressSave: (() => void) | undefined;
+    let markProgressSaveStarted: (() => void) | undefined;
+    const progressSaveStarted = new Promise<void>((resolve) => {
+      markProgressSaveStarted = resolve;
+    });
+    const progressSave = new Promise<void>((resolve) => {
+      releaseProgressSave = resolve;
+    });
+    const session = new CodingActorSession({
+      sessionId: 'session-1',
+      store: {
+        async load() { return undefined; },
+        async save(snapshot) {
+          const worker = snapshot.turns.find((turn) => turn.actorPath === '/root/worker');
+          if (worker?.state === 'running' && (worker.progress?.length ?? 0) > 0) {
+            markProgressSaveStarted?.();
+            await progressSave;
+          }
+        },
+      },
+    });
+    executeChildAgentsMock.mockImplementation(async (_bundles, _ctx, childOptions) => {
+      childOptions.onProgress?.('Started');
+      return completedChild('done');
+    });
+    const { ctx, options } = environment();
+    await session.initialize();
+    const root = session.attach(ctx, options);
+
+    try {
+      const turn = await root.spawn({ taskName: 'worker', objective: 'Block progress storage.' });
+      await progressSaveStarted;
+      await vi.advanceTimersByTimeAsync(30_001);
+
+      expect(session.health()).toMatchObject({
+        state: 'unknown',
+        code: 'actor_settlement_not_persisted',
+        turnId: turn.turnId,
+      });
+    } finally {
+      releaseProgressSave?.();
+      await vi.runAllTimersAsync();
       vi.useRealTimers();
     }
   });

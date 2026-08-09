@@ -51,6 +51,7 @@ const MAX_EVENT_ITEMS = 2_048;
 const INITIAL_SETTLEMENT_RETRY_MS = 10;
 const MAX_SETTLEMENT_RETRY_MS = 1_000;
 const SETTLEMENT_RETRY_DEADLINE_MS = 5_000;
+const SETTLEMENT_QUEUE_WAIT_DEADLINE_MS = 30_000;
 const SETTLEMENT_SHUTDOWN_TIMEOUT_MS = 2_000;
 const GRAPHEME_SEGMENTER = new Intl.Segmenter('en', { granularity: 'grapheme' });
 
@@ -103,6 +104,32 @@ interface EventWaiter {
   readonly timer: ReturnType<typeof setTimeout>;
 }
 
+interface PendingProgress {
+  readonly updates: readonly AgentProgressUpdate[];
+  readonly completion: Promise<void>;
+  readonly resolve: () => void;
+  readonly reject: (error: unknown) => void;
+}
+
+interface AgentTurnSettlementResult {
+  readonly output?: string;
+  readonly artifacts?: readonly string[];
+  readonly artifactDetails?: readonly AgentArtifactDescriptor[];
+  readonly structured?: AgentMetadataValue;
+  readonly turnMetadata?: Readonly<Record<string, AgentMetadataValue>>;
+  readonly error?: string;
+}
+
+interface UnknownSettlementIntent {
+  readonly turnId: string;
+  readonly state: 'completed' | 'failed';
+  readonly result: AgentTurnSettlementResult;
+}
+
+interface UnknownQuiesceIntent {
+  readonly reason: string;
+}
+
 interface StartPlan {
   readonly actor: AgentActor;
   readonly turn: AgentTurn;
@@ -129,11 +156,15 @@ export class AgentActorController {
   private readonly waiters = new Set<EventWaiter>();
   private readonly pendingSettlements = new Set<Promise<void>>();
   private readonly settlementRecoveryMessages = new Map<string, string>();
+  private pendingProgress = new Map<string, PendingProgress>();
   private readonly scheduler: AgentTurnScheduler;
   private readonly budget: AgentBudgetPort;
   private readonly now: () => string;
   private readonly admissionScope = Object.freeze({});
   private mutationTail: Promise<void> = Promise.resolve();
+  private activeProgress?: ReadonlyMap<string, PendingProgress>;
+  private progressMutation?: Promise<void>;
+  private progressDrainScheduled = false;
   private revision = 0;
   private admissionRevision = 0;
   private snapshotSchemaVersion: 1 | 2;
@@ -141,6 +172,9 @@ export class AgentActorController {
   private initialized = false;
   private ownershipLost = false;
   private settlementPersistenceUnknown = false;
+  private readonly pendingSettlementIntents = new Map<string, UnknownSettlementIntent>();
+  private unknownQuiesceIntent?: UnknownQuiesceIntent;
+  private unknownSettlementReconciliation?: Promise<void>;
   private ownershipReleased = false;
   private closing = false;
   private settlementGeneration = 0;
@@ -578,44 +612,88 @@ export class AgentActorController {
     preservedTurnIds?: ReadonlySet<string>,
   ): Promise<void> {
     if (this.ownershipReleased) return;
-    let reconciledUnknown = false;
     if (this.ownershipLost && this.settlementPersistenceUnknown) {
-      await this.reconcileUnknownSettlement();
-      reconciledUnknown = true;
+      // The durability fence has already aborted every local executor. A
+      // previously captured preservation baseline can no longer keep any
+      // non-terminal turn alive without creating a durable ghost.
+      await this.reconcileUnknownSettlement(reason);
+      return;
     }
+    const quiesceIntent: UnknownQuiesceIntent = { reason };
+    this.unknownQuiesceIntent ??= quiesceIntent;
     let earlyAbortedTurnId: string | undefined;
+    const attempt = { active: true };
     try {
-      await this.mutate(() => {
-        let changed = false;
-        for (const turn of this.turns.values()) {
-          if (isTerminal(turn.state) || preservedTurnIds?.has(turn.turnId)) continue;
-          changed = true;
-          const abort = this.abortControllers.get(turn.turnId);
-          // Fence a start whose admission commit just completed before its
-          // caller can schedule the executor while this durable mutation waits.
-          if (abort && !abort.signal.aborted) {
-            earlyAbortedTurnId ??= turn.turnId;
-            abort.abort(reason);
+      let markMutationReady: (() => void) | undefined;
+      const mutationReady = new Promise<void>((resolve) => {
+        markMutationReady = resolve;
+      });
+      const mutation = this.mutate(
+        () => {
+          let changed = false;
+          for (const turn of this.turns.values()) {
+            if (isTerminal(turn.state) || preservedTurnIds?.has(turn.turnId)) continue;
+            changed = true;
+            const abort = this.abortControllers.get(turn.turnId);
+            // Fence a start whose admission commit just completed before its
+            // caller can schedule the executor while this durable mutation waits.
+            if (abort && !abort.signal.aborted) {
+              earlyAbortedTurnId ??= turn.turnId;
+              abort.abort(reason);
+            }
+            this.finishTurn(turn.turnId, 'interrupted', { error: reason });
           }
-          this.finishTurn(turn.turnId, 'interrupted', { error: reason });
-        }
-        return changed;
-      }, (changed) => changed);
-    } catch (error: unknown) {
-      if (earlyAbortedTurnId !== undefined || reconciledUnknown) {
-        this.indeterminateFailure = normalizeControllerError(error);
-        this.fenceUnknownSettlement();
-        this.setHealth({
-          state: 'unknown',
-          code: 'actor_settlement_not_persisted',
-          ...(earlyAbortedTurnId === undefined ? {} : { turnId: earlyAbortedTurnId }),
-          message:
-            earlyAbortedTurnId === undefined
-              ? 'Actor cancellation after settlement reconciliation could not be durably confirmed.'
-              : `Actor cancellation for ${earlyAbortedTurnId} was observed locally but could not be durably confirmed.`,
-        });
+          return changed;
+        },
+        (changed) => changed,
+        false,
+        () => attempt.active,
+        false,
+        () => markMutationReady?.(),
+      );
+      // mutate() may fail its initial owner assertion before onMutationReady runs. Attach a
+      // rejection observer immediately so the bounded readiness wait cannot surface a delayed
+      // unhandled rejection; the original promise is still awaited below for factual propagation.
+      void mutation.catch(() => undefined);
+      try {
+        await raceSettlementAttempt(
+          mutationReady,
+          Date.now() + SETTLEMENT_QUEUE_WAIT_DEADLINE_MS,
+        );
+      } catch (error: unknown) {
+        throw error;
       }
-      throw error;
+      await raceSettlementAttempt(
+        mutation,
+        Date.now() + SETTLEMENT_RETRY_DEADLINE_MS,
+      );
+      if (this.unknownQuiesceIntent === quiesceIntent) {
+        this.unknownQuiesceIntent = undefined;
+      }
+    } catch (error: unknown) {
+      attempt.active = false;
+      if (error instanceof AgentOwnerConflictError && earlyAbortedTurnId === undefined) {
+        if (this.unknownQuiesceIntent === quiesceIntent) {
+          this.unknownQuiesceIntent = undefined;
+        }
+        throw error;
+      }
+      const persistenceError = new AgentSettlementPersistenceError(
+        earlyAbortedTurnId ?? 'Actor cancellation',
+        error,
+      );
+      this.indeterminateFailure = persistenceError;
+      this.fenceUnknownSettlement();
+      this.setHealth({
+        state: 'unknown',
+        code: 'actor_settlement_not_persisted',
+        ...(earlyAbortedTurnId === undefined ? {} : { turnId: earlyAbortedTurnId }),
+        message:
+          earlyAbortedTurnId === undefined
+            ? 'Actor cancellation could not reach durable persistence before its queue deadline.'
+            : `Actor cancellation for ${earlyAbortedTurnId} was observed locally but could not be durably confirmed.`,
+      });
+      throw persistenceError;
     }
   }
 
@@ -956,41 +1034,40 @@ export class AgentActorController {
     turnId: string,
     result: AgentExecutionResult,
   ): Promise<void> {
-    await this.commitExecutionSettlement(turnId, () => {
-      const turn = this.turns.get(turnId);
-      if (!turn || isTerminal(turn.state)) return false;
-      this.finishTurn(turnId, 'completed', {
+    await this.commitExecutionSettlement({
+      turnId,
+      state: 'completed',
+      result: {
         output: result.output,
         artifacts: result.artifacts ?? [],
         ...(result.artifactDetails === undefined
           ? {} : { artifactDetails: result.artifactDetails }),
         ...(result.structured === undefined ? {} : { structured: result.structured }),
         ...(result.turnMetadata === undefined ? {} : { turnMetadata: result.turnMetadata }),
-      });
-      return true;
+      },
     });
   }
 
   private async failExecution(turnId: string, error: unknown): Promise<void> {
-    await this.commitExecutionSettlement(turnId, () => {
-      const turn = this.turns.get(turnId);
-      if (!turn || isTerminal(turn.state)) return false;
-      this.finishTurn(turnId, 'failed', { error: error instanceof Error ? error.message : String(error) });
-      return true;
+    await this.commitExecutionSettlement({
+      turnId,
+      state: 'failed',
+      result: { error: error instanceof Error ? error.message : String(error) },
     });
   }
 
   private async commitExecutionSettlement(
-    turnId: string,
-    settle: () => boolean,
+    settlementIntent: UnknownSettlementIntent,
   ): Promise<void> {
+    const { turnId } = settlementIntent;
     if (this.ownershipLost || this.ownershipReleased) {
       this.assertWritableOwner();
     }
+    this.pendingSettlementIntents.set(turnId, settlementIntent);
     let retryMs = INITIAL_SETTLEMENT_RETRY_MS;
     let failureReported = false;
     const validityGeneration = this.settlementValidityGeneration;
-    const deadline = Date.now() + SETTLEMENT_RETRY_DEADLINE_MS;
+    let deadline: number | undefined;
     this.settlementRecoveryMessages.set(
       turnId,
       `Executor settlement for ${turnId} is awaiting durable persistence.`,
@@ -1003,20 +1080,46 @@ export class AgentActorController {
     ) {
       const attempt = { active: true };
       try {
-        await raceSettlementAttempt(
-          this.mutate(
-            settle,
-            (changed) => changed,
-            false,
-            () => (
-              attempt.active
-              && validityGeneration === this.settlementValidityGeneration
-            ),
-            true,
+        let markMutationReady: (() => void) | undefined;
+        const mutationReady = new Promise<void>((resolve) => {
+          markMutationReady = resolve;
+        });
+        const mutation = this.mutate(
+          () => this.applySettlementIntent(settlementIntent),
+          (changed) => changed,
+          false,
+          () => (
+            attempt.active
+            && validityGeneration === this.settlementValidityGeneration
           ),
+          true,
+          () => markMutationReady?.(),
+        );
+        void mutation.catch(() => undefined);
+        const queueWaitStartedAt = Date.now();
+        try {
+          await raceSettlementAttempt(
+            mutationReady,
+            Date.now() + SETTLEMENT_QUEUE_WAIT_DEADLINE_MS,
+          );
+        } catch (error: unknown) {
+          throw error;
+        }
+        const mutationReadyAt = Date.now();
+        if (deadline !== undefined) {
+          deadline += Math.max(0, mutationReadyAt - queueWaitStartedAt);
+        } else {
+          deadline = mutationReadyAt + SETTLEMENT_RETRY_DEADLINE_MS;
+        }
+        await raceSettlementAttempt(
+          mutation,
           deadline,
         );
         this.settlementRecoveryMessages.delete(turnId);
+        if (this.pendingSettlementIntents.get(turnId) === settlementIntent) {
+          this.pendingSettlementIntents.delete(turnId);
+        }
+        this.scheduleProgressDrain();
         if (this.health.state !== 'unknown') {
           this.publishSettlementHealth();
         }
@@ -1052,7 +1155,7 @@ export class AgentActorController {
         this.publishSettlementHealth();
         if (
           error instanceof AgentSettlementAttemptTimeoutError
-          || Date.now() >= deadline
+          || (deadline !== undefined && Date.now() >= deadline)
         ) {
           const persistenceError = new AgentSettlementPersistenceError(
             turnId,
@@ -1149,6 +1252,13 @@ export class AgentActorController {
     this.appendEvent(eventKindForTerminal(state), actor.path, turnId, actor.parentPath);
   }
 
+  private applySettlementIntent(intent: UnknownSettlementIntent): boolean {
+    const turn = this.turns.get(intent.turnId);
+    if (!turn || isTerminal(turn.state)) return false;
+    this.finishTurn(intent.turnId, intent.state, intent.result);
+    return true;
+  }
+
   private appendCompletion(
     actor: AgentActor,
     turnId: string,
@@ -1201,28 +1311,117 @@ export class AgentActorController {
   }
 
   private async recordProgress(turnId: string, update: AgentProgressUpdate): Promise<void> {
-    await this.mutate(() => {
-      const turn = this.requireTurn(turnId);
-      if (isTerminal(turn.state)) return false;
-      const summary = boundedText(update.summary.trim(), MAX_PROGRESS_SUMMARY_LENGTH).text;
-      if (summary.length === 0) {
-        throw new AgentControlError('invalid_message', 'progress summary is required');
-      }
-      const previous = turn.progress ?? [];
-      const progress: AgentProgressItem = {
-        sequence: (previous.at(-1)?.sequence ?? 0) + 1,
-        kind: update.kind,
-        summary,
-        createdAt: this.now(),
-      };
-      this.turns.set(turnId, {
-        ...turn,
-        progress: [...previous, progress].slice(-MAX_PROGRESS_ITEMS),
-        revision: turn.revision + 1,
+    this.assertWritableOwner();
+    const turn = this.requireTurn(turnId);
+    if (isTerminal(turn.state)) return;
+    const summary = boundedText(update.summary.trim(), MAX_PROGRESS_SUMMARY_LENGTH).text;
+    if (summary.length === 0) {
+      throw new AgentControlError('invalid_message', 'progress summary is required');
+    }
+    const current = this.pendingProgress.get(turnId);
+    if (current) {
+      this.pendingProgress.set(turnId, {
+        ...current,
+        updates: [
+          ...current.updates,
+          { kind: update.kind, summary },
+        ].slice(-MAX_PROGRESS_ITEMS),
       });
-      this.appendEvent('turn_progress', turn.actorPath, turnId, undefined, progress);
-      return true;
-    }, (changed) => changed);
+      this.scheduleProgressDrain();
+      return current.completion;
+    }
+    let resolveCompletion: () => void = () => undefined;
+    let rejectCompletion: (error: unknown) => void = () => undefined;
+    const completion = new Promise<void>((resolve, reject) => {
+      resolveCompletion = resolve;
+      rejectCompletion = reject;
+    });
+    this.pendingProgress.set(turnId, {
+      updates: [{ kind: update.kind, summary }],
+      completion,
+      resolve: resolveCompletion,
+      reject: rejectCompletion,
+    });
+    this.scheduleProgressDrain();
+    return completion;
+  }
+
+  private scheduleProgressDrain(): void {
+    if (
+      this.progressMutation !== undefined
+      || this.progressDrainScheduled
+      || this.pendingProgress.size === 0
+      || this.settlementRecoveryMessages.size > 0
+      || this.closing
+      || this.ownershipLost
+      || this.ownershipReleased
+    ) return;
+    this.progressDrainScheduled = true;
+    queueMicrotask(() => {
+      this.progressDrainScheduled = false;
+      this.startProgressDrain();
+    });
+  }
+
+  private startProgressDrain(): void {
+    if (
+      this.progressMutation !== undefined
+      || this.pendingProgress.size === 0
+      || this.settlementRecoveryMessages.size > 0
+      || this.closing
+      || this.ownershipLost
+      || this.ownershipReleased
+    ) return;
+    const batch = this.pendingProgress;
+    this.pendingProgress = new Map();
+    this.activeProgress = batch;
+    const mutation: Promise<void> = this.mutate(
+      () => this.applyProgressBatch(batch),
+      (changed) => changed,
+    ).then(() => undefined);
+    this.progressMutation = mutation;
+    void (async () => {
+      try {
+        await mutation;
+        for (const pending of batch.values()) {
+          pending.resolve();
+        }
+      } catch (error: unknown) {
+        for (const pending of batch.values()) {
+          pending.reject(error);
+        }
+      } finally {
+        if (this.progressMutation === mutation) this.progressMutation = undefined;
+        if (this.activeProgress === batch) this.activeProgress = undefined;
+        this.scheduleProgressDrain();
+      }
+    })();
+  }
+
+  private applyProgressBatch(batch: ReadonlyMap<string, PendingProgress>): boolean {
+    let changed = false;
+    for (const [turnId, pending] of batch) {
+      let turn = this.turns.get(turnId);
+      if (!turn || isTerminal(turn.state)) continue;
+      for (const update of pending.updates) {
+        const previous: readonly AgentProgressItem[] = turn.progress ?? [];
+        const progress: AgentProgressItem = {
+          sequence: (previous.at(-1)?.sequence ?? 0) + 1,
+          kind: update.kind,
+          summary: update.summary,
+          createdAt: this.now(),
+        };
+        turn = {
+          ...turn,
+          progress: [...previous, progress].slice(-MAX_PROGRESS_ITEMS),
+          revision: turn.revision + 1,
+        };
+        this.appendEvent('turn_progress', turn.actorPath, turnId, undefined, progress);
+        changed = true;
+      }
+      this.turns.set(turnId, turn);
+    }
+    return changed;
   }
 
   private resolveForwarding(
@@ -1466,6 +1665,7 @@ export class AgentActorController {
     allowOwnershipClaim = false,
     commitStillValid?: () => boolean,
     allowWhileClosing = false,
+    onMutationReady?: () => void,
   ): Promise<T> {
     if (!allowOwnershipClaim) this.assertWritableOwner();
     if (this.closing && !allowWhileClosing) {
@@ -1475,6 +1675,7 @@ export class AgentActorController {
     let release: () => void = () => {};
     this.mutationTail = new Promise<void>((resolve) => { release = resolve; });
     await previousTail;
+    onMutationReady?.();
     const before = this.snapshot();
     const beforeAborts = new Map(this.abortControllers);
     const priorEventSequence = this.eventsLog.at(-1)?.sequence ?? 0;
@@ -1494,7 +1695,8 @@ export class AgentActorController {
       }
       const expectedRevision = this.revision;
       this.revision += 1;
-      await this.options.store?.save(this.snapshot(), expectedRevision);
+      const attemptedSnapshot = this.snapshot();
+      await this.options.store?.save(attemptedSnapshot, expectedRevision);
       if (commitStillValid?.() === false) {
         throw new AgentSettlementAttemptExpiredError();
       }
@@ -1635,6 +1837,15 @@ export class AgentActorController {
 
   private assertWritableOwner(): void {
     const desired = this.options.owner;
+    if (this.ownershipLost && this.settlementPersistenceUnknown) {
+      if (this.indeterminateFailure instanceof AgentSettlementPersistenceError) {
+        throw this.indeterminateFailure;
+      }
+      throw new AgentSettlementPersistenceError(
+        this.health.turnId ?? 'unknown Actor turn',
+        this.indeterminateFailure,
+      );
+    }
     if (this.ownershipLost || this.ownershipReleased) {
       throw new AgentOwnerConflictError(
         this.durableOwner?.runtimeId,
@@ -1653,70 +1864,162 @@ export class AgentActorController {
   }
 
   private fenceUnknownSettlement(): void {
+    const firstFence = !this.settlementPersistenceUnknown;
     this.ownershipLost = true;
     this.settlementPersistenceUnknown = true;
+    if (firstFence) this.unknownSettlementReconciliation = undefined;
     this.settlementValidityGeneration += 1;
     this.settlementRecoveryMessages.clear();
     this.stopLocalWork('actor settlement persistence is unknown');
   }
 
-  private async reconcileUnknownSettlement(): Promise<void> {
+  private async reconcileUnknownSettlement(reason: string): Promise<void> {
+    let reconciliation = this.unknownSettlementReconciliation;
+    if (reconciliation === undefined) {
+      reconciliation = this.performUnknownSettlementReconciliation(reason);
+      this.unknownSettlementReconciliation = reconciliation;
+      void reconciliation.catch(() => {
+        if (this.unknownSettlementReconciliation === reconciliation) {
+          this.unknownSettlementReconciliation = undefined;
+        }
+      });
+    }
+    await raceSettlementAttempt(reconciliation, Date.now() + SETTLEMENT_RETRY_DEADLINE_MS);
+  }
+
+  private async performUnknownSettlementReconciliation(reason: string): Promise<void> {
     const store = this.options.store;
     if (!store) {
       throw new Error('Actor settlement cannot be reconciled without a durable store.');
     }
-    const attempt = { active: true };
+    const intents = [...this.pendingSettlementIntents.values()];
+    if (intents.length === 0 && this.unknownQuiesceIntent === undefined) {
+      throw new AgentSettlementPersistenceError(
+        this.health.turnId ?? 'unknown Actor turn',
+        new Error('The exact timed-out settlement or cancellation intent is unavailable.'),
+      );
+    }
+    // A timed-out mutation cannot be cancelled. Wait for the sealed queue once,
+    // then merge the typed terminal fact onto the exact same-owner snapshot.
+    await this.mutationTail;
+    const latest = await store.load();
+    if (!latest) {
+      throw new Error('Actor settlement cannot be reconciled because its snapshot is missing.');
+    }
+    validateSnapshot(latest, this.scheduler.maxConcurrentThreads);
+    this.requireSameDurableOwner(latest);
+    const priorCommitted = this.committedSnapshot;
+    const localBeforeRepair = this.snapshot();
     try {
-      await raceSettlementAttempt((async () => {
-        // A timed-out save cannot be cancelled. Observe its final durable
-        // result, then recover only when the exact owner fence still matches.
-        await this.mutationTail;
-        const latest = await store.load();
-        if (!attempt.active) return;
-        if (!latest) {
-          throw new Error('Actor settlement cannot be reconciled because its snapshot is missing.');
-        }
-        validateSnapshot(latest, this.scheduler.maxConcurrentThreads);
-        const desired = this.options.owner;
-        const latestOwner = latest.schemaVersion === 2 ? latest.owner : undefined;
-        if (
-          desired === undefined
-          || latestOwner?.ownerId !== desired.ownerId
-        ) {
-          throw new AgentOwnerConflictError(
-            latestOwner?.runtimeId,
-            latest.revision,
-            false,
+      this.restore(latest);
+      replaceMap(this.abortControllers, []);
+      let changed = false;
+      for (const intent of intents) {
+        const target = this.turns.get(intent.turnId);
+        if (target === undefined) {
+          throw new AgentSettlementPersistenceError(
+            intent.turnId,
+            new Error('The durable Actor snapshot is missing the settlement target.'),
           );
         }
-        const priorCommitted = this.committedSnapshot;
-        this.restore(latest);
-        replaceMap(this.abortControllers, []);
-        this.committedSnapshot = this.snapshot();
-        this.ownershipLost = false;
-        this.settlementPersistenceUnknown = false;
-        this.indeterminateFailure = undefined;
-        this.settlementRecoveryMessages.clear();
-        for (const message of appendedMessages(priorCommitted, this.committedSnapshot)) {
-          this.publishCommittedMessage(message);
+        if (isTerminal(target.state)) {
+          if (!turnMatchesSettlementIntent(target, intent)) {
+            throw new AgentSettlementPersistenceError(
+              intent.turnId,
+              new Error('The durable Actor snapshot contains a conflicting terminal fact.'),
+            );
+          }
+        } else {
+          changed = this.applySettlementIntent(intent) || changed;
         }
-        const priorSequence = priorCommitted.events.at(-1)?.sequence ?? 0;
-        for (const event of this.committedSnapshot.events) {
-          if (event.sequence > priorSequence) this.publishCommittedEvent(event);
+      }
+      const interruptionReason = this.unknownQuiesceIntent?.reason ?? reason;
+      for (const turn of [...this.turns.values()]) {
+        if (isTerminal(turn.state)) continue;
+        this.finishTurn(turn.turnId, 'interrupted', { error: interruptionReason });
+        changed = true;
+      }
+      if (changed) {
+        if (actorAdmissionChanged(latest.actors, [...this.actors.values()])) {
+          this.admissionRevision += 1;
         }
-        this.setHealth({ state: 'healthy' }, true);
-      })(), Date.now() + SETTLEMENT_RETRY_DEADLINE_MS);
+        const expectedRevision = this.revision;
+        this.revision += 1;
+        await store.save(this.snapshot(), expectedRevision);
+      }
+      const verified = await store.load();
+      if (!verified) {
+        throw new Error('Actor settlement repair could not verify its durable snapshot.');
+      }
+      validateSnapshot(verified, this.scheduler.maxConcurrentThreads);
+      this.requireSameDurableOwner(verified);
+      if (
+        intents.some((intent) => {
+          const verifiedTarget = verified.turns.find((turn) => turn.turnId === intent.turnId);
+          return verifiedTarget === undefined || !turnMatchesSettlementIntent(verifiedTarget, intent);
+        })
+        || verified.turns.some((turn) => !isTerminal(turn.state))
+      ) {
+        throw new AgentSettlementPersistenceError(
+          intents[0]?.turnId ?? 'Actor cancellation',
+          new Error('The repaired Actor settlement and sibling fence were not durably verified.'),
+        );
+      }
+      this.restore(verified);
+      replaceMap(this.abortControllers, []);
+      this.committedSnapshot = this.snapshot();
+      this.ownershipLost = false;
+      this.settlementPersistenceUnknown = false;
+      this.pendingSettlementIntents.clear();
+      this.unknownQuiesceIntent = undefined;
+      this.indeterminateFailure = undefined;
+      this.settlementRecoveryMessages.clear();
+      this.setHealth({ state: 'healthy' }, true);
+      for (const message of appendedMessages(priorCommitted, this.committedSnapshot)) {
+        this.publishCommittedMessage(message);
+      }
+      const priorSequence = priorCommitted.events.at(-1)?.sequence ?? 0;
+      for (const event of this.committedSnapshot.events) {
+        if (event.sequence > priorSequence) this.publishCommittedEvent(event);
+      }
     } catch (error: unknown) {
-      attempt.active = false;
+      this.restore(localBeforeRepair);
+      replaceMap(this.abortControllers, []);
+      this.committedSnapshot = priorCommitted;
+      this.ownershipLost = true;
+      this.settlementPersistenceUnknown = true;
       throw error;
     }
+  }
+
+  private requireSameDurableOwner(snapshot: AgentActorSnapshot): void {
+    const desired = this.options.owner;
+    const latestOwner = snapshot.schemaVersion === 2 ? snapshot.owner : undefined;
+    if (desired !== undefined && latestOwner?.ownerId === desired.ownerId) return;
+    throw new AgentOwnerConflictError(
+      latestOwner?.runtimeId,
+      snapshot.revision,
+      false,
+    );
   }
 
   private stopLocalWork(reason: string): void {
     const localAborts = [...new Set(this.abortControllers.values())];
     this.abortControllers.clear();
     for (const abort of localAborts) abort.abort(reason);
+    this.rejectProgressWaiters(new AgentControlError('actor_closed', reason));
     for (const waiter of [...this.waiters]) waiter.resolve(undefined);
+  }
+
+  private rejectProgressWaiters(error: Error): void {
+    const pendingProgress = this.pendingProgress;
+    this.pendingProgress = new Map();
+    for (const pending of [
+      ...pendingProgress.values(),
+      ...(this.activeProgress?.values() ?? []),
+    ]) {
+      pending.reject(error);
+    }
   }
 
   private async fenceAfterSnapshotConflict(
@@ -1727,9 +2030,22 @@ export class AgentActorController {
     this.restore(before);
     this.ownershipLost = true;
     this.settlementPersistenceUnknown = false;
+    this.rejectProgressWaiters(new AgentControlError(
+      'actor_closed',
+      'Actor owner was superseded while progress was awaiting persistence.',
+    ));
+    this.pendingSettlementIntents.clear();
+    this.unknownQuiesceIntent = undefined;
+    this.unknownSettlementReconciliation = undefined;
     const localAborts = [...new Set(beforeAborts.values())];
     replaceMap(this.abortControllers, []);
     for (const abort of localAborts) abort.abort('actor owner superseded');
+    this.setHealth({
+      state: 'unknown',
+      code: 'actor_settlement_not_persisted',
+      message:
+        'Actor ownership changed while local work was active; the owning Runtime was fenced.',
+    });
 
     const priorCommitted = this.committedSnapshot;
     let ownerRuntimeId: string | undefined;
@@ -2129,6 +2445,24 @@ function appendedMessages(
     messages.push(...afterMailbox.slice(beforeLength));
   }
   return messages;
+}
+
+function turnMatchesSettlementIntent(
+  turn: AgentTurn,
+  intent: UnknownSettlementIntent,
+): boolean {
+  if (turn.state !== intent.state) return false;
+  const result = intent.result;
+  if (
+    turn.output !== result.output
+    || turn.error !== result.error
+    || JSON.stringify(turn.artifacts) !== JSON.stringify(result.artifacts)
+    || JSON.stringify(turn.artifactDetails) !== JSON.stringify(result.artifactDetails)
+    || JSON.stringify(turn.structured) !== JSON.stringify(result.structured)
+  ) return false;
+  return Object.entries(result.turnMetadata ?? {}).every(([key, value]) => (
+    JSON.stringify(turn.metadata?.[key]) === JSON.stringify(value)
+  ));
 }
 
 function actorAdmissionChanged(

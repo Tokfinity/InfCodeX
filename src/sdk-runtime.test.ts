@@ -176,7 +176,12 @@ describe("createKodaXRuntime", () => {
   afterEach(async () => {
     _resetMessageQueueForTests();
     _resetActiveRootQueueRoutesForTests();
-    await fs.rm(tempRoot, { recursive: true, force: true });
+    await fs.rm(tempRoot, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 50,
+    });
   });
 
   it("hosts an embedded Runtime in a disposable Worker without changing the service API", async () => {
@@ -221,6 +226,13 @@ describe("createKodaXRuntime", () => {
       completedTurnBeforeEvent: true,
       deliveredInputBeforeEvent: true,
       persistenceFailure: "fail_closed",
+    });
+    expect(runtime.capabilities.actorSettlementConvergence).toEqual({
+      version: 1,
+      rootFence: "fail_closed",
+      sameOwnerRepair: "automatic",
+      unknownAfterTurnQueue: true,
+      terminal: "failed",
     });
     const session = await runtime.sessions.create({ title: "Worker Session" });
     await expect(runtime.sessions.list()).resolves.toEqual([
@@ -3948,6 +3960,35 @@ describe("createKodaXRuntime", () => {
     ]);
 
     await runtime.close();
+  });
+
+  it("fails closed when a daemon lacks Actor settlement convergence", async () => {
+    const { connectKodaXRuntime } = await import("./sdk-runtime.js");
+    const transport: RuntimeDaemonClientTransport = {
+      async request(method) {
+        if (method !== "initialize") return null;
+        return {
+          identity: {
+            runtimeId: "daemon-without-actor-settlement-convergence",
+            mode: "daemon",
+            profile: "default",
+            startedAt: "2026-08-09T00:00:00.000Z",
+            version: "0.7.84",
+          },
+          capabilities: { ...SESSION_EVENT_JOURNAL_CAPABILITY },
+        };
+      },
+      subscribe() {
+        return { close() {} };
+      },
+    };
+
+    await expect(
+      connectKodaXRuntime({
+        transport,
+        requirements: { actorSettlementConvergence: 1 },
+      }),
+    ).rejects.toThrow(/does not support.*actorSettlementConvergence/i);
   });
 
   it("validates embedded Session and Run ownership even when the event log is empty", async () => {
@@ -9483,6 +9524,74 @@ describe("createKodaXRuntime", () => {
     await runtime.close();
   });
 
+  it("keeps a healthy managed-task after-turn continuation in coding mode by default", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "healthy-managed-continuation-sessions"),
+      defaultProvider: "mock-provider",
+    });
+    const session = await runtime.sessions.create({
+      title: "Healthy Managed Continuation",
+    });
+    let finishManaged: ((value: KodaXResult) => void) | undefined;
+    let managedInvocation = 0;
+    codingMock.runManagedTask.mockImplementation((options: KodaXOptions) => {
+      managedInvocation += 1;
+      if (managedInvocation === 1) {
+        return new Promise<KodaXResult>((resolve) => {
+          finishManaged = resolve;
+        });
+      }
+      return Promise.resolve({
+        success: true,
+        lastText: "unexpected managed continuation",
+        messages: [],
+        sessionId: options.session?.id,
+      });
+    });
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions) => (
+      fakeRunningSession(options, Promise.resolve({
+        success: true,
+        lastText: "coding continuation completed",
+        messages: [],
+        sessionId: options.session?.id,
+      }))
+    ));
+
+    const first = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "managed root",
+      mode: "managed_task",
+    });
+    const continuation = await runtime.runs.submitInput({
+      sessionId: session.id,
+      afterRunId: first.runId,
+      delivery: "after_turn",
+      input: { type: "text", text: "continue normally" },
+    });
+    if (!continuation.accepted || continuation.delivery !== "after_turn") {
+      throw new Error("Expected accepted continuation");
+    }
+
+    finishManaged?.({
+      success: true,
+      lastText: "managed root completed",
+      messages: [],
+      sessionId: session.id,
+    });
+    await first.result;
+    await expect(runtime.runs.await(continuation.runId)).resolves.toMatchObject({
+      phase: "completed",
+    });
+    await expect(runtime.runs.get(continuation.runId)).resolves.toMatchObject({
+      mode: "coding",
+    });
+    expect(codingMock.runManagedTask).toHaveBeenCalledOnce();
+    expect(codingMock.startKodaX).toHaveBeenCalledOnce();
+    await runtime.close();
+  });
+
   it("admits active-run input from cached Run identity without reading canonical Session", async () => {
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
     const runtime = await createKodaXRuntime({
@@ -9974,7 +10083,7 @@ describe("createKodaXRuntime", () => {
     }
   });
 
-  it("preserves Actor settlement unknown diagnostics when external Stop follows it", async () => {
+  it("keeps an automatic Actor durability fence authoritative over a later external abort", async () => {
     vi.useFakeTimers();
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
     const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
@@ -10028,18 +10137,15 @@ describe("createKodaXRuntime", () => {
 
       abortController.abort(new Error("host cancelled after Actor unknown"));
 
-      await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+      const afterAbort = await runtime.runs.get(run.runId);
+      expect(afterAbort).toMatchObject({
         phase: "unknown",
-        stop: {
-          state: "unknown",
-          outcome: "unknown",
-          reason: "host cancelled after Actor unknown",
-        },
         lifecycleError: {
           code: "actor_settlement_not_persisted",
           retryable: false,
         },
       });
+      expect(afterAbort).not.toHaveProperty("stop");
     } finally {
       vi.useRealTimers();
       save.mockRestore();
@@ -10049,7 +10155,7 @@ describe("createKodaXRuntime", () => {
     }
   });
 
-  it("accepts Stop for a live same-owner unknown Run and restores Session reuse after Actor reconciliation", async () => {
+  it("automatically repairs a live same-owner unknown Run and restores Session reuse", async () => {
     vi.useFakeTimers();
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
     const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
@@ -10085,12 +10191,12 @@ describe("createKodaXRuntime", () => {
     });
     try {
       const session = await runtime.sessions.create({
-        title: "Recover an unknown Actor settlement through Stop",
+        title: "Automatically recover an unknown Actor settlement",
       });
       codingMock.runManagedTask.mockImplementation((options: KodaXOptions) => (
         new Promise<KodaXResult>((_resolve, reject) => {
           const rejectFromAbort = (): void => {
-            const error = new Error("Provider observed recovered Stop");
+            const error = new Error("Provider observed Actor durability fence");
             error.name = "AbortError";
             options.events?.onError?.(error);
             reject(error);
@@ -10101,7 +10207,7 @@ describe("createKodaXRuntime", () => {
       ));
       const run = await runtime.runs.start({
         sessionId: session.id,
-        prompt: "become unknown, then stop",
+        prompt: "become unknown, then recover automatically",
         mode: "managed_task",
       });
       await runtime.agents.spawn(session.id, {
@@ -10117,30 +10223,25 @@ describe("createKodaXRuntime", () => {
         },
       });
       releaseLateSettlement?.();
-      await vi.runAllTimersAsync();
+      vi.useRealTimers();
+      await flushMicrotasks();
 
-      await expect(runtime.runs.abort(run.runId)).resolves.toMatchObject({
-        accepted: true,
-        phase: "unknown",
-        state: "unknown",
-        outcome: "unknown",
-      });
       await expect(run.result).resolves.toMatchObject({
-        phase: "interrupted",
-        terminal: { kind: "interrupted", code: "interrupted" },
-        stop: { state: "confirmed", outcome: "interrupted" },
+        phase: "failed",
+        terminal: { kind: "failed", code: "actor_settlement_not_persisted" },
       });
       const terminal = await runtime.runs.get(run.runId);
       expect(terminal).toMatchObject({
-        phase: "interrupted",
-        stop: { state: "confirmed", outcome: "interrupted" },
+        phase: "failed",
+        terminal: { kind: "failed", code: "actor_settlement_not_persisted" },
       });
+      expect(terminal).not.toHaveProperty("stop");
       expect(terminal).not.toHaveProperty("lifecycleError");
       await expect(runtime.runs.abort(run.runId)).resolves.toMatchObject({
         accepted: false,
-        phase: "interrupted",
+        phase: "failed",
         state: "confirmed",
-        outcome: "interrupted",
+        outcome: "failed",
       });
       await expect(runtime.agents.tree(session.id)).resolves.toMatchObject({
         activeNonRootTurns: 0,
@@ -10154,7 +10255,7 @@ describe("createKodaXRuntime", () => {
       });
       const next = await runtime.runs.start({
         sessionId: session.id,
-        prompt: "continue after recovered Stop",
+        prompt: "continue after automatic Actor recovery",
         mode: "managed_task",
       });
       await expect(next.result).resolves.toMatchObject({ phase: "completed" });
@@ -10166,7 +10267,7 @@ describe("createKodaXRuntime", () => {
     }
   });
 
-  it("redelivers cancellation effects on repeated Stop after the first Actor repair times out", async () => {
+  it("keeps automatic same-owner repair alive after its first bounded attempt times out", async () => {
     vi.useFakeTimers();
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
     const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
@@ -10197,32 +10298,494 @@ describe("createKodaXRuntime", () => {
     });
     const runtime = await createKodaXRuntime({
       homeDir: tempRoot,
-      sessionsDir: path.join(tempRoot, "actor-repeat-stop-recovery-sessions"),
+      sessionsDir: path.join(tempRoot, "actor-long-tail-auto-recovery-sessions"),
       defaultProvider: "mock-provider",
     });
     try {
-      let finishRoot: ((value: KodaXResult) => void) | undefined;
-      codingMock.runManagedTask.mockImplementation(
-        () => new Promise<KodaXResult>((resolve) => {
-          finishRoot = resolve;
-        }),
-      );
+      codingMock.runManagedTask.mockImplementation((options: KodaXOptions) => (
+        new Promise<KodaXResult>((_resolve, reject) => {
+          const rejectFromAbort = (): void => {
+            const error = new Error("Provider observed Actor durability fence");
+            error.name = "AbortError";
+            reject(error);
+          };
+          options.abortSignal?.addEventListener("abort", rejectFromAbort, { once: true });
+          if (options.abortSignal?.aborted) rejectFromAbort();
+        })
+      ));
       const session = await runtime.sessions.create({
-        title: "Retry Actor repair through repeated Stop",
+        title: "Retry automatic Actor repair after a long-tail save",
+      });
+      const run = await runtime.runs.start({
+        sessionId: session.id,
+        prompt: "repair without another Stop",
+        mode: "managed_task",
+      });
+      await runtime.agents.spawn(session.id, {
+        taskName: "worker",
+        objective: "Remain blocked beyond the first repair attempt.",
+      });
+      for (let elapsedMs = 0; elapsedMs < 12_000; elapsedMs += 100) {
+        vi.advanceTimersByTime(100);
+        await Promise.resolve();
+      }
+      await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+        phase: "unknown",
+        lifecycleError: { code: "actor_settlement_not_persisted" },
+      });
+
+      releaseLateSettlement?.();
+      for (let elapsedMs = 0; elapsedMs < 1_100; elapsedMs += 100) {
+        vi.advanceTimersByTime(100);
+        await Promise.resolve();
+      }
+      vi.useRealTimers();
+
+      await vi.waitFor(async () => {
+        await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+          phase: "failed",
+          terminal: { code: "actor_settlement_not_persisted" },
+        });
+      });
+    } finally {
+      releaseLateSettlement?.();
+      save.mockRestore();
+      vi.useRealTimers();
+      await runtime.close().catch(() => undefined);
+    }
+  });
+
+  it("stops automatic Actor repair when durable ownership changes", async () => {
+    vi.useFakeTimers();
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
+    const originalPeek = FileSessionStorage.prototype.peek;
+    let releaseLateSettlement: (() => void) | undefined;
+    const lateSettlement = new Promise<void>((resolve) => {
+      releaseLateSettlement = resolve;
+    });
+    let terminalSaveStarted = false;
+    let serveForeignOwner = false;
+    let foreignOwnerLoads = 0;
+    const save = vi.spyOn(
+      FileSessionStorage.prototype,
+      "saveActorSnapshot",
+    ).mockImplementation(async function (
+      this: FileSessionStorage,
+      id: string,
+      snapshot: AgentActorSnapshot,
+      expectedRevision: number,
+    ) {
+      if (
+        !terminalSaveStarted
+        && snapshot.turns.some((turn) => (
+          turn.actorPath === "/root/worker" && turn.state === "failed"
+        ))
+      ) {
+        terminalSaveStarted = true;
+        await lateSettlement;
+      }
+      await originalSave.call(this, id, snapshot, expectedRevision);
+    });
+    const peek = vi.spyOn(
+      FileSessionStorage.prototype,
+      "peek",
+    ).mockImplementation(async function (this: FileSessionStorage, id: string) {
+      const data = await originalPeek.call(this, id);
+      if (
+        !serveForeignOwner
+        || data?.actorSnapshot?.schemaVersion !== 2
+      ) return data;
+      foreignOwnerLoads += 1;
+      return {
+        ...data,
+        actorSnapshot: {
+          ...data.actorSnapshot,
+          owner: {
+            ownerId: "foreign-owner",
+            runtimeId: "foreign-runtime",
+            pid: 4242,
+            startedAt: new Date().toISOString(),
+          },
+        },
+      };
+    });
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "actor-foreign-owner-repair-sessions"),
+      defaultProvider: "mock-provider",
+    });
+    try {
+      codingMock.runManagedTask.mockImplementation((options: KodaXOptions) => (
+        new Promise<KodaXResult>((_resolve, reject) => {
+          const rejectFromAbort = (): void => {
+            const error = new Error("Provider observed Actor durability fence");
+            error.name = "AbortError";
+            reject(error);
+          };
+          options.abortSignal?.addEventListener("abort", rejectFromAbort, { once: true });
+          if (options.abortSignal?.aborted) rejectFromAbort();
+        })
+      ));
+      const session = await runtime.sessions.create({
+        title: "Do not take over a foreign Actor owner",
+      });
+      const run = await runtime.runs.start({
+        sessionId: session.id,
+        prompt: "remain fenced after ownership changes",
+        mode: "managed_task",
+      });
+      await runtime.agents.spawn(session.id, {
+        taskName: "worker",
+        objective: "Lose durable ownership after a late settlement.",
+      });
+      await vi.advanceTimersByTimeAsync(6_000);
+      await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+        phase: "unknown",
+        lifecycleError: { code: "actor_settlement_not_persisted" },
+      });
+
+      serveForeignOwner = true;
+      releaseLateSettlement?.();
+      vi.useRealTimers();
+      await vi.waitFor(() => {
+        expect(foreignOwnerLoads).toBeGreaterThan(0);
+      });
+      const loadsAfterConflict = foreignOwnerLoads;
+
+      await new Promise<void>((resolve) => setTimeout(resolve, 1_500));
+      expect(foreignOwnerLoads).toBe(loadsAfterConflict);
+      await expect(runtime.runs.abort(run.runId)).resolves.toMatchObject({
+        phase: "unknown",
+      });
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+        phase: "unknown",
+        lifecycleError: { code: "actor_settlement_not_persisted" },
+      });
+    } finally {
+      releaseLateSettlement?.();
+      peek.mockRestore();
+      save.mockRestore();
+      vi.useRealTimers();
+      await runtime.close().catch(() => undefined);
+    }
+  });
+
+  it("keeps the successor queued until an abort-ignoring fenced root provider settles", async () => {
+    vi.useFakeTimers();
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
+    let releaseLateSettlement: (() => void) | undefined;
+    const lateSettlement = new Promise<void>((resolve) => {
+      releaseLateSettlement = resolve;
+    });
+    let terminalSaveStarted = false;
+    let rootAborted = false;
+    let lateAskUser: Promise<string> | undefined;
+    let lateExitPlanMode: Promise<boolean | "not-in-plan-mode"> | undefined;
+    let resolveRoot: ((result: KodaXResult) => void) | undefined;
+    let rootInvocation = 0;
+    const externalOnTextDelta = vi.fn();
+    const externalOnTurnCompleted = vi.fn();
+    const externalOnMidTurnUserMessages = vi.fn();
+    const externalOnMemoryReview = vi.fn();
+    const externalOnMemoryNotice = vi.fn();
+    const externalOnMemoryOutcomeDigest = vi.fn();
+    const externalOnMemoryReviewReceipt = vi.fn();
+    const externalAskUser = vi.fn(async () => 'host answer');
+    const externalExitPlanMode = vi.fn(async () => true);
+    const save = vi.spyOn(
+      FileSessionStorage.prototype,
+      "saveActorSnapshot",
+    ).mockImplementation(async function (
+      this: FileSessionStorage,
+      id: string,
+      snapshot: AgentActorSnapshot,
+      expectedRevision: number,
+    ) {
+      if (
+        !terminalSaveStarted
+        && snapshot.turns.some((turn) => (
+          turn.actorPath === "/root/worker" && turn.state === "failed"
+        ))
+      ) {
+        terminalSaveStarted = true;
+        await lateSettlement;
+      }
+      await originalSave.call(this, id, snapshot, expectedRevision);
+    });
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "actor-automatic-recovery-sessions"),
+      defaultProvider: "mock-provider",
+    });
+    try {
+      codingMock.runManagedTask.mockImplementation((options: KodaXOptions) => {
+        rootInvocation += 1;
+        if (rootInvocation > 1) {
+          return Promise.resolve({
+            success: true,
+            lastText: "queued input ran after durability repair",
+            messages: [],
+            sessionId: options.session?.id,
+          });
+        }
+        return new Promise<KodaXResult>((resolve) => {
+          resolveRoot = resolve;
+          const observeFence = (): void => {
+            rootAborted = true;
+            const error = new Error("Provider observed Actor durability fence");
+            error.name = "AbortError";
+            options.events?.onTextDelta?.("late output after Actor durability fence");
+            options.events?.onTurnCompleted?.({
+              sessionId: options.session?.id ?? 'missing-session',
+              seq: 999,
+              turnId: 'turn-after-actor-fence',
+              contextId: options.session?.id ?? 'missing-session',
+              contextKind: 'root',
+              contextRevision: 0,
+              status: 'completed',
+            });
+            lateAskUser = options.events?.askUser?.({
+              question: 'Must not reopen input after the Actor fence.',
+              options: [{ label: 'Continue', value: 'continue' }],
+            });
+            lateExitPlanMode = options.events?.exitPlanMode?.('late plan');
+            options.events?.onMidTurnUserMessages?.(['late input']);
+            options.events?.onMemoryReview?.({
+              reviewKey: 'late-review',
+            } as Parameters<NonNullable<KodaXEvents["onMemoryReview"]>>[0]);
+            options.events?.onMemoryNotice?.({
+              episodeId: 'late-episode',
+              summaries: [],
+              proposalIds: [],
+            });
+            options.events?.onMemoryOutcomeDigest?.({
+              id: 'late-outcome',
+            } as Parameters<NonNullable<KodaXEvents["onMemoryOutcomeDigest"]>>[0]);
+            options.events?.onMemoryReviewReceipt?.({
+              reviewKey: 'late-receipt',
+              proposalIds: [],
+              completedAt: new Date().toISOString(),
+            });
+            options.events?.onError?.(error);
+          };
+          options.abortSignal?.addEventListener("abort", observeFence, { once: true });
+          if (options.abortSignal?.aborted) observeFence();
+        });
+      });
+      const session = await runtime.sessions.create({
+        title: "Automatically recover an unknown Actor settlement",
+      });
+      const run = await runtime.runs.start({
+        sessionId: session.id,
+        prompt: "self-fence after Actor durability becomes unknown",
+        mode: "managed_task",
+        options: {
+          events: {
+            onTextDelta: externalOnTextDelta,
+            onTurnCompleted: externalOnTurnCompleted,
+            onMidTurnUserMessages: externalOnMidTurnUserMessages,
+            onMemoryReview: externalOnMemoryReview,
+            onMemoryNotice: externalOnMemoryNotice,
+            onMemoryOutcomeDigest: externalOnMemoryOutcomeDigest,
+            onMemoryReviewReceipt: externalOnMemoryReviewReceipt,
+            askUser: externalAskUser,
+            exitPlanMode: externalExitPlanMode,
+          },
+        },
+      });
+      const queuedInput = await runtime.runs.submitInput({
+        sessionId: session.id,
+        afterRunId: run.runId,
+        delivery: "after_turn",
+        input: { type: "text", text: "keep this query while durability repairs" },
+      });
+      expect(queuedInput).toMatchObject({
+        accepted: true,
+        delivery: "after_turn",
+      });
+      if (!queuedInput.accepted) throw new Error("Expected queued input admission.");
+      await runtime.agents.spawn(session.id, {
+        taskName: "worker",
+        objective: "Fail while its terminal snapshot is delayed.",
+      });
+      await vi.advanceTimersByTimeAsync(6_000);
+      await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+        phase: "unknown",
+        lifecycleError: { code: "actor_settlement_not_persisted" },
+      });
+      await expect(runtime.runs.get(queuedInput.runId)).resolves.toMatchObject({
+        phase: "queued",
+      });
+      await expect(runtime.agents.spawn(session.id, {
+        taskName: "must-not-look-like-a-foreign-owner",
+        objective: "Reject with the causal durability failure.",
+      })).rejects.toMatchObject({
+        code: "actor_settlement_not_persisted",
+      });
+      expect(rootAborted).toBe(true);
+      expect(externalOnTextDelta).not.toHaveBeenCalled();
+      expect(externalOnTurnCompleted).not.toHaveBeenCalled();
+      expect(externalOnMidTurnUserMessages).not.toHaveBeenCalled();
+      expect(externalOnMemoryReview).not.toHaveBeenCalled();
+      expect(externalOnMemoryNotice).not.toHaveBeenCalled();
+      expect(externalOnMemoryOutcomeDigest).not.toHaveBeenCalled();
+      expect(externalOnMemoryReviewReceipt).not.toHaveBeenCalled();
+      expect(externalAskUser).not.toHaveBeenCalled();
+      expect(externalExitPlanMode).not.toHaveBeenCalled();
+      await expect(lateAskUser).resolves.toBe("");
+      await expect(lateExitPlanMode).resolves.toBe(false);
+      await expect(runtime.events.replay({
+        runId: run.runId,
+        type: "turn.completed",
+      })).resolves.toEqual([]);
+      releaseLateSettlement?.();
+      vi.useRealTimers();
+      await vi.waitFor(async () => {
+        await expect(runtime.agents.tree(session.id)).resolves.toMatchObject({
+          activeNonRootTurns: 0,
+        });
+      });
+      await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+        phase: "unknown",
+        lifecycleError: { code: "actor_settlement_not_persisted" },
+      });
+      await expect(runtime.runs.get(queuedInput.runId)).resolves.toMatchObject({
+        phase: "queued",
+      });
+      expect(rootInvocation).toBe(1);
+      resolveRoot?.({
+        success: true,
+        lastText: "Executor returned after the Actor durability fence",
+        messages: [],
+        sessionId: session.id,
+      });
+      await expect(expectSettles(
+        run.result,
+        "repaired Run after its abort-ignoring provider settled",
+        500,
+      )).resolves.toMatchObject({
+        phase: "failed",
+        terminal: {
+          kind: "failed",
+          code: "actor_settlement_not_persisted",
+          effectOutcome: "unknown",
+        },
+      });
+      const terminal = await runtime.runs.get(run.runId);
+      expect(terminal).toMatchObject({
+        phase: "failed",
+        terminal: { code: "actor_settlement_not_persisted" },
+      });
+      expect(terminal).not.toHaveProperty("stop");
+      const lateDeltas = await runtime.events.replay({
+        runId: run.runId,
+        type: "assistant.delta",
+      });
+      expect(lateDeltas).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            text: "late output after Actor durability fence",
+          }),
+        }),
+      ]));
+      await expect(runtime.runs.await(queuedInput.runId)).resolves.toMatchObject({
+        phase: "completed",
+      });
+      expect(rootInvocation).toBe(2);
+    } finally {
+      releaseLateSettlement?.();
+      resolveRoot?.({
+        success: false,
+        interrupted: true,
+        lastText: "test cleanup",
+        messages: [],
+      });
+      save.mockRestore();
+      vi.useRealTimers();
+      await runtime.close().catch(() => undefined);
+    }
+  });
+
+  it("repairs a Stop-before-self-fence race without overlapping its queued successor", async () => {
+    vi.useFakeTimers();
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
+    let releaseLateSettlement: (() => void) | undefined;
+    const lateSettlement = new Promise<void>((resolve) => {
+      releaseLateSettlement = resolve;
+    });
+    let markTerminalSaveStarted: (() => void) | undefined;
+    const terminalSaveStartedSignal = new Promise<void>((resolve) => {
+      markTerminalSaveStarted = resolve;
+    });
+    let terminalSaveStarted = false;
+    const save = vi.spyOn(
+      FileSessionStorage.prototype,
+      "saveActorSnapshot",
+    ).mockImplementation(async function (
+      this: FileSessionStorage,
+      id: string,
+      snapshot: AgentActorSnapshot,
+      expectedRevision: number,
+    ) {
+      if (
+        !terminalSaveStarted
+        && snapshot.turns.some((turn) => (
+          turn.actorPath === "/root/worker" && turn.state === "failed"
+        ))
+      ) {
+        terminalSaveStarted = true;
+        markTerminalSaveStarted?.();
+        await lateSettlement;
+      }
+      await originalSave.call(this, id, snapshot, expectedRevision);
+    });
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "actor-repeat-stop-recovery-sessions"),
+      defaultProvider: "mock-provider",
+    });
+    let finishRoot: ((value: KodaXResult) => void) | undefined;
+    try {
+      let rootInvocation = 0;
+      codingMock.runManagedTask.mockImplementation((options: KodaXOptions) => {
+        rootInvocation += 1;
+        if (rootInvocation > 1) {
+          return Promise.resolve({
+            success: true,
+            lastText: "queued successor completed after repair",
+            messages: [],
+            sessionId: options.session?.id,
+          });
+        }
+        return new Promise<KodaXResult>((resolve) => {
+          finishRoot = resolve;
+        });
+      });
+      const session = await runtime.sessions.create({
+        title: "Repair a Stop-before-self-fence race",
       });
       const run = await runtime.runs.start({
         sessionId: session.id,
         prompt: "ignore the first provider abort",
         mode: "managed_task",
       });
+      const queuedInput = await runtime.runs.submitInput({
+        sessionId: session.id,
+        afterRunId: run.runId,
+        delivery: "after_turn",
+        input: { type: "text", text: "run after the Actor repair fence" },
+      });
+      expect(queuedInput).toMatchObject({ accepted: true, delivery: "after_turn" });
+      if (!queuedInput.accepted) throw new Error("Expected queued input admission.");
       await runtime.agents.spawn(session.id, {
         taskName: "worker",
         objective: "Fail while its terminal snapshot remains blocked.",
       });
-      await vi.advanceTimersByTimeAsync(6_000);
-      await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
-        phase: "unknown",
-      });
+      await terminalSaveStartedSignal;
 
       await expect(runtime.runs.abort(run.runId)).resolves.toMatchObject({
         accepted: true,
@@ -10232,34 +10795,80 @@ describe("createKodaXRuntime", () => {
       await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
         phase: "unknown",
         stop: { state: "unknown", outcome: "unknown" },
+        lifecycleError: { code: "actor_settlement_not_persisted" },
+      });
+      await expect(runtime.runs.get(queuedInput.runId)).resolves.toMatchObject({
+        phase: "queued",
       });
 
       releaseLateSettlement?.();
-      await vi.runAllTimersAsync();
-      await expect(runtime.runs.abort(run.runId)).resolves.toMatchObject({
-        accepted: false,
-        phase: "unknown",
-        state: "unknown",
-        outcome: "unknown",
-      });
+      vi.useRealTimers();
       await vi.waitFor(async () => {
         await expect(runtime.agents.tree(session.id)).resolves.toMatchObject({
           activeNonRootTurns: 0,
         });
       });
-
+      await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+        phase: "unknown",
+        lifecycleError: { code: "actor_settlement_not_persisted" },
+      });
+      await expect(runtime.runs.get(queuedInput.runId)).resolves.toMatchObject({
+        phase: "queued",
+      });
+      expect(rootInvocation).toBe(1);
+      await expect(runtime.runs.abort(run.runId)).resolves.toMatchObject({
+        accepted: false,
+      });
+      const directSuccessor = await runtime.runs.start({
+        sessionId: session.id,
+        prompt: "also stay queued behind the repaired Root fence",
+        mode: "managed_task",
+      });
+      await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+        phase: "unknown",
+        lifecycleError: { code: "actor_settlement_not_persisted" },
+      });
+      await expect(runtime.runs.get(queuedInput.runId)).resolves.toMatchObject({
+        phase: "queued",
+      });
+      await expect(runtime.runs.get(directSuccessor.runId)).resolves.toMatchObject({
+        phase: "queued",
+      });
+      expect(rootInvocation).toBe(1);
       finishRoot?.({
         success: true,
-        lastText: "Executor completed after repeated Stop repaired Actors",
+        lastText: "Executor completed after Stop and Actor repair",
         messages: [],
         sessionId: session.id,
       });
-      await expect(run.result).resolves.toMatchObject({
+      await expect(expectSettles(
+        run.result,
+        "Stop repaired after the provider settles",
+        500,
+      )).resolves.toMatchObject({
+        phase: "failed",
+        terminal: { code: "actor_settlement_not_persisted" },
+        stop: { state: "confirmed", outcome: "failed" },
+      });
+      await expect(runtime.runs.await(queuedInput.runId)).resolves.toMatchObject({
         phase: "completed",
-        stop: { state: "confirmed", outcome: "completed" },
+      });
+      await expect(runtime.runs.await(directSuccessor.runId)).resolves.toMatchObject({
+        phase: "completed",
+      });
+      expect(rootInvocation).toBe(3);
+      await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+        phase: "failed",
+        terminal: { code: "actor_settlement_not_persisted" },
       });
     } finally {
       releaseLateSettlement?.();
+      finishRoot?.({
+        success: false,
+        interrupted: true,
+        lastText: "test cleanup",
+        messages: [],
+      });
       save.mockRestore();
       vi.useRealTimers();
       await runtime.close();
@@ -10350,7 +10959,7 @@ describe("createKodaXRuntime", () => {
     }
   });
 
-  it("terminalizes a previously returned unknown Run from its saved executor result after Stop repairs Actor settlement", async () => {
+  it("terminalizes an unknown Run from its pre-fence executor result after automatic Actor repair", async () => {
     vi.useFakeTimers();
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
     const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
@@ -10411,25 +11020,18 @@ describe("createKodaXRuntime", () => {
       });
       await vi.advanceTimersByTimeAsync(6_000);
 
+      await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({ phase: "unknown" });
+      releaseLateSettlement?.();
+      vi.useRealTimers();
+      await flushMicrotasks();
+
       await expect(run.result).resolves.toMatchObject({
-        phase: "unknown",
+        phase: "completed",
         result: { success: true },
       });
-      releaseLateSettlement?.();
-      await vi.runAllTimersAsync();
-
-      await expect(runtime.runs.abort(run.runId)).resolves.toMatchObject({
-        accepted: true,
-        phase: "unknown",
-        state: "unknown",
-        outcome: "unknown",
-      });
-      await vi.waitFor(async () => {
-        await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
-          phase: "completed",
-          terminal: { kind: "completed", code: "completed" },
-          stop: { state: "confirmed", outcome: "completed" },
-        });
+      await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+        phase: "completed",
+        terminal: { kind: "completed", code: "completed" },
       });
 
       codingMock.runManagedTask.mockResolvedValueOnce({
@@ -10455,7 +11057,7 @@ describe("createKodaXRuntime", () => {
   it.each([
     ["success", "failure"] as const,
     ["failure", "completion"] as const,
-  ])("prefers a late Promise %s over an earlier %s callback when repairing an unknown Run", async (
+  ])("does not let a %s Promise or %s callback captured after the durability fence override its failure", async (
     promiseOutcome,
     callbackSignal,
   ) => {
@@ -10519,13 +11121,21 @@ describe("createKodaXRuntime", () => {
         objective: "Fail while its terminal snapshot is delayed.",
       });
 
+      await vi.advanceTimersByTimeAsync(6_000);
+      await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+        phase: "unknown",
+        lifecycleError: { code: "actor_settlement_not_persisted" },
+      });
+      await expect(runtime.agents.spawn(session.id, {
+        taskName: "post-fence-admission",
+        objective: "Verify the Actor controller has entered its durability fence.",
+      })).rejects.toMatchObject({ code: "actor_settlement_not_persisted" });
+
       if (callbackSignal === "failure") {
-        activeEvents?.onError?.(new Error("callback failure must remain fallback-only"));
+        activeEvents?.onError?.(new Error("post-fence callback failure"));
       } else {
         activeEvents?.onComplete?.();
       }
-      await vi.advanceTimersByTimeAsync(6_000);
-      await expect(run.result).resolves.toMatchObject({ phase: "unknown" });
 
       if (promiseOutcome === "success") {
         finishRoot?.({
@@ -10537,25 +11147,16 @@ describe("createKodaXRuntime", () => {
       } else {
         failRoot?.(new Error("Promise failure is authoritative"));
       }
-      await vi.runAllTimersAsync();
       releaseLateSettlement?.();
-      await vi.runAllTimersAsync();
-
-      await expect(runtime.runs.abort(run.runId)).resolves.toMatchObject({
-        accepted: true,
-        phase: "unknown",
+      vi.useRealTimers();
+      await expect(run.result).resolves.toMatchObject({
+        phase: "failed",
+        terminal: {
+          kind: "failed",
+          code: "actor_settlement_not_persisted",
+        },
       });
-      const expectedPhase = promiseOutcome === "success" ? "completed" : "failed";
-      await vi.waitFor(async () => {
-        await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
-          phase: expectedPhase,
-          terminal: {
-            kind: expectedPhase,
-            code: promiseOutcome === "success" ? "completed" : "run_failed",
-          },
-          stop: { state: "confirmed", outcome: expectedPhase },
-        });
-      });
+      expect(await runtime.runs.get(run.runId)).not.toHaveProperty("stop");
     } finally {
       releaseLateSettlement?.();
       save.mockRestore();
@@ -10623,7 +11224,7 @@ describe("createKodaXRuntime", () => {
     ["pre-Stop AbortError", Object.assign(new Error("independent abort"), {
       name: "AbortError",
     })],
-  ])("replays a saved %s only after Stop repairs Actor settlement", async (
+  ])("replays a saved %s after automatic Actor settlement repair", async (
     _label,
     executorError,
   ) => {
@@ -10685,21 +11286,16 @@ describe("createKodaXRuntime", () => {
       failRoot?.(executorError);
       await vi.advanceTimersByTimeAsync(6_000);
 
-      await expect(run.result).resolves.toMatchObject({ phase: "unknown" });
+      await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({ phase: "unknown" });
       releaseLateSettlement?.();
-      await vi.runAllTimersAsync();
+      vi.useRealTimers();
+      await flushMicrotasks();
 
-      await expect(runtime.runs.abort(run.runId)).resolves.toMatchObject({
-        accepted: true,
-        phase: "unknown",
-      });
-      await vi.waitFor(async () => {
-        await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
-          phase: "failed",
-          error: executorError.message,
-          terminal: { kind: "failed", code: "run_failed" },
-          stop: { state: "confirmed", outcome: "failed" },
-        });
+      await expect(run.result).resolves.toMatchObject({ phase: "failed" });
+      await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+        phase: "failed",
+        error: executorError.message,
+        terminal: { kind: "failed", code: "run_failed" },
       });
     } finally {
       releaseLateSettlement?.();

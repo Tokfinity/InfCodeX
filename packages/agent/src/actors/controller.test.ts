@@ -620,7 +620,9 @@ describe('F270 actor tree and scheduler', () => {
     releaseStartSave?.();
 
     const turn = await spawning;
-    await expect(quiescing).rejects.toThrow('quiesce save failed');
+    await expect(quiescing).rejects.toMatchObject({
+      code: 'actor_settlement_not_persisted',
+    });
     await settle();
 
     expect(executor.pending).toHaveLength(0);
@@ -771,6 +773,268 @@ describe('F270 actor tree and scheduler', () => {
     expect(terminal.outputTruncated).toBe(true);
     expect(listedTerminal?.latestTurn.summary.length).toBeLessThanOrEqual(480);
     expect(listedTerminal?.latestTurn.summaryTruncated).toBe(true);
+  });
+
+  it('coalesces concurrent durable progress across the entire Actor tree', async () => {
+    let latestProgressItems = 0;
+    let progressSaveCount = 0;
+    let releaseFirstProgressSave: (() => void) | undefined;
+    let markFirstProgressSaveStarted: (() => void) | undefined;
+    const firstProgressSaveStarted = new Promise<void>((resolve) => {
+      markFirstProgressSaveStarted = resolve;
+    });
+    const firstProgressSave = new Promise<void>((resolve) => {
+      releaseFirstProgressSave = resolve;
+    });
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({
+      executor,
+      maxConcurrentThreadsPerSession: 5,
+      store: {
+        async load() { return undefined; },
+        async save(snapshot) {
+          const progressItems = snapshot.turns.reduce(
+            (total, turn) => total + (turn.progress?.length ?? 0),
+            0,
+          );
+          if (progressItems <= latestProgressItems) return;
+          latestProgressItems = progressItems;
+          progressSaveCount += 1;
+          if (progressSaveCount === 1) {
+            markFirstProgressSaveStarted?.();
+            await firstProgressSave;
+          }
+        },
+      },
+    });
+    for (let index = 0; index < 4; index += 1) {
+      await controller.spawn('/root', {
+        taskName: `worker-${index}`,
+        objective: `Report progress ${index}.`,
+      });
+    }
+
+    const reports = executor.pending.map(({ input }, index) => input.reportProgress({
+      kind: 'status',
+      summary: `Concurrent progress ${index}.`,
+    }));
+    await firstProgressSaveStarted;
+    releaseFirstProgressSave?.();
+    await Promise.all(reports);
+
+    expect(progressSaveCount).toBe(1);
+  });
+
+  it('rejects an active durable progress waiter when the Actor tree self-fences', async () => {
+    vi.useFakeTimers();
+    let releaseProgressSave: (() => void) | undefined;
+    let markProgressSaveStarted: (() => void) | undefined;
+    const progressSaveStarted = new Promise<void>((resolve) => {
+      markProgressSaveStarted = resolve;
+    });
+    const progressSave = new Promise<void>((resolve) => {
+      releaseProgressSave = resolve;
+    });
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({
+      executor,
+      store: {
+        async load() { return undefined; },
+        async save(snapshot) {
+          const worker = snapshot.turns.find((turn) => turn.actorPath === '/root/worker');
+          if (worker?.state === 'running' && (worker.progress?.length ?? 0) > 0) {
+            markProgressSaveStarted?.();
+            await progressSave;
+          }
+        },
+      },
+      onBackgroundError: vi.fn(),
+    });
+
+    try {
+      await controller.spawn('/root', {
+        taskName: 'worker',
+        objective: 'Wait for durable progress.',
+      });
+      const progressOutcome = executor.pending[0]!.input.reportProgress({
+        kind: 'status',
+        summary: 'This save never returns.',
+      }).then(
+        () => 'resolved' as const,
+        () => 'rejected' as const,
+      );
+      await progressSaveStarted;
+      executor.pending[0]?.resolve({ output: 'terminal waits behind progress' });
+
+      await vi.advanceTimersByTimeAsync(30_001);
+
+      expect(controller.healthSnapshot()).toMatchObject({
+        state: 'unknown',
+        code: 'actor_settlement_not_persisted',
+      });
+      await expect(progressOutcome).resolves.toBe('rejected');
+    } finally {
+      releaseProgressSave?.();
+      await vi.runAllTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it('repairs a terminal fact that timed out before its mutation reached the durable queue', async () => {
+    vi.useFakeTimers();
+    let saved: AgentActorSnapshot | undefined;
+    let releaseProgressSave: (() => void) | undefined;
+    let markProgressSaveStarted: (() => void) | undefined;
+    const progressSaveStarted = new Promise<void>((resolve) => {
+      markProgressSaveStarted = resolve;
+    });
+    const progressSave = new Promise<void>((resolve) => {
+      releaseProgressSave = resolve;
+    });
+    let blockedProgress = false;
+    const store: AgentActorStore = {
+      async load() {
+        return saved === undefined ? undefined : structuredClone(saved);
+      },
+      async save(snapshot, expectedRevision) {
+        const actualRevision = saved?.revision ?? 0;
+        if (actualRevision !== expectedRevision) {
+          throw Object.assign(new Error('synthetic Actor revision conflict'), {
+            code: 'actor_snapshot_conflict' as const,
+            expectedRevision,
+            currentRevision: actualRevision,
+          });
+        }
+        const target = snapshot.turns.find((turn) => turn.actorPath === '/root/target');
+        if (!blockedProgress && target?.state === 'running' && target.progress?.length) {
+          blockedProgress = true;
+          markProgressSaveStarted?.();
+          await progressSave;
+        }
+        saved = structuredClone(snapshot);
+      },
+    };
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({
+      executor,
+      store,
+      owner: FIRST_OWNER,
+      isOwnerAlive: async () => true,
+      onBackgroundError: vi.fn(),
+    });
+
+    try {
+      const target = await controller.spawn('/root', {
+        taskName: 'target',
+        objective: 'Complete behind a slow progress save.',
+      });
+      const sibling = await controller.spawn('/root', {
+        taskName: 'sibling',
+        objective: 'Be durably quiesced during repair.',
+      });
+      const progress = executor.pending[0]!.input.reportProgress({
+        kind: 'status',
+        summary: 'Persisting slowly.',
+      }).catch(() => undefined);
+      await progressSaveStarted;
+      executor.pending[0]?.resolve({ output: 'queued terminal fact' });
+
+      await vi.advanceTimersByTimeAsync(30_001);
+      expect(controller.healthSnapshot()).toMatchObject({
+        state: 'unknown',
+        code: 'actor_settlement_not_persisted',
+      });
+
+      releaseProgressSave?.();
+      await vi.runAllTimersAsync();
+      await progress;
+      await controller.quiesce('repair after queue timeout');
+
+      expect(controller.healthSnapshot()).toEqual({ state: 'healthy' });
+      expect(controller.output('/root', target.actorPath, target.turnId)).toMatchObject({
+        state: 'completed',
+        output: 'queued terminal fact',
+      });
+      expect(controller.output('/root', sibling.actorPath, sibling.turnId)).toMatchObject({
+        state: 'interrupted',
+        error: 'repair after queue timeout',
+      });
+    } finally {
+      releaseProgressSave?.();
+      await vi.runAllTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects progress queued behind a save that loses Actor ownership', async () => {
+    let saved: AgentActorSnapshot | undefined;
+    let releaseProgressSave: (() => void) | undefined;
+    let markProgressSaveStarted: (() => void) | undefined;
+    const progressSaveStarted = new Promise<void>((resolve) => {
+      markProgressSaveStarted = resolve;
+    });
+    const progressSave = new Promise<void>((resolve) => {
+      releaseProgressSave = resolve;
+    });
+    let holdFirstProgress = true;
+    const store: AgentActorStore = {
+      async load() { return saved === undefined ? undefined : structuredClone(saved); },
+      async save(snapshot, expectedRevision) {
+        if (holdFirstProgress && snapshot.turns.some((turn) => (turn.progress?.length ?? 0) > 0)) {
+          holdFirstProgress = false;
+          markProgressSaveStarted?.();
+          await progressSave;
+        }
+        const currentRevision = saved?.revision ?? 0;
+        if (currentRevision !== expectedRevision) {
+          throw Object.assign(new Error('synthetic Actor revision conflict'), {
+            code: 'actor_snapshot_conflict' as const,
+            expectedRevision,
+            currentRevision,
+          });
+        }
+        saved = structuredClone(snapshot);
+      },
+    };
+    const executor = new DeferredExecutor();
+    const healthChanges = vi.fn();
+    const controller = await createAgentActorController({
+      executor,
+      store,
+      owner: FIRST_OWNER,
+      isOwnerAlive: async () => true,
+      onBackgroundError: vi.fn(),
+      onHealthChanged: healthChanges,
+    });
+    await controller.spawn('/root', { taskName: 'worker', objective: 'Report progress.' });
+    const execution = executor.pending[0]?.input;
+    if (!execution || saved?.schemaVersion !== 2) throw new Error('Expected a saved running turn.');
+
+    const active = execution.reportProgress({ kind: 'status', summary: 'active progress' })
+      .then(() => 'resolved' as const, () => 'rejected' as const);
+    await progressSaveStarted;
+    const queued = execution.reportProgress({ kind: 'status', summary: 'queued progress' })
+      .then(() => 'resolved' as const, () => 'rejected' as const);
+    saved = {
+      ...saved,
+      revision: saved.revision + 1,
+      owner: SECOND_OWNER,
+    };
+    releaseProgressSave?.();
+
+    await expect(active).resolves.toBe('rejected');
+    await expect(Promise.race([
+      queued,
+      new Promise<'pending'>((resolve) => setTimeout(() => resolve('pending'), 50)),
+    ])).resolves.toBe('rejected');
+    expect(controller.healthSnapshot()).toMatchObject({
+      state: 'unknown',
+      code: 'actor_settlement_not_persisted',
+    });
+    expect(healthChanges).toHaveBeenCalledWith(expect.objectContaining({
+      state: 'unknown',
+      code: 'actor_settlement_not_persisted',
+    }));
   });
 
   it('caps retained events without reusing sequence numbers', async () => {
@@ -1881,6 +2145,81 @@ describe('F270 actor tree and scheduler', () => {
     }
   });
 
+  it('does not charge a retry queue wait against the settlement persistence deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      let completionSaveAttempts = 0;
+      let releaseQueuedMutation: (() => void) | undefined;
+      let markQueuedMutationStarted: (() => void) | undefined;
+      let releaseRetrySave: (() => void) | undefined;
+      let markRetrySaveStarted: (() => void) | undefined;
+      const queuedMutationGate = new Promise<void>((resolve) => {
+        releaseQueuedMutation = resolve;
+      });
+      const queuedMutationStarted = new Promise<void>((resolve) => {
+        markQueuedMutationStarted = resolve;
+      });
+      const retrySaveGate = new Promise<void>((resolve) => {
+        releaseRetrySave = resolve;
+      });
+      const retrySaveStarted = new Promise<void>((resolve) => {
+        markRetrySaveStarted = resolve;
+      });
+      const store: AgentActorStore = {
+        async load() { return undefined; },
+        async save(snapshot) {
+          const completed = snapshot.turns.some((turn) => turn.state === 'completed');
+          if (completed) {
+            completionSaveAttempts += 1;
+            if (completionSaveAttempts === 1) {
+              throw new Error('first settlement save failed');
+            }
+            markRetrySaveStarted?.();
+            await retrySaveGate;
+            return;
+          }
+          if (snapshot.mailboxes['/root']?.some((message) => message.content === 'queue blocker')) {
+            markQueuedMutationStarted?.();
+            await queuedMutationGate;
+          }
+        },
+      };
+      const executor = new DeferredExecutor();
+      const controller = await createAgentActorController({
+        executor,
+        store,
+        onBackgroundError: vi.fn(),
+      });
+      await controller.spawn('/root', {
+        taskName: 'worker',
+        objective: 'Retry after a queued mutation.',
+      });
+
+      executor.pending[0]?.resolve({ output: 'durable after retry' });
+      await vi.advanceTimersByTimeAsync(0);
+      const queuedMutation = controller.send('/root/worker', '/root', 'queue blocker');
+      await queuedMutationStarted;
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      expect(controller.healthSnapshot()).toMatchObject({ state: 'recovering' });
+      releaseQueuedMutation?.();
+      await queuedMutation;
+      await retrySaveStarted;
+      await vi.advanceTimersByTimeAsync(4_989);
+      expect(controller.healthSnapshot()).toMatchObject({ state: 'recovering' });
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(controller.healthSnapshot()).toMatchObject({
+        state: 'unknown',
+        code: 'actor_settlement_not_persisted',
+      });
+      releaseRetrySave?.();
+      await vi.runAllTimersAsync();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps settlement recovery progressing when the background error callback throws', async () => {
     vi.useFakeTimers();
     try {
@@ -2198,6 +2537,77 @@ describe('F270 actor tree and scheduler', () => {
     }
   });
 
+  it('replays every concurrent terminal fact captured before the durability fence', async () => {
+    vi.useFakeTimers();
+    let releaseFirstTerminalSave: (() => void) | undefined;
+    try {
+      let saved: AgentActorSnapshot | undefined;
+      const firstTerminalSave = new Promise<void>((resolve) => {
+        releaseFirstTerminalSave = resolve;
+      });
+      let terminalSaveStarted = false;
+      const store: AgentActorStore = {
+        async load() {
+          return saved === undefined ? undefined : structuredClone(saved);
+        },
+        async save(snapshot, expectedRevision) {
+          const actualRevision = saved?.revision ?? 0;
+          if (actualRevision !== expectedRevision) {
+            throw Object.assign(new Error('synthetic Actor revision conflict'), {
+              code: 'actor_snapshot_conflict' as const,
+              expectedRevision,
+              currentRevision: actualRevision,
+            });
+          }
+          if (!terminalSaveStarted && snapshot.turns.some((turn) => turn.state === 'completed')) {
+            terminalSaveStarted = true;
+            await firstTerminalSave;
+          }
+          saved = structuredClone(snapshot);
+        },
+      };
+      const executor = new DeferredExecutor();
+      const controller = await createAgentActorController({
+        executor,
+        store,
+        owner: FIRST_OWNER,
+        isOwnerAlive: async () => true,
+        onBackgroundError: vi.fn(),
+      });
+      const first = await controller.spawn('/root', {
+        taskName: 'concurrent-first',
+        objective: 'Preserve first output.',
+      });
+      const second = await controller.spawn('/root', {
+        taskName: 'concurrent-second',
+        objective: 'Preserve second output.',
+      });
+
+      executor.pending[0]?.resolve({ output: 'first exact output' });
+      executor.pending[1]?.resolve({ output: 'second exact output' });
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(controller.healthSnapshot().state).toBe('unknown');
+
+      releaseFirstTerminalSave?.();
+      await vi.runAllTimersAsync();
+      await controller.quiesce('repair concurrent terminal facts');
+
+      expect(controller.output('/root', first.actorPath, first.turnId)).toMatchObject({
+        state: 'completed',
+        output: 'first exact output',
+      });
+      expect(controller.output('/root', second.actorPath, second.turnId)).toMatchObject({
+        state: 'completed',
+        output: 'second exact output',
+      });
+      expect(controller.healthSnapshot()).toEqual({ state: 'healthy' });
+    } finally {
+      releaseFirstTerminalSave?.();
+      await vi.runAllTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
   it('reconciles a late same-owner settlement before an explicit quiesce', async () => {
     vi.useFakeTimers();
     try {
@@ -2270,6 +2680,631 @@ describe('F270 actor tree and scheduler', () => {
         error: 'operator stopped the owning Run',
       });
       expect(controller.list('/root').activeNonRootTurns).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('replays the exact settlement intent when the timed-out same-owner save did not commit', async () => {
+    vi.useFakeTimers();
+    try {
+      let saved: AgentActorSnapshot | undefined;
+      let releaseRejectedSave: (() => void) | undefined;
+      const rejectedSave = new Promise<void>((resolve) => {
+        releaseRejectedSave = resolve;
+      });
+      let rejectFirstTerminalSave = true;
+      const store: AgentActorStore = {
+        async load() {
+          return saved === undefined ? undefined : structuredClone(saved);
+        },
+        async save(snapshot, expectedRevision) {
+          const actualRevision = saved?.revision ?? 0;
+          if (actualRevision !== expectedRevision) {
+            throw Object.assign(new Error('synthetic Actor revision conflict'), {
+              code: 'actor_snapshot_conflict' as const,
+              expectedRevision,
+              currentRevision: actualRevision,
+            });
+          }
+          if (
+            rejectFirstTerminalSave
+            && snapshot.turns.some((turn) => turn.state === 'completed')
+          ) {
+            rejectFirstTerminalSave = false;
+            await rejectedSave;
+            throw new Error('synthetic late terminal write rejection');
+          }
+          saved = structuredClone(snapshot);
+        },
+      };
+      const executor = new DeferredExecutor();
+      const controller = await createAgentActorController({
+        executor,
+        store,
+        owner: FIRST_OWNER,
+        isOwnerAlive: async () => true,
+        onBackgroundError: vi.fn(),
+      });
+      const turn = await controller.spawn('/root', {
+        taskName: 'replayed-worker',
+        objective: 'Preserve the exact completed result.',
+      });
+
+      executor.pending[0]?.resolve({ output: 'exact replayed result', artifacts: ['proof.txt'] });
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(controller.healthSnapshot().state).toBe('unknown');
+
+      releaseRejectedSave?.();
+      await vi.runAllTimersAsync();
+      await controller.quiesce('repair the owning Run');
+
+      expect(controller.healthSnapshot()).toEqual({ state: 'healthy' });
+      expect(controller.output('/root', turn.actorPath, turn.turnId)).toMatchObject({
+        state: 'completed',
+        output: 'exact replayed result',
+        artifacts: ['proof.txt'],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('merges the exact settlement fact onto a newer same-owner revision', async () => {
+    vi.useFakeTimers();
+    try {
+      let saved: AgentActorSnapshot | undefined;
+      let releaseRejectedSave: (() => void) | undefined;
+      const rejectedSave = new Promise<void>((resolve) => {
+        releaseRejectedSave = resolve;
+      });
+      let rejectTerminalSave = true;
+      const store: AgentActorStore = {
+        async load() {
+          return saved === undefined ? undefined : structuredClone(saved);
+        },
+        async save(snapshot, expectedRevision) {
+          const actualRevision = saved?.revision ?? 0;
+          if (actualRevision !== expectedRevision) {
+            throw Object.assign(new Error('synthetic Actor revision conflict'), {
+              code: 'actor_snapshot_conflict' as const,
+              expectedRevision,
+              currentRevision: actualRevision,
+            });
+          }
+          if (rejectTerminalSave && snapshot.turns.some((turn) => turn.state === 'completed')) {
+            rejectTerminalSave = false;
+            await rejectedSave;
+            throw new Error('synthetic terminal write rejection');
+          }
+          saved = structuredClone(snapshot);
+        },
+      };
+      const executor = new DeferredExecutor();
+      const controller = await createAgentActorController({
+        executor,
+        store,
+        owner: FIRST_OWNER,
+        isOwnerAlive: async () => true,
+        onBackgroundError: vi.fn(),
+      });
+      const turn = await controller.spawn('/root', {
+        taskName: 'conflicted-worker',
+        objective: 'Do not accept an unrelated revision.',
+      });
+      executor.pending[0]?.resolve({ output: 'must remain exact' });
+      await vi.advanceTimersByTimeAsync(6_000);
+      releaseRejectedSave?.();
+      await vi.runAllTimersAsync();
+
+      expect(saved).toBeDefined();
+      saved = { ...saved!, revision: saved!.revision + 1 };
+      await controller.quiesce('attempt repair');
+      expect(controller.healthSnapshot()).toEqual({ state: 'healthy' });
+      expect(controller.output('/root', turn.actorPath, turn.turnId)).toMatchObject({
+        state: 'completed',
+        output: 'must remain exact',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the public Actor fence until repaired siblings are durably quiesced', async () => {
+    vi.useFakeTimers();
+    try {
+      let saved: AgentActorSnapshot | undefined;
+      let releaseLateSave: (() => void) | undefined;
+      const lateSave = new Promise<void>((resolve) => {
+        releaseLateSave = resolve;
+      });
+      let releaseQuiesceSave: (() => void) | undefined;
+      const quiesceSave = new Promise<void>((resolve) => {
+        releaseQuiesceSave = resolve;
+      });
+      let terminalSaveStarted = false;
+      let quiesceSaveStarted = false;
+      const store: AgentActorStore = {
+        async load() {
+          return saved === undefined ? undefined : structuredClone(saved);
+        },
+        async save(snapshot, expectedRevision) {
+          const actualRevision = saved?.revision ?? 0;
+          if (actualRevision !== expectedRevision) {
+            throw Object.assign(new Error('synthetic Actor revision conflict'), {
+              code: 'actor_snapshot_conflict' as const,
+              expectedRevision,
+              currentRevision: actualRevision,
+            });
+          }
+          if (!terminalSaveStarted && snapshot.turns.some((turn) => turn.state === 'completed')) {
+            terminalSaveStarted = true;
+            await lateSave;
+          } else if (
+            snapshot.turns.some((turn) => turn.state === 'interrupted')
+            && !quiesceSaveStarted
+          ) {
+            quiesceSaveStarted = true;
+            await quiesceSave;
+          }
+          saved = structuredClone(snapshot);
+        },
+      };
+      const executor = new DeferredExecutor();
+      const controller = await createAgentActorController({
+        executor,
+        store,
+        owner: FIRST_OWNER,
+        isOwnerAlive: async () => true,
+        onBackgroundError: vi.fn(),
+      });
+      await controller.spawn('/root', { taskName: 'done', objective: 'Finish late.' });
+      await controller.spawn('/root', { taskName: 'sibling', objective: 'Remain active.' });
+      executor.pending[0]?.resolve({ output: 'durable completion' });
+      await vi.advanceTimersByTimeAsync(6_000);
+      releaseLateSave?.();
+      await vi.runAllTimersAsync();
+
+      const repairing = controller.quiesce('durability repair');
+      await vi.waitFor(() => expect(quiesceSaveStarted).toBe(true));
+      const concurrentSpawn = controller.spawn('/root', {
+        taskName: 'must-not-start',
+        objective: 'Stay fenced until repair commits.',
+      });
+      await expect(concurrentSpawn).rejects.toMatchObject({
+        code: 'actor_settlement_not_persisted',
+      });
+
+      releaseQuiesceSave?.();
+      await repairing;
+      expect(controller.healthSnapshot()).toEqual({ state: 'healthy' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('retries reconciliation after a transient durable load failure', async () => {
+    vi.useFakeTimers();
+    try {
+      let saved: AgentActorSnapshot | undefined;
+      let releaseRejectedSave: (() => void) | undefined;
+      const rejectedSave = new Promise<void>((resolve) => {
+        releaseRejectedSave = resolve;
+      });
+      let rejectTerminalSave = true;
+      let rejectNextLoad = false;
+      const store: AgentActorStore = {
+        async load() {
+          if (rejectNextLoad) {
+            rejectNextLoad = false;
+            throw new Error('synthetic transient load failure');
+          }
+          return saved === undefined ? undefined : structuredClone(saved);
+        },
+        async save(snapshot, expectedRevision) {
+          const actualRevision = saved?.revision ?? 0;
+          if (actualRevision !== expectedRevision) {
+            throw Object.assign(new Error('synthetic Actor revision conflict'), {
+              code: 'actor_snapshot_conflict' as const,
+              expectedRevision,
+              currentRevision: actualRevision,
+            });
+          }
+          if (rejectTerminalSave && snapshot.turns.some((turn) => turn.state === 'completed')) {
+            rejectTerminalSave = false;
+            await rejectedSave;
+            throw new Error('synthetic late terminal rejection');
+          }
+          saved = structuredClone(snapshot);
+        },
+      };
+      const executor = new DeferredExecutor();
+      const controller = await createAgentActorController({
+        executor,
+        store,
+        owner: FIRST_OWNER,
+        isOwnerAlive: async () => true,
+        onBackgroundError: vi.fn(),
+      });
+      const target = await controller.spawn('/root', {
+        taskName: 'load-retry',
+        objective: 'Survive a transient repair read failure.',
+      });
+      executor.pending[0]?.resolve({ output: 'preserved across retry' });
+      await vi.advanceTimersByTimeAsync(6_000);
+      releaseRejectedSave?.();
+      await vi.runAllTimersAsync();
+
+      rejectNextLoad = true;
+      await expect(controller.quiesce('first repair')).rejects.toThrow(
+        'synthetic transient load failure',
+      );
+      await Promise.resolve();
+      await expect(controller.quiesce('second repair')).resolves.toBeUndefined();
+
+      expect(controller.healthSnapshot()).toEqual({ state: 'healthy' });
+      expect(controller.output('/root', target.actorPath, target.turnId)).toMatchObject({
+        state: 'completed',
+        output: 'preserved across retry',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('replays a timed-out cancellation intent after its first save does not commit', async () => {
+    vi.useFakeTimers();
+    let releaseRejectedCancellation: (() => void) | undefined;
+    try {
+      let saved: AgentActorSnapshot | undefined;
+      const rejectedCancellation = new Promise<void>((resolve) => {
+        releaseRejectedCancellation = resolve;
+      });
+      let rejectCancellationSave = true;
+      const store: AgentActorStore = {
+        async load() {
+          return saved === undefined ? undefined : structuredClone(saved);
+        },
+        async save(snapshot, expectedRevision) {
+          const actualRevision = saved?.revision ?? 0;
+          if (actualRevision !== expectedRevision) {
+            throw Object.assign(new Error('synthetic Actor revision conflict'), {
+              code: 'actor_snapshot_conflict' as const,
+              expectedRevision,
+              currentRevision: actualRevision,
+            });
+          }
+          if (rejectCancellationSave && snapshot.turns.some((turn) => (
+            turn.state === 'interrupted'
+          ))) {
+            rejectCancellationSave = false;
+            await rejectedCancellation;
+            throw new Error('synthetic late cancellation rejection');
+          }
+          saved = structuredClone(snapshot);
+        },
+      };
+      const executor = new DeferredExecutor();
+      const controller = await createAgentActorController({
+        executor,
+        store,
+        owner: FIRST_OWNER,
+        isOwnerAlive: async () => true,
+        onBackgroundError: vi.fn(),
+      });
+      const child = await controller.spawn('/root', {
+        taskName: 'cancel-repair',
+        objective: 'Persist cancellation after a hung save.',
+      });
+
+      const firstCancellation = expect(
+        controller.quiesce('operator stopped the Run'),
+      ).rejects.toMatchObject({
+        code: 'actor_settlement_not_persisted',
+      });
+      await vi.advanceTimersByTimeAsync(6_000);
+      await firstCancellation;
+      expect(controller.healthSnapshot().state).toBe('unknown');
+
+      releaseRejectedCancellation?.();
+      await vi.runAllTimersAsync();
+      await controller.quiesce('automatic durability repair');
+
+      expect(controller.output('/root', child.actorPath, child.turnId)).toMatchObject({
+        state: 'interrupted',
+        error: 'operator stopped the Run',
+      });
+      expect(controller.healthSnapshot()).toEqual({ state: 'healthy' });
+    } finally {
+      releaseRejectedCancellation?.();
+      await vi.runAllTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it('preserves the exact settlement intent when the first sibling repair save fails', async () => {
+    vi.useFakeTimers();
+    try {
+      let saved: AgentActorSnapshot | undefined;
+      let releaseRejectedSave: (() => void) | undefined;
+      const rejectedSave = new Promise<void>((resolve) => {
+        releaseRejectedSave = resolve;
+      });
+      let rejectTerminalSave = true;
+      let rejectSiblingRepairSave = true;
+      const store: AgentActorStore = {
+        async load() {
+          return saved === undefined ? undefined : structuredClone(saved);
+        },
+        async save(snapshot, expectedRevision) {
+          const actualRevision = saved?.revision ?? 0;
+          if (actualRevision !== expectedRevision) {
+            throw Object.assign(new Error('synthetic Actor revision conflict'), {
+              code: 'actor_snapshot_conflict' as const,
+              expectedRevision,
+              currentRevision: actualRevision,
+            });
+          }
+          const hasCompleted = snapshot.turns.some((turn) => turn.state === 'completed');
+          const hasInterrupted = snapshot.turns.some((turn) => turn.state === 'interrupted');
+          if (rejectTerminalSave && hasCompleted && !hasInterrupted) {
+            rejectTerminalSave = false;
+            await rejectedSave;
+            throw new Error('synthetic late terminal rejection');
+          }
+          if (rejectSiblingRepairSave && hasCompleted && hasInterrupted) {
+            rejectSiblingRepairSave = false;
+            throw new Error('synthetic sibling repair rejection');
+          }
+          saved = structuredClone(snapshot);
+        },
+      };
+      const executor = new DeferredExecutor();
+      const controller = await createAgentActorController({
+        executor,
+        store,
+        owner: FIRST_OWNER,
+        isOwnerAlive: async () => true,
+        onBackgroundError: vi.fn(),
+      });
+      const target = await controller.spawn('/root', {
+        taskName: 'repair-target',
+        objective: 'Keep the exact terminal intent.',
+      });
+      const sibling = await controller.spawn('/root', {
+        taskName: 'repair-sibling',
+        objective: 'Be interrupted by repair.',
+      });
+      executor.pending[0]?.resolve({ output: 'exact after sibling retry' });
+      await vi.advanceTimersByTimeAsync(6_000);
+      releaseRejectedSave?.();
+      await vi.runAllTimersAsync();
+
+      await expect(controller.quiesce('first repair')).rejects.toThrow(
+        'synthetic sibling repair rejection',
+      );
+      expect(controller.healthSnapshot().state).toBe('unknown');
+      await Promise.resolve();
+      await expect(controller.quiesce('second repair')).resolves.toBeUndefined();
+
+      expect(controller.healthSnapshot()).toEqual({ state: 'healthy' });
+      expect(controller.output('/root', target.actorPath, target.turnId)).toMatchObject({
+        state: 'completed',
+        output: 'exact after sibling retry',
+      });
+      expect(controller.output('/root', sibling.actorPath, sibling.turnId)).toMatchObject({
+        state: 'interrupted',
+        error: 'second repair',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not restore a preserved turn whose executor was aborted by the durability fence', async () => {
+    vi.useFakeTimers();
+    try {
+      let saved: AgentActorSnapshot | undefined;
+      let releaseRejectedSave: (() => void) | undefined;
+      const rejectedSave = new Promise<void>((resolve) => {
+        releaseRejectedSave = resolve;
+      });
+      let rejectTerminalSave = true;
+      const store: AgentActorStore = {
+        async load() {
+          return saved === undefined ? undefined : structuredClone(saved);
+        },
+        async save(snapshot, expectedRevision) {
+          const actualRevision = saved?.revision ?? 0;
+          if (actualRevision !== expectedRevision) {
+            throw Object.assign(new Error('synthetic Actor revision conflict'), {
+              code: 'actor_snapshot_conflict' as const,
+              expectedRevision,
+              currentRevision: actualRevision,
+            });
+          }
+          if (rejectTerminalSave && snapshot.turns.some((turn) => turn.state === 'completed')) {
+            rejectTerminalSave = false;
+            await rejectedSave;
+            throw new Error('synthetic late terminal rejection');
+          }
+          saved = structuredClone(snapshot);
+        },
+      };
+      const executor = new DeferredExecutor();
+      const controller = await createAgentActorController({
+        executor,
+        store,
+        owner: FIRST_OWNER,
+        isOwnerAlive: async () => true,
+        onBackgroundError: vi.fn(),
+      });
+      const preserved = await controller.spawn('/root', {
+        taskName: 'preexisting',
+        objective: 'Exist before the owning Run baseline.',
+      });
+      const target = await controller.spawn('/root', {
+        taskName: 'target-after-baseline',
+        objective: 'Trigger the durability fence.',
+      });
+      executor.pending[1]?.resolve({ output: 'target completed' });
+      await vi.advanceTimersByTimeAsync(6_000);
+      releaseRejectedSave?.();
+      await vi.runAllTimersAsync();
+
+      await controller.quiesce(
+        'repair cannot revive an aborted executor',
+        new Set([preserved.turnId]),
+      );
+
+      expect(controller.output('/root', target.actorPath, target.turnId)).toMatchObject({
+        state: 'completed',
+        output: 'target completed',
+      });
+      expect(controller.output('/root', preserved.actorPath, preserved.turnId)).toMatchObject({
+        state: 'interrupted',
+        error: 'repair cannot revive an aborted executor',
+      });
+      expect(controller.list('/root').activeNonRootTurns).toBe(0);
+      expect(controller.healthSnapshot()).toEqual({ state: 'healthy' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('retries reconciliation after repair committed but durable verification failed', async () => {
+    vi.useFakeTimers();
+    try {
+      let saved: AgentActorSnapshot | undefined;
+      let releaseRejectedSave: (() => void) | undefined;
+      const rejectedSave = new Promise<void>((resolve) => {
+        releaseRejectedSave = resolve;
+      });
+      let rejectTerminalSave = true;
+      let rejectVerificationLoad = false;
+      const store: AgentActorStore = {
+        async load() {
+          if (rejectVerificationLoad) {
+            rejectVerificationLoad = false;
+            throw new Error('synthetic verification load failure');
+          }
+          return saved === undefined ? undefined : structuredClone(saved);
+        },
+        async save(snapshot, expectedRevision) {
+          const actualRevision = saved?.revision ?? 0;
+          if (actualRevision !== expectedRevision) {
+            throw Object.assign(new Error('synthetic Actor revision conflict'), {
+              code: 'actor_snapshot_conflict' as const,
+              expectedRevision,
+              currentRevision: actualRevision,
+            });
+          }
+          if (rejectTerminalSave && snapshot.turns.some((turn) => turn.state === 'completed')) {
+            rejectTerminalSave = false;
+            await rejectedSave;
+            throw new Error('synthetic late terminal rejection');
+          }
+          saved = structuredClone(snapshot);
+          if (snapshot.turns.some((turn) => turn.state === 'completed')) {
+            rejectVerificationLoad = true;
+          }
+        },
+      };
+      const executor = new DeferredExecutor();
+      const controller = await createAgentActorController({
+        executor,
+        store,
+        owner: FIRST_OWNER,
+        isOwnerAlive: async () => true,
+        onBackgroundError: vi.fn(),
+      });
+      const target = await controller.spawn('/root', {
+        taskName: 'verify-retry',
+        objective: 'Survive a failed post-commit verification read.',
+      });
+      executor.pending[0]?.resolve({ output: 'durable before verification' });
+      await vi.advanceTimersByTimeAsync(6_000);
+      releaseRejectedSave?.();
+      await vi.runAllTimersAsync();
+
+      await expect(controller.quiesce('first repair')).rejects.toThrow(
+        'synthetic verification load failure',
+      );
+      expect(controller.healthSnapshot().state).toBe('unknown');
+      await Promise.resolve();
+      await expect(controller.quiesce('second repair')).resolves.toBeUndefined();
+
+      expect(controller.healthSnapshot()).toEqual({ state: 'healthy' });
+      expect(controller.output('/root', target.actorPath, target.turnId)).toMatchObject({
+        state: 'completed',
+        output: 'durable before verification',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a conflicting same-owner terminal fact fenced', async () => {
+    vi.useFakeTimers();
+    try {
+      let saved: AgentActorSnapshot | undefined;
+      let releaseRejectedSave: (() => void) | undefined;
+      const rejectedSave = new Promise<void>((resolve) => {
+        releaseRejectedSave = resolve;
+      });
+      let rejectTerminalSave = true;
+      const store: AgentActorStore = {
+        async load() {
+          return saved === undefined ? undefined : structuredClone(saved);
+        },
+        async save(snapshot, expectedRevision) {
+          const actualRevision = saved?.revision ?? 0;
+          if (actualRevision !== expectedRevision) {
+            throw Object.assign(new Error('synthetic Actor revision conflict'), {
+              code: 'actor_snapshot_conflict' as const,
+              expectedRevision,
+              currentRevision: actualRevision,
+            });
+          }
+          if (rejectTerminalSave && snapshot.turns.some((turn) => turn.state === 'completed')) {
+            rejectTerminalSave = false;
+            await rejectedSave;
+            throw new Error('synthetic late terminal rejection');
+          }
+          saved = structuredClone(snapshot);
+        },
+      };
+      const executor = new DeferredExecutor();
+      const controller = await createAgentActorController({
+        executor,
+        store,
+        owner: FIRST_OWNER,
+        isOwnerAlive: async () => true,
+        onBackgroundError: vi.fn(),
+      });
+      const target = await controller.spawn('/root', {
+        taskName: 'conflicting-target',
+        objective: 'Reject a conflicting durable terminal fact.',
+      });
+      executor.pending[0]?.resolve({ output: 'intended completion' });
+      await vi.advanceTimersByTimeAsync(6_000);
+      releaseRejectedSave?.();
+      await vi.runAllTimersAsync();
+
+      expect(saved).toBeDefined();
+      saved = structuredClone(saved!);
+      const durableTarget = saved.turns.find((turn) => turn.turnId === target.turnId)!;
+      durableTarget.state = 'failed';
+      durableTarget.error = 'conflicting durable failure';
+      saved.revision += 1;
+
+      await expect(controller.quiesce('must stay fenced')).rejects.toMatchObject({
+        code: 'actor_settlement_not_persisted',
+      });
+      expect(controller.healthSnapshot()).toMatchObject({
+        state: 'unknown',
+        code: 'actor_settlement_not_persisted',
+      });
     } finally {
       vi.useRealTimers();
     }

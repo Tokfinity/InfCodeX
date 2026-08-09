@@ -719,6 +719,86 @@ describe('runtime daemon dispatcher', () => {
     },
   );
 
+  it('admits after-turn input only for an exact Actor durability-unknown Run', async () => {
+    const runtime = makeRuntime();
+    const get = vi.spyOn(runtime.runs, 'get').mockResolvedValue({
+      runId: 'run-actor-unknown',
+      sessionId: 'session-1',
+      phase: 'unknown',
+      stage: 'unknown',
+      startedAt: '2026-08-09T00:00:00.000Z',
+      provider: 'mock',
+      lifecycleError: {
+        code: 'actor_settlement_not_persisted',
+        message: 'Actor settlement persistence is unknown.',
+        retryable: false,
+      },
+    });
+    const submit = vi.spyOn(runtime.runs, 'submitInput').mockResolvedValue({
+      accepted: true,
+      delivery: 'after_turn',
+      runId: 'run-continuation',
+      sessionId: 'session-1',
+      afterRunId: 'run-actor-unknown',
+      sessionOrder: 2,
+    });
+    const dispatcher = createRuntimeDaemonDispatcher({ runtime });
+    await initializeDispatcher(dispatcher);
+    const input = {
+      sessionId: 'session-1',
+      afterRunId: 'run-actor-unknown',
+      input: { type: 'text', text: 'continue after repair' },
+    } as const;
+
+    const afterTurn = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-actor-unknown-after-turn',
+      'run.input.submit',
+      { ...input, delivery: 'after_turn' },
+    ));
+    expect(isRuntimeDaemonSuccessResponse(afterTurn)).toBe(true);
+    if (isRuntimeDaemonSuccessResponse(afterTurn)) {
+      expect(afterTurn.result).toMatchObject({ accepted: true, delivery: 'after_turn' });
+    }
+    expect(submit).toHaveBeenCalledTimes(1);
+
+    submit.mockClear();
+    const interrupt = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-actor-unknown-interrupt',
+      'run.input.submit',
+      { ...input, delivery: 'interrupt' },
+    ));
+    expect(isRuntimeDaemonSuccessResponse(interrupt)).toBe(true);
+    if (isRuntimeDaemonSuccessResponse(interrupt)) {
+      expect(interrupt.result).toMatchObject({ accepted: false, reason: 'stale_run' });
+    }
+    expect(submit).not.toHaveBeenCalled();
+
+    get.mockResolvedValue({
+      runId: 'run-other-unknown',
+      sessionId: 'session-1',
+      phase: 'unknown',
+      stage: 'unknown',
+      startedAt: '2026-08-09T00:00:00.000Z',
+      provider: 'mock',
+      lifecycleError: {
+        code: 'run_control_unknown',
+        message: 'Run control is unknown.',
+        retryable: false,
+      },
+    });
+    const unrelatedUnknown = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-other-unknown-after-turn',
+      'run.input.submit',
+      { ...input, afterRunId: 'run-other-unknown', delivery: 'after_turn' },
+    ));
+    expect(isRuntimeDaemonSuccessResponse(unrelatedUnknown)).toBe(true);
+    if (isRuntimeDaemonSuccessResponse(unrelatedUnknown)) {
+      expect(unrelatedUnknown.result).toMatchObject({ accepted: false, reason: 'stale_run' });
+    }
+    expect(submit).not.toHaveBeenCalled();
+    dispatcher.close();
+  });
+
   it('binds reverse calls to one run without degrading the active MCP snapshot', async () => {
     const runtime = makeRuntime();
     const activeExtensionRuntime = createExtensionRuntime();
@@ -1258,6 +1338,13 @@ describe('runtime daemon dispatcher', () => {
             completedTurnBeforeEvent: true,
             deliveredInputBeforeEvent: true,
             persistenceFailure: 'fail_closed',
+          },
+          actorSettlementConvergence: {
+            version: 1,
+            rootFence: 'fail_closed',
+            sameOwnerRepair: 'automatic',
+            unknownAfterTurnQueue: true,
+            terminal: 'failed',
           },
           runtimeEventCoalescing: { version: 1 },
           runtimeAutoModeGuardrail: {

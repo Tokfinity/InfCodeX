@@ -1321,6 +1321,7 @@ function runtimeTerminalFactSchema(): RuntimeDaemonJsonSchema {
         'credential_unavailable',
         'host_not_dispatched',
         'host_outcome_unknown',
+        'actor_settlement_not_persisted',
         'control_history_untrusted',
       ],
     },
