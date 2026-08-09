@@ -891,7 +891,7 @@ export interface McpTransportOptions {
   httpResolvedTransport?: 'streamable-http' | 'sse';
 }
 
-function resolveEnvironmentValue(value: string): string {
+function resolveEnvironmentString(value: string): string {
   let offset = 0;
   while (true) {
     const start = value.indexOf('${env:', offset);
@@ -925,7 +925,7 @@ function resolveEnvironmentReferences(
   return Object.fromEntries(
     Object.entries(values).map(([name, value]) => [
       name,
-      resolveEnvironmentValue(value),
+      resolveEnvironmentString(value),
     ]),
   );
 }
@@ -958,9 +958,9 @@ export function createMcpTransport(
         throw new Error('MCP stdio transport requires a "command" field.');
       }
       return createStdioTransport({
-        command: config.command,
-        args: config.args,
-        cwd: config.cwd,
+        command: resolveEnvironmentString(config.command),
+        args: config.args?.map(resolveEnvironmentString),
+        cwd: config.cwd !== undefined ? resolveEnvironmentString(config.cwd) : undefined,
         env: resolveEnvironmentReferences(config.env),
         framing: options.stdioFraming,
       });
@@ -970,7 +970,7 @@ export function createMcpTransport(
         throw new Error('MCP SSE transport requires a "url" field.');
       }
       return createSseTransport({
-        url: config.url,
+        url: resolveEnvironmentString(config.url),
         headers: resolveHttpHeaders(config.headers),
       });
     }
@@ -979,7 +979,7 @@ export function createMcpTransport(
         throw new Error('MCP streamable-http transport requires a "url" field.');
       }
       return createStreamableHttpTransport({
-        url: config.url,
+        url: resolveEnvironmentString(config.url),
         headers: resolveHttpHeaders(config.headers),
       });
     }
@@ -988,7 +988,7 @@ export function createMcpTransport(
         throw new Error('MCP http auto transport requires a "url" field.');
       }
       return createAutoHttpTransport({
-        url: config.url,
+        url: resolveEnvironmentString(config.url),
         headers: resolveHttpHeaders(config.headers),
         preferredTransport: options.httpResolvedTransport,
       });

@@ -426,6 +426,58 @@ describe("FEATURE_268 integration config substrate", () => {
     expect(planLegacyIntegrationMigration(configHome).mcp.action).toBe("none");
   });
 
+  it("flags literal secrets in legacy MCP server env and headers but not ${env:} references", () => {
+    const core = path.join(configHome, "config.json");
+    const planWarnings = (
+      servers: Record<string, unknown>,
+    ): readonly string[] => {
+      writeJson(core, { mcpServers: servers });
+      return planLegacyIntegrationMigration(configHome).warnings;
+    };
+
+    // ${env:...} references are not literal secrets -> no warning
+    expect(
+      planWarnings({ alpha: { command: "node", env: { token: "${env:TOKEN}" } } }),
+    ).toEqual([]);
+    expect(
+      planWarnings({
+        beta: { command: "node", headers: { authorization: "${env:KEY}" } },
+      }),
+    ).toEqual([]);
+
+    // literal values on secret-named fields -> warning
+    expect(
+      planWarnings({ alpha: { command: "node", env: { token: "sk-xxx" } } }),
+    ).toEqual([
+      'MCP server "alpha" env.token may contain a literal secret.',
+    ]);
+    expect(
+      planWarnings({
+        beta: { command: "node", headers: { authorization: "Bearer xyz" } },
+      }),
+    ).toEqual([
+      'MCP server "beta" headers.authorization may contain a literal secret.',
+    ]);
+
+    // non-secret field names are ignored even with a literal value
+    expect(
+      planWarnings({ gamma: { command: "node", env: { PATH: "/usr/bin" } } }),
+    ).toEqual([]);
+
+    // mixed env+headers: only the literal value is flagged, the reference is not
+    expect(
+      planWarnings({
+        delta: {
+          command: "node",
+          env: { apiKey: "${env:API_KEY}" },
+          headers: { authorization: "Bearer secret" },
+        },
+      }),
+    ).toEqual([
+      'MCP server "delta" headers.authorization may contain a literal secret.',
+    ]);
+  });
+
   it("preflights both legacy domains before writing either destination", () => {
     writeJson(path.join(configHome, "config.json"), {
       mcpServers: { legacy: { command: "legacy-server" } },

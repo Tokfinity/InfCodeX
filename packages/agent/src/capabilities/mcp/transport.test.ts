@@ -461,6 +461,59 @@ process.stdin.on('end', () => {
       env: { MCP_REFERENCE_VALUE: reference },
     })).toThrow(/malformed environment reference/i);
   });
+
+  it('expands environment references in stdio command, args, and cwd without mutating config', async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), 'kodax-mcp-stdio-fields-env-reference-'));
+    tempDirs.push(tempDir);
+    const markerPath = path.join(tempDir, 'fields.txt');
+    const cmdName = 'KODAX_MCP_STDIO_CMD_ENV_REFERENCE_TEST';
+    const argName = 'KODAX_MCP_STDIO_ARG_ENV_REFERENCE_TEST';
+    const cwdName = 'KODAX_MCP_STDIO_CWD_ENV_REFERENCE_TEST';
+    const previousCmd = process.env[cmdName];
+    const previousArg = process.env[argName];
+    const previousCwd = process.env[cwdName];
+    process.env[cmdName] = process.execPath;
+    process.env[argName] = 'resolved-arg';
+    process.env[cwdName] = tempDir;
+    const source = `
+const fs = require('node:fs');
+process.stdin.resume();
+process.stdin.on('end', () => {
+  fs.writeFileSync(${JSON.stringify(markerPath)}, process.cwd() + '|' + process.argv.join('|'));
+  process.exit(0);
+});
+`;
+    const config = {
+      command: '${env:' + cmdName + '}',
+      args: ['-e', source, '${env:' + argName + '}'],
+      cwd: '${env:' + cwdName + '}',
+    };
+
+    try {
+      const transport = createMcpTransport(config);
+      await transport.open({
+        onMessage: () => {},
+        onError: () => {},
+        onClose: () => {},
+      });
+      await transport.close();
+
+      const content = await readFile(markerPath, 'utf8');
+      const cwdPart = content.slice(0, content.indexOf('|'));
+      expect(cwdPart.toLowerCase()).toBe(tempDir.toLowerCase());
+      expect(content).toContain('resolved-arg');
+      expect(config.command).toBe('${env:' + cmdName + '}');
+      expect(config.args[2]).toBe('${env:' + argName + '}');
+      expect(config.cwd).toBe('${env:' + cwdName + '}');
+    } finally {
+      if (previousCmd === undefined) delete process.env[cmdName];
+      else process.env[cmdName] = previousCmd;
+      if (previousArg === undefined) delete process.env[argName];
+      else process.env[argName] = previousArg;
+      if (previousCwd === undefined) delete process.env[cwdName];
+      else process.env[cwdName] = previousCwd;
+    }
+  });
 });
 
 describe('SSE transport', () => {
@@ -532,6 +585,63 @@ describe('SSE transport', () => {
       if (previous === undefined) delete process.env[referenceName];
       else process.env[referenceName] = previous;
     }
+  });
+
+  it('expands environment references embedded in the SSE url', async () => {
+    const mock = createTestSseServer();
+    servers.push(mock);
+    const { url } = await mock.start();
+    (mock as { postEndpoint: string }).postEndpoint = `${url}/messages`;
+    const referenceName = 'KODAX_MCP_SSE_URL_ENV_REFERENCE_TEST';
+    const previous = process.env[referenceName];
+    process.env[referenceName] = url;
+    const config = {
+      type: 'sse' as const,
+      url: '${env:' + referenceName + '}',
+    };
+
+    try {
+      const transport = createMcpTransport(config);
+      await transport.open({
+        onMessage: () => {},
+        onError: () => {},
+        onClose: () => {},
+      });
+      await transport.send(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'test/echo', params: {} }));
+      await new Promise((r) => setTimeout(r, 200));
+      expect(mock.receivedMessages.length).toBeGreaterThanOrEqual(1);
+      await transport.close();
+      expect(config.url).toBe('${env:' + referenceName + '}');
+    } finally {
+      if (previous === undefined) delete process.env[referenceName];
+      else process.env[referenceName] = previous;
+    }
+  });
+
+  it('rejects an unset environment reference in the SSE url', () => {
+    const referenceName = 'KODAX_MCP_MISSING_SSE_URL_ENV_REFERENCE_TEST';
+    const previous = process.env[referenceName];
+    delete process.env[referenceName];
+
+    try {
+      expect(() => createMcpTransport({
+        type: 'sse',
+        url: '${env:' + referenceName + '}',
+      })).toThrow(new RegExp(referenceName));
+    } finally {
+      if (previous !== undefined) process.env[referenceName] = previous;
+    }
+  });
+
+  it.each([
+    '${env:}',
+    '${env:INVALID-NAME}',
+    '${env:UNCLOSED',
+  ])('rejects a malformed environment reference %s in the SSE url', (reference) => {
+    expect(() => createMcpTransport({
+      type: 'sse',
+      url: reference,
+    })).toThrow(/malformed environment reference/i);
   });
 });
 
