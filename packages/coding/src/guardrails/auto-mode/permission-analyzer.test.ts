@@ -3212,7 +3212,7 @@ describe('Auto[rules] user KodaX home read narrowing', () => {
       expect(assessment.decision.action).toBe('allow');
       expect(assessment.review.operations).toContainEqual(expect.objectContaining({
         kind: 'read',
-        target: expect.objectContaining({ boundary: 'outside-workspace' }),
+        target: expect.objectContaining({ boundary: 'agent-home' }),
       }));
     }
   });
@@ -3233,7 +3233,7 @@ describe('Auto[rules] user KodaX home read narrowing', () => {
       expect(assessment.decision.action).toBe('allow');
       expect(assessment.review.operations).toContainEqual(expect.objectContaining({
         kind: 'read',
-        target: expect.objectContaining({ boundary: 'outside-workspace' }),
+        target: expect.objectContaining({ boundary: 'agent-home' }),
       }));
     }
   });
@@ -3306,7 +3306,7 @@ describe('Auto[rules] user KodaX home read narrowing', () => {
     }));
   });
 
-  it('still escalates writes to non-credential ~/.kodax paths', () => {
+  it('allows writes to non-credential ~/.kodax paths', () => {
     const projectRoot = createRoot('kodax-home-narrow-');
     userKodax = createTempDirSync('kodax-home-narrow-user-', process.cwd());
     setAgentConfigHome(userKodax);
@@ -3315,6 +3315,18 @@ describe('Auto[rules] user KodaX home read narrowing', () => {
 
     const decision = evaluateAutoRulesCall(
       call('write', { path: path.join(userKodax, 'tool-results', 'out.txt') }),
+      context(projectRoot),
+    );
+    expect(decision.action).toBe('allow');
+  });
+
+  it('still escalates writes to credential ~/.kodax paths', () => {
+    const projectRoot = createRoot('kodax-home-narrow-');
+    userKodax = createTempDirSync('kodax-home-narrow-user-', process.cwd());
+    setAgentConfigHome(userKodax);
+
+    const decision = evaluateAutoRulesCall(
+      call('write', { path: path.join(userKodax, 'config.json') }),
       context(projectRoot),
     );
     expect(decision.action).toBe('escalate');
@@ -3336,7 +3348,7 @@ describe('Auto[rules] user KodaX home read narrowing', () => {
       expect(assessment.decision.action).toBe('allow');
       expect(assessment.review.operations).toContainEqual(expect.objectContaining({
         kind: 'read',
-        target: expect.objectContaining({ boundary: 'outside-workspace' }),
+        target: expect.objectContaining({ boundary: 'agent-home' }),
       }));
     }
   });

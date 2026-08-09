@@ -832,7 +832,7 @@ function isProtectedAgentHome(targetPath: string): boolean {
  *
  * `target` is a resolved absolute path inside `agentHome`.
  */
-function isCredentialBearingKodaxPath(target: string, agentHome: string): boolean {
+export function isCredentialBearingKodaxPath(target: string, agentHome: string, forWrite = false): boolean {
   const rel = path.relative(agentHome, target);
   if (rel.startsWith('..')) return false;
   const relNorm = rel.replace(/\\/g, '/').toLowerCase();
@@ -849,6 +849,11 @@ function isCredentialBearingKodaxPath(target: string, agentHome: string): boolea
   if (relNorm === 'trusted-project-rules.json') return true;
   if (relNorm === 'runtime/permission-grants.json') return true;
   if (relNorm.startsWith('runtime/daemon/')) return true;
+  // custom-providers.json: read-open (apiKeyEnv only), write-protected
+  // (adding a provider can point at a malicious endpoint - exfiltration risk).
+  if (forWrite && relNorm === 'custom-providers.json') return true;
+  // Generic credential filename anywhere under ~/.kodax (defense-in-depth).
+  if (path.basename(relNorm) === 'credentials.json') return true;
   return false;
 }
 
@@ -885,13 +890,13 @@ function classifyAgentHomeTarget(
   if (!isPathInsideDirectory(target, agentHome)) return undefined;
   return isCredentialBearingKodaxPath(target, agentHome)
     ? { path: targetPath, boundary: 'protected' }
-    : { path: targetPath, boundary: 'outside-workspace' };
+    : { path: targetPath, boundary: 'agent-home' };
 }
 
 /**
  * Classifies a shell read target flagged as sensitive by `sensitivePathCandidate`.
  * Defers to the agent-home narrowing so non-credential `~/.kodax` reads
- * (tool-results, sessions, ...) read as outside-workspace; credentials stay
+ * (tool-results, sessions, ...) read as agent-home; credentials stay
  * protected. Falls back to `protected` when the path is not confidently under
  * the user home (unresolvable, wildcard, or another CLI home).
  */
@@ -966,7 +971,7 @@ function isExistingDirectoryTarget(
 }
 
 function isAllowedMutationTarget(target: AutoModePermissionTarget): boolean {
-  return target.boundary === 'workspace' || target.boundary === 'system-temp';
+  return target.boundary === 'workspace' || target.boundary === 'system-temp' || target.boundary === 'agent-home';
 }
 
 function escalate(reason: string): AutoModeRulesDecision {

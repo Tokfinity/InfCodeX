@@ -160,10 +160,9 @@ describe('Tier 0 — user_kodax_write (file tools)', () => {
     expect(result.denied).toBe(true);
   });
 
-  it('BLOCKS edit to ~/.kodax/agents.md', () => {
+  it('ALLOWS edit to non-credential ~/.kodax/agents.md', () => {
     const result = checkAbsoluteDeny(edit(path.join(USER_KODAX, 'agents.md')), PROJECT_ROOT);
-    expect(result.denied).toBe(true);
-    if (result.denied) expect(result.patternId).toBe('user_kodax_write');
+    expect(result.denied).toBe(false);
   });
 
   it.runIf(process.platform === 'win32')('BLOCKS case-varied Windows user KodaX paths', () => {
@@ -193,6 +192,32 @@ describe('Tier 0 — user_kodax_write (file tools)', () => {
 
   it('returns MISS when write tool has no path field', () => {
     const result = checkAbsoluteDeny({ id: 'c', name: 'write', input: {} }, PROJECT_ROOT);
+    expect(result.denied).toBe(false);
+  });
+
+  it('BLOCKS write to ~/.kodax/custom-providers.json (write-only credential)', () => {
+    const result = checkAbsoluteDeny(write(path.join(USER_KODAX, 'custom-providers.json')), PROJECT_ROOT);
+    expect(result.denied).toBe(true);
+    if (result.denied) expect(result.patternId).toBe('user_kodax_write');
+  });
+
+  it('BLOCKS bash write to ~/.kodax/config.json (bash Tier 0)', () => {
+    const target = path.join(USER_KODAX, 'config.json');
+    const result = checkAbsoluteDeny(bash('echo x > "' + target + '"'), PROJECT_ROOT);
+    expect(result.denied).toBe(true);
+    if (result.denied) expect(result.patternId).toBe('user_kodax_write');
+  });
+
+  it('BLOCKS bash write to ~/.kodax/custom-providers.json (bash Tier 0)', () => {
+    const target = path.join(USER_KODAX, 'custom-providers.json');
+    const result = checkAbsoluteDeny(bash('echo x > "' + target + '"'), PROJECT_ROOT);
+    expect(result.denied).toBe(true);
+    if (result.denied) expect(result.patternId).toBe('user_kodax_write');
+  });
+
+  it('ALLOWS bash write to non-credential ~/.kodax/tool-results/x', () => {
+    const target = path.join(USER_KODAX, 'tool-results', 'out.txt');
+    const result = checkAbsoluteDeny(bash('echo x > "' + target + '"'), PROJECT_ROOT);
     expect(result.denied).toBe(false);
   });
 });

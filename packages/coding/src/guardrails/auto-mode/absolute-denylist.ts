@@ -20,22 +20,21 @@
  *                        `dd of=test.bin` (file write — reaches LLM as
  *                        dangerous_pattern signal).
  *   4. fork_bomb       — `:(){ :|:& };:` — denial of service.
- *   5. user_kodax_write — write/edit to any path under `~/.kodax/`
- *                        (credentials zone — internal kodax config writes
- *                        use the TypeScript API, not bash/tools, so the
- *                        only path here is normally an LLM-emitted shell).
+ *   5. user_kodax_write — write/edit/bash-write to credential-bearing paths
+ *                        under `~/.kodax/` (tokens, secrets, config.json,
+ *                        custom-providers.json, ...). Non-credential paths
+ *                        (tool-results, sessions, ...) are allowed so the
+ *                        agent can manage its normal outputs.
  *
- * Layer note: bash-level `~/.kodax/` writes (e.g. `echo x > ~/.kodax/y`)
- * require AST path-extraction. The REPL-side collector wired through
- * `extraCollectors` (Step 7) identifies those as
- * Tier 0 by emitting a synthetic `user_kodax_write` match via the same
- * `AbsoluteDenyResult` shape. This module handles the file-tool path
- * directly (the most common attack vector) and the four command-string
- * patterns that don't need path extraction.
+ * Layer note: bash-level `~/.kodax/` writes are detected via AST
+ * path-extraction (`collectDeterministicBashWriteTargets`) in
+ * `checkUserKodaxBashWrite`, covering both file-tool and bash paths.
  */
 
 import { getAgentConfigHome, isPathInsideDirectory, resolveExecutionPath } from '@kodax-ai/agent';
 import type { RunnerToolCall } from '@kodax-ai/agent';
+import { collectDeterministicBashWriteTargets } from '../../permissions/permission.js';
+import { isCredentialBearingKodaxPath } from './permission-analyzer.js';
 
 export type TierZeroPatternId =
   | 'rm_rf_root'
@@ -204,16 +203,43 @@ function checkUserKodaxWrite(
     return MISS;
   }
   const resolved = resolveExecutionPath(targetPath, executionCwd);
-  if (isPathInsideDirectory(resolved, userKodax)) {
+  if (!isPathInsideDirectory(resolved, userKodax)) return MISS;
+  // Non-credential ~/.kodax writes (tool-results, sessions, ...) are allowed;
+  // only credential-bearing paths (plus custom-providers.json) are Tier 0 denied.
+  if (isCredentialBearingKodaxPath(resolved, userKodax, true)) {
     return {
       denied: true,
       patternId: 'user_kodax_write',
-      reason: `The write targets KodaX configuration path \`${targetPath}\` under ~/.kodax/ and can make KodaX configuration unusable; managed config APIs are available.`,
+      reason: `The write targets KodaX credential path \`${targetPath}\` under ~/.kodax/ (tokens, secrets, or provider config); managed config APIs are available for non-credential paths.`,
     };
   }
   return MISS;
 }
 
+function checkUserKodaxBashWrite(
+  command: string,
+  executionCwd: string,
+): AbsoluteDenyResult {
+  if (!command) return MISS;
+  let userKodax: string;
+  try {
+    userKodax = getAgentConfigHome();
+  } catch {
+    return MISS;
+  }
+  const targets = collectDeterministicBashWriteTargets(command);
+  for (const target of targets) {
+    const resolved = resolveExecutionPath(target, executionCwd);
+    if (isPathInsideDirectory(resolved, userKodax) && isCredentialBearingKodaxPath(resolved, userKodax, true)) {
+      return {
+        denied: true,
+        patternId: 'user_kodax_write',
+        reason: `The bash command writes to KodaX credential path \`${target}\` under ~/.kodax/ (tokens, secrets, or provider config); managed config APIs are available for non-credential paths.`,
+      };
+    }
+  }
+  return MISS;
+}
 // ============== Public entrypoint ==============
 
 /**
@@ -228,8 +254,8 @@ function checkUserKodaxWrite(
  * classifier and the reason string is one-shot.
  *
  * **Pure**: deterministic given (call, projectRoot, stable env).
- * **Fast**: ~5 regex tests + 1-2 string ops; safe to run on every
- * non-Tier-1 call without measurable overhead.
+ * **Fast**: ~5 regex tests + 1-2 string ops (file-tools); bash calls add
+ * AST path-extraction. Safe to run on every non-Tier-1 call.
  */
 export function checkAbsoluteDeny(
   call: RunnerToolCall,
@@ -244,6 +270,10 @@ export function checkAbsoluteDeny(
   if (call.name !== 'bash') return MISS;
   const command = typeof call.input.command === 'string' ? call.input.command : '';
   if (!command) return MISS;
+
+  // Bash path-aware: credential ~/.kodax/ writes (echo >, tee, etc.)
+  const kodaxBashWrite = checkUserKodaxBashWrite(command, executionCwd);
+  if (kodaxBashWrite.denied) return kodaxBashWrite;
 
   const rmRoot = checkRmRfRoot(command);
   if (rmRoot.denied) return rmRoot;
