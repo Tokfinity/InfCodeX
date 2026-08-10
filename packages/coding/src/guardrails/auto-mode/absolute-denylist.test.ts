@@ -10,7 +10,11 @@ import type { RunnerToolCall } from '@kodax-ai/agent';
 import { checkAbsoluteDeny, checkAgentHomeHardDeny } from './absolute-denylist.js';
 
 const PROJECT_ROOT = path.resolve('/tmp/kodax-tier0-test-project');
-const USER_KODAX = path.resolve('/tmp/kodax-tier0-test-user-home/.kodax');
+const USER_KODAX = path.join(
+  path.parse(os.homedir()).root,
+  'kodax-tier0-test-user-home',
+  '.kodax',
+);
 
 function bash(command: string): RunnerToolCall {
   return { id: 'c', name: 'bash', input: { command } };

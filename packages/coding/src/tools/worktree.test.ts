@@ -3,6 +3,7 @@
  */
 
 import path from 'node:path';
+import os from 'node:os';
 import { EventEmitter } from 'node:events';
 import {
   containWindowsEffectProcess,
@@ -107,6 +108,8 @@ const mockContext: KodaXToolExecutionContext = {
   executionCwd: '/test/repo',
   gitRoot: '/test/repo',
 };
+
+const TEST_AGENT_HOME = path.join(os.tmpdir(), `kodax-worktree-agent-home-${process.pid}`);
 
 afterEach(() => {
   setMockExecFileImpl(null);
@@ -216,18 +219,18 @@ describe('toolWorktreeCreate', () => {
   });
 
   it('allows the controller-owned workflow base inside Runtime', async () => {
-    const agentHome = path.resolve('/agent-home');
+    const agentHome = TEST_AGENT_HOME;
     setAgentConfigHome(agentHome);
     const result = await createWorkflowWorktree(
       { branch_name: 'trusted-protected-base' },
       { ...mockContext, workflowWorktreeBaseDir: path.join(agentHome, 'runtime', 'worktrees') },
     );
-    expect(JSON.parse(result).path.replace(/\\/g, '/'))
-      .toMatch(/\/agent-home\/runtime\/worktrees\/\.kodax-worktree-trusted-protected-base$/);
+    expect(JSON.parse(result).path)
+      .toBe(path.join(agentHome, 'runtime', 'worktrees', '.kodax-worktree-trusted-protected-base'));
   });
 
   it('rejects a model worktree whose default path lands in Runtime', async () => {
-    const agentHome = path.resolve('/agent-home');
+    const agentHome = TEST_AGENT_HOME;
     setAgentConfigHome(agentHome);
     await expect(toolWorktreeCreate(
       { branch_name: 'model-runtime-base' },
@@ -294,7 +297,7 @@ describe('toolWorktreeRemove', () => {
   });
 
   it('refuses to remove the Runtime tree even with discard_changes', async () => {
-    const agentHome = path.resolve('/agent-home');
+    const agentHome = TEST_AGENT_HOME;
     setAgentConfigHome(agentHome);
     await expect(toolWorktreeRemove({
       action: 'remove',
@@ -304,7 +307,7 @@ describe('toolWorktreeRemove', () => {
   });
 
   it('allows the controller to reclaim its own Runtime worktree', async () => {
-    const agentHome = path.resolve('/agent-home');
+    const agentHome = TEST_AGENT_HOME;
     const workflowBase = path.join(agentHome, 'runtime', 'worktrees');
     setAgentConfigHome(agentHome);
     const result = await removeWorkflowWorktree(
@@ -315,7 +318,7 @@ describe('toolWorktreeRemove', () => {
   });
 
   it('allows removing a model worktree from an ordinary Agent Home descendant', async () => {
-    const agentHome = path.resolve('/agent-home');
+    const agentHome = TEST_AGENT_HOME;
     setAgentConfigHome(agentHome);
     const result = await toolWorktreeRemove({
       action: 'remove',

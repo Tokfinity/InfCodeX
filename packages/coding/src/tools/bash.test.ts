@@ -398,7 +398,12 @@ describe('toolBash', () => {
     await cleanupRegisteredManagedChildren({ includeCurrentOwner: true });
     setAgentConfigHome(undefined);
     if (tempDir) {
-      await fs.rm(tempDir, { recursive: true, force: true });
+      await fs.rm(tempDir, {
+        recursive: true,
+        force: true,
+        maxRetries: 20,
+        retryDelay: 100,
+      });
       tempDir = '';
     }
   });
