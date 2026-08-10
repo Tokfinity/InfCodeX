@@ -99,10 +99,9 @@ describe('help command output', () => {
     { command: 'learn', args: ['promote', '--help'] },
   ])('routes learned Skill promotion help through the real dispatcher: /$command $args', async (parsed) => {
     const chunks: string[] = [];
-    const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: string | Uint8Array) => {
-      chunks.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
-      return true;
-    }) as typeof process.stdout.write);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+      chunks.push(args.map(String).join(' '));
+    });
 
     try {
       const result = await executeCommand(
@@ -112,10 +111,10 @@ describe('help command output', () => {
         {} as never,
       );
       expect(result).toBe(true);
-      expect(chunks.join('')).toContain('/learn promote <name|slug|capability-id> [--scope user]');
-      expect(chunks.join('')).toContain('Promote is an explicit ownership transfer');
+      expect(chunks.join('\n')).toContain('/learn promote <name|slug|capability-id> [--scope user]');
+      expect(chunks.join('\n')).toContain('Promote is an explicit ownership transfer');
     } finally {
-      stdoutSpy.mockRestore();
+      logSpy.mockRestore();
     }
   });
 

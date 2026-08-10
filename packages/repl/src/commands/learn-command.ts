@@ -35,7 +35,7 @@ function proposalLabel(entry: StoredLearningProposal): string {
 }
 
 function writeOutput(line = ''): void {
-  process.stdout.write(`${line}\n`);
+  console.log(line);
 }
 
 function printWarnings(warnings: readonly string[]): void {
@@ -159,11 +159,13 @@ function printHelp(): void {
   writeOutput(chalk.cyan('\n/learn - Inspect and control learned capabilities'));
   writeOutput(chalk.dim('  /learn                      Open the Learning Center'));
   writeOutput(chalk.dim('  /learn list [search]        List learned capabilities'));
+  writeOutput(chalk.dim('  /learn ready [search]       List capabilities ready for review/control'));
+  writeOutput(chalk.dim('  /learn pending [search]     Compatibility alias for `/learn ready`'));
   writeOutput(chalk.dim('  /learn show <name|slug>     Inspect a capability'));
   writeOutput(chalk.dim('  /learn trust|reject|disable|rollback <name|slug>'));
   writeOutput(chalk.dim('  /learn promote <name|slug|capability-id> [--scope user]'));
   writeOutput(chalk.dim('  /learn promote --help       Explain formal user-catalog promotion'));
-  writeOutput(chalk.dim('  Compatibility: pending, diff, approve and reject remain accepted.'));
+  writeOutput(chalk.dim('  Compatibility: diff, approve and reject remain accepted.'));
   writeOutput(chalk.dim('  /learn help\n'));
 }
 
@@ -264,13 +266,32 @@ async function runLearningCenterCommand(
   if (!learning) return false;
   const subcommand = (args[0] ?? '').toLowerCase();
   if (subcommand === '' && callbacks.openLearningCenter) {
+    const preview = await learning.list({ limit: 1 });
+    if (preview.items.length === 0) {
+      writeOutput(chalk.cyan('\n[learn] Learning Center'));
+      writeOutput(chalk.dim('  Learning Center has no learned capabilities.\n'));
+      return true;
+    }
     await callbacks.openLearningCenter();
     return true;
   }
-  if (subcommand === '' || subcommand === 'list' || subcommand === 'pending') {
+  if (
+    subcommand === ''
+    || subcommand === 'list'
+    || subcommand === 'ready'
+    || subcommand === 'pending'
+  ) {
+    if (subcommand === 'pending') {
+      writeOutput(chalk.dim(
+        '[learn] `pending` is a compatibility alias for /learn ready; '
+        + 'episode-review backlog: /memory reviews.',
+      ));
+    }
     const page = await learning.list({
       search: args.slice(1).join(' ').trim() || undefined,
-      ...(subcommand === 'pending' ? { lifecycle: 'ready' as const } : {}),
+      ...(subcommand === 'ready' || subcommand === 'pending'
+        ? { lifecycle: 'ready' as const }
+        : {}),
       limit: 200,
     });
     writeOutput(chalk.cyan('\n[learn] Learning Center'));
@@ -338,8 +359,8 @@ async function resolveLearningCapabilityId(
 export const learnCommand: Command = {
   name: 'learn',
   description: 'Inspect and control the Learning Center',
-  usage: '/learn [list|show|review|trust|reject|disable|rollback|promote|help] [name|slug|capability-id] [--scope user]',
-  argumentHint: 'list | show <slug> | trust <slug> | disable <slug> | promote <slug> [--scope user] | help [promote]',
+  usage: '/learn [list|ready|pending|show|review|trust|reject|disable|rollback|promote|help] [name|slug|capability-id] [--scope user]',
+  argumentHint: 'list [search] | ready [search] | pending [search] | show <slug> | trust <slug> | disable <slug> | promote <slug> [--scope user] | help [promote]',
   handler: async (args, context, callbacks) => {
     const cwd = resolveCwd(context);
     const subcommand = (args[0] ?? 'pending').toLowerCase();
@@ -368,6 +389,16 @@ export const learnCommand: Command = {
     if (subcommand === 'promote') {
       writeOutput(chalk.yellow('\n[learn] Learning Center controls are unavailable in this runtime.\n'));
       return;
+    }
+    if (subcommand === 'ready') {
+      writeOutput(chalk.yellow('\n[learn] Learning Center controls are unavailable in this runtime.\n'));
+      return;
+    }
+    if (subcommand === 'pending') {
+      writeOutput(chalk.dim(
+        '[learn] Learning Center controls are unavailable; '
+        + 'showing the legacy pending learning proposals.',
+      ));
     }
 
     const { storePath, store } = await readStore(cwd);

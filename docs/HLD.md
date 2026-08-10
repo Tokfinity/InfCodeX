@@ -66,8 +66,15 @@ authoritative process-tree containment. Runtime supplies Linux PID-namespace
 containment and a Windows per-effect Job in all permission modes. macOS and
 legacy custom adapters without the optional containment capability fail closed
 for opaque Bash; they retain statically exact commands. Windows sandbox grants
-attach to verified ordinary Home children, not
+attach to the permission review's exact verified ordinary Home paths, not to
 the Home root object, so child mutation does not imply whole-root deletion.
+Safe paths remain automatic; root/control-plane writes and escaping links are
+rejected again before ACL construction. The eager workspace session uses a
+disposable per-session temp directory and leaves unrelated user-owned trees
+ungranted. Safe scopes have bounded reuse and retire before replacement;
+review-only scopes exclude every other shell from ACL initialization through
+reset so the shared Windows sandbox identity cannot expose temporary access to
+a concurrent command.
 Learned Skill discovery likewise treats local and remote project identities as
 distinct physical roots, searches each applicable root, and directs lifecycle
 mutations back to the store that owns the discovered record.

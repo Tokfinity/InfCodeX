@@ -30,6 +30,15 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Memory/Learning command output is now rendered through the Ink-captured
+  command channel instead of raw stdout. `/learn` reports an explicit empty
+  state, `/learn ready` is the canonical ready-capability query, and the legacy
+  `/learn pending` alias explains that it is unrelated to episode-review work.
+  `/memory reviews [limit]` now lists the persisted cross-session review jobs
+  behind shutdown-backlog notices, while `/memory proposals` names the separate
+  actionable proposal inbox and `/memory pending` remains a documented alias.
+  The `@kodax-ai/kodax/experimental-memory` SDK exposes the same review summary,
+  inspection, and drain APIs used by these surfaces.
 - Issue 282 follow-up: Actor progress is now batched once per controller tree,
   terminal persistence excludes known mutation-queue waits from its five-second
   ambiguity budget, and a permanently blocked predecessor remains bounded by a

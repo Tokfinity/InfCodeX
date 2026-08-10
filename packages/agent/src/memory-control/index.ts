@@ -67,6 +67,7 @@ export {
   failEpisodeReviewAttempt,
   freezeEpisodeReviewInput,
   inspectEpisodeReviewJob,
+  listPendingEpisodeReviewSummaries,
   listPendingEpisodeReviews,
   persistPendingEpisodeReview,
   withEpisodeReviewClaimAuthority,
@@ -89,6 +90,8 @@ export type {
   EpisodeReviewJobStatus,
   EpisodeReviewReceipt,
   PendingEpisodeReview,
+  PendingEpisodeReviewFilter,
+  PendingEpisodeReviewSummary,
   PendingEpisodeReviewV1,
   PendingEpisodeReviewV2,
 } from './review-inbox.js';

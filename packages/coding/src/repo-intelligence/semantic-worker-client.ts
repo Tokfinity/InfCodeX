@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Worker, type WorkerOptions } from 'node:worker_threads';
+import { emitKodaXDiagnostic } from '@kodax-ai/agent';
 import type {
   ImpactEstimateResult,
   ModuleContextResult,
@@ -60,6 +61,7 @@ interface PendingRequest {
 interface WorkerState {
   worker: Worker;
   pending: Map<number, PendingRequest>;
+  idleTimer?: ReturnType<typeof setTimeout>;
 }
 
 interface WorkerRequestHandle {
@@ -69,6 +71,7 @@ interface WorkerRequestHandle {
 
 const DEFAULT_WORKER_OLD_SPACE_MB = 2048;
 const DEFAULT_WORKER_TIMEOUT_MS = 120_000;
+const WORKER_IDLE_TIMEOUT_MS = 60_000;
 let nextRequestId = 1;
 let workerState: WorkerState | undefined;
 const workerRequestHandles = new WeakMap<Promise<unknown>, WorkerRequestHandle>();
@@ -231,19 +234,52 @@ function rejectAll(state: WorkerState, error: Error): void {
   state.pending.clear();
 }
 
+function clearWorkerIdleTimer(state: WorkerState): void {
+  if (state.idleTimer === undefined) return;
+  clearTimeout(state.idleTimer);
+  state.idleTimer = undefined;
+}
+
+function terminateWorkerBestEffort(state: WorkerState, reason: string): void {
+  void state.worker.terminate().catch((error: unknown) => {
+    emitKodaXDiagnostic({
+      source: 'repo-intelligence:worker',
+      level: 'warn',
+      message: `Repo-intelligence worker termination failed after ${reason}.`,
+      detail: error,
+    });
+  });
+}
+
+function scheduleWorkerIdleTermination(state: WorkerState): void {
+  clearWorkerIdleTimer(state);
+  state.idleTimer = setTimeout(() => {
+    state.idleTimer = undefined;
+    if (workerState !== state || state.pending.size > 0) return;
+    workerState = undefined;
+    terminateWorkerBestEffort(state, 'idle timeout');
+  }, WORKER_IDLE_TIMEOUT_MS);
+  state.idleTimer.unref?.();
+}
+
 function failWorker(state: WorkerState, error: Error): void {
+  clearWorkerIdleTimer(state);
   rejectAll(state, error);
   if (workerState === state) {
     workerState = undefined;
   }
-  void state.worker.terminate().catch(() => undefined);
+  terminateWorkerBestEffort(state, 'worker failure');
 }
 
 function updateWorkerRef(state: WorkerState): void {
   if ([...state.pending.values()].some((pending) => pending.keepAlive)) {
+    clearWorkerIdleTimer(state);
     state.worker.ref();
   } else {
     state.worker.unref();
+    if (state.pending.size === 0) {
+      scheduleWorkerIdleTermination(state);
+    }
   }
 }
 
@@ -282,6 +318,7 @@ function getWorkerState(): WorkerState {
     failWorker(state, error);
   });
   state.worker.on('exit', (code) => {
+    clearWorkerIdleTimer(state);
     if (workerState === state) {
       workerState = undefined;
     }
@@ -302,8 +339,13 @@ export async function shutdownRepoIntelligenceWorkerForTest(): Promise<void> {
   const state = workerState;
   if (!state) return;
   workerState = undefined;
+  clearWorkerIdleTimer(state);
   rejectAll(state, new Error('Repo intelligence worker shut down by test cleanup.'));
   await state.worker.terminate();
+}
+
+export function isRepoIntelligenceWorkerRunningForTest(): boolean {
+  return workerState !== undefined;
 }
 
 export function detachRepoIntelligenceWorkerRequest(promise: Promise<unknown>): boolean {

@@ -469,9 +469,21 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
     },
   );
 
+  const preparedEffectLease = sandboxInvocation?.fileSystemEffectLease;
   let releaseMutationLease: FileSystemMutationLeaseRelease;
   try {
-    releaseMutationLease = await acquireFileSystemMutationLease();
+    releaseMutationLease = preparedEffectLease === undefined
+      ? await acquireFileSystemMutationLease()
+      : Object.assign(
+          () => preparedEffectLease.release(),
+          {
+            bindEffectProcess: (
+              pid: number,
+              windowsJobContained: boolean,
+            ) => preparedEffectLease.bindEffectProcess(pid, windowsJobContained),
+            finishEffectProcess: () => preparedEffectLease.finishEffectProcess(),
+          },
+        );
   } catch (error) {
     await cleanupSandbox();
     const message = error instanceof Error ? error.message : String(error);
@@ -531,7 +543,7 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
     try {
       return spawnCommand();
     } catch (error) {
-      void releaseMutation().catch(() => undefined);
+      void cleanupSandbox().finally(releaseMutation);
       throw error;
     }
   };
@@ -546,7 +558,7 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
       });
     } catch (error) {
       killChildProcessTreeSync(proc);
-      void releaseMutation().finally(cleanupSandbox);
+      void cleanupSandbox().finally(releaseMutation);
       throw error;
     }
   };
@@ -580,8 +592,8 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
         });
       }
     }
-    await cleanupSandbox();
     if (!drained) {
+      await cleanupSandbox();
       emitKodaXDiagnostic({
         source: 'coding:bash-filesystem-effect',
         level: 'warn',
@@ -590,17 +602,18 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
       return false;
     }
     await releaseMutationLease.finishEffectProcess();
+    await cleanupSandbox();
     await releaseMutation();
     return true;
   };
   if (ctx.abortSignal?.aborted) {
-    await releaseMutation();
     await cleanupSandbox();
+    await releaseMutation();
     return cancelledCommandResult(command);
   }
   if (Date.now() >= deadlineAt) {
-    await releaseMutation();
     await cleanupSandbox();
+    await releaseMutation();
     return commandPreparationTimeoutResult(command, timeout);
   }
 
@@ -611,8 +624,8 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
     try {
       logStream = await openBackgroundLog(outputFile);
     } catch (error) {
+      await cleanupSandbox();
       await releaseMutation();
-      void cleanupSandbox();
       const message = error instanceof Error ? error.message : String(error);
       return `[Error] Background command was not started because its output file could not be created: ${message}`;
     }

@@ -744,11 +744,26 @@ macOS and legacy custom adapters without the optional `processTreeContainment`
 capability fail closed for opaque Bash but may execute a complete, exact
 permission analysis. On Windows, ASRT never grants `MODIFY` on the Agent Home
 directory object because that right includes root deletion. It grants verified
-existing ordinary children instead, skips broken/escaping links, and denies the
-Runtime, sandbox-control, legacy process-control, and Learned Area children. Creating or modifying files inside
-`agents`, Sessions, tool-results, and other existing ordinary directories stays
-available without approval. Reviewable Agent Home reads are not placed on the
-OS sandbox's unconditional deny list, so an explicit approval remains effective.
+ordinary paths only in a session keyed by the permission review's exact
+Agent Home read/write targets. Existing targets are granted directly; a create
+uses its nearest existing safe parent. The OS boundary independently rejects the
+root object, broken/escaping links, and writes under Runtime, sandbox-control,
+legacy process-control, or Learned Area. The eager session grants the workspace
+plus one empty, disposable per-session temp directory; the child receives that
+directory through `TEMP`, `TMP`, and `TMPDIR`, and KodaX removes it after the
+session exits, so ASRT never recursively grants the complete user temp tree or
+reuses an accumulating tree. Creating or modifying files inside `agents`,
+Sessions, tool-results, and other ordinary directories stays available without
+approval. Reviewable Agent Home reads are not placed on the OS sandbox's
+unconditional deny list, so an explicit approval remains effective. Because
+ASRT's Windows sessions share one restricted-user SID, automatic-safe scopes use
+a bounded eight-entry cache whose eviction completes before replacement. A
+review-only credential/control-file scope is one-shot and holds an exclusive
+cross-process shell-effect fence from before ACL initialization through process
+drain and session reset. On Windows, read/write deny
+ACEs are emitted only as carve-outs beneath an explicit grant; unrelated
+real-user paths remain inaccessible to the restricted sandbox user without
+recursive stamping.
 
 ## 12. Media Input Artifacts
 

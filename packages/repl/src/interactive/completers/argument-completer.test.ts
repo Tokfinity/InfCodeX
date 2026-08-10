@@ -141,6 +141,9 @@ describe('ArgumentCompleter', () => {
         const helpTopics = await completer.getCompletions('/learn help ', 12);
 
         expect(subcommands.map((completion) => completion.display)).toContain('promote');
+        expect(subcommands.map((completion) => completion.display)).toContain('ready');
+        expect(subcommands.find((completion) => completion.display === 'pending')?.description)
+          .toContain('alias for ready');
         expect(helpTopics.map((completion) => completion.display)).toEqual(['promote']);
       });
 
@@ -343,7 +346,7 @@ describe('ArgumentCompleter', () => {
           ['/agent-mode ', ['ama', 'sa', 'toggle']],
           ['/verifier-log ', ['on', 'off']],
           ['/stall-log ', ['on', 'off']],
-          ['/memory ', ['list', 'pending', 'show', 'approve', 'reject', 'curate', 'rebuild', 'open', 'help']],
+          ['/memory ', ['list', 'status', 'reviews', 'proposals', 'pending', 'show', 'approve', 'reject', 'curate', 'rebuild', 'open', 'help']],
           ['/goal ', ['status', 'pause', 'resume', 'clear', 'help']],
           ['/paste ', ['show', 'list']],
           ['/review ', ['--lean', '--workflow', 'base', 'sha', 'help']],

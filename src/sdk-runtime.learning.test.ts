@@ -166,6 +166,27 @@ describe('runtime.learning inline facade', () => {
     await other.close();
   });
 
+  it('queries ready capabilities through the public Runtime learning interface', async () => {
+    const homeDir = await mkdtemp(join(tmpdir(), 'kodax-runtime-learning-list-'));
+    tempDirs.push(homeDir);
+    await seedReadyCapability(homeDir);
+    const runtime = await createKodaXRuntime({ homeDir });
+    try {
+      const publicLearning: RuntimeLearningService = runtime.learning;
+      const page = await publicLearning.list({ lifecycle: 'ready', limit: 20 });
+
+      expect(page.items).toEqual([
+        expect.objectContaining({
+          capabilityId: 'lc_runtime_test',
+          lifecycle: 'ready',
+          slug: 'runtime-test-skill',
+        }),
+      ]);
+    } finally {
+      await runtime.close();
+    }
+  });
+
   it('persists notification state before a Runtime Worker hard stop', async () => {
     const homeDir = await mkdtemp(join(tmpdir(), 'kodax-worker-learning-'));
     tempDirs.push(homeDir);

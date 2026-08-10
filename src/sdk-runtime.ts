@@ -20,6 +20,7 @@ import {
   createAutoModeDenialTracker,
   createCircuitBreaker,
   breakerShouldFallback,
+  analyzeAutoModeCall,
   bashSignalCollector,
   checkAbsoluteDeny,
   createExternalActorTurnExecutor,
@@ -77,6 +78,7 @@ import type {
   AutoModeStats,
   AutoModeSharedState,
   AutoModeDecisionDiagnostics,
+  AutoModePermissionTarget,
   AutoModePermissionReview,
   AutoModeToolGuardrail,
   RuntimeContextBudgetSnapshot,
@@ -3717,6 +3719,20 @@ export async function createKodaXRuntime(
       acceptedAt: status.acceptedAt ?? status.startedAt,
       sessionOrder,
     };
+    if (
+      isTerminalRunPhase(status.phase)
+      && !status.interruptInputs?.some((input) => input.state === "queued")
+    ) {
+      runs.set(
+        status.runId,
+        recordFromPersistedStatus(
+          normalizedStatus,
+          false,
+          persisted.owner,
+        ),
+      );
+      continue;
+    }
     if (!isTerminalRunPhase(status.phase)) {
       const durableTerminal = recoverPersistedDurableTerminal(
         normalizedStatus,
@@ -9829,14 +9845,35 @@ function buildRunOptions(input: {
   const runtimeAutoGuardrail = options.guardrails?.find(isRuntimeAutoModeGuardrail);
   const workspaceRoot =
     options.context?.gitRoot ?? options.context?.executionCwd ?? process.cwd();
+  const executionCwd = options.context?.executionCwd ?? workspaceRoot;
   const runtimeWorkspaceShellSandbox =
     createAsrtShellSandbox({
       workspaceRoot,
       failClosed: true,
-      shouldSandbox: (call) =>
-        replApi.normalizePermissionMode(record.permissionMode) !== "auto"
-        || runtimeAutoGuardrail === undefined
-        || runtimeAutoGuardrail.consumeWorkspaceSandboxCall(call),
+      shouldSandbox: async (call) => {
+        const autoMode =
+          replApi.normalizePermissionMode(record.permissionMode) === "auto";
+        let review: AutoModePermissionReview | undefined;
+        if (autoMode && runtimeAutoGuardrail !== undefined) {
+          review = runtimeAutoGuardrail.consumeWorkspaceSandboxCall(call);
+          if (review === undefined) return false;
+        } else {
+          try {
+            review = await analyzeAutoModeCall(call, {
+              projectRoot: workspaceRoot,
+              executionCwd,
+              signals: [],
+            });
+          } catch {
+            // The sandbox remains selected with workspace-only access.
+          }
+        }
+        return {
+          agentHomeAccess: review === undefined
+            ? undefined
+            : runtimePermissionReviewAgentHomeAccess(review, executionCwd),
+        };
+      },
     });
   const shellSandbox =
     runtimeWorkspaceShellSandbox !== undefined && callerShellSandbox !== undefined
@@ -19514,7 +19551,9 @@ interface RuntimeOwnedAutoModeGuardrail extends ToolGuardrail {
   getEngine(): NonNullable<RuntimeSessionSettings["autoModeEngine"]>;
   prepare?(): Promise<void>;
   consumeAllowedCall(call: RunnerToolCall): boolean;
-  consumeWorkspaceSandboxCall(call: RunnerToolCall): boolean;
+  consumeWorkspaceSandboxCall(
+    call: RunnerToolCall,
+  ): AutoModePermissionReview | undefined;
   clearAllowedCalls(): void;
 }
 
@@ -19669,6 +19708,83 @@ function runtimeAutoModeDecisionKey(call: RunnerToolCall): string | undefined {
   }
 }
 
+function runtimePermissionAgentHomePath(
+  target: AutoModePermissionTarget,
+  executionCwd: string,
+): string | undefined {
+  const home = os.homedir();
+  const candidate = target.path;
+  const expanded = (candidate === "~"
+    ? home
+    : /^~[\\/]/.test(candidate)
+      ? path.join(home, candidate.slice(2))
+      : candidate
+  ).replace(
+    /^(?:\$\{HOME\}|\$HOME|\$env:(?:home|userprofile)|%userprofile%)(?=$|[\\/])/i,
+    home,
+  );
+  const resolved = path.resolve(executionCwd, expanded);
+  const insideAgentHome = isPathInsideDirectory(
+    resolved,
+    path.resolve(getAgentConfigHome()),
+  );
+  if (!insideAgentHome) return undefined;
+  return target.boundary === "agent-home"
+    || target.boundary === "agent-home-readonly"
+    || target.boundary === "protected"
+    ? resolved
+    : undefined;
+}
+
+function runtimePermissionReviewAgentHomeAccess(
+  review: AutoModePermissionReview,
+  executionCwd: string,
+): {
+  readonly read: readonly string[];
+  readonly write: readonly string[];
+  readonly ephemeral?: boolean;
+} | undefined {
+  const read = new Set<string>();
+  const write = new Set<string>();
+  let ephemeral = false;
+  const add = (
+    target: AutoModePermissionTarget,
+    destination: Set<string>,
+    writeAccess: boolean,
+  ): void => {
+    const resolved = runtimePermissionAgentHomePath(target, executionCwd);
+    if (resolved === undefined) return;
+    destination.add(resolved);
+    const safelyAutomatic = target.boundary === "agent-home"
+      || (!writeAccess && target.boundary === "agent-home-readonly");
+    if (!safelyAutomatic) ephemeral = true;
+  };
+  for (const operation of review.operations) {
+    if ("target" in operation) {
+      const reading = operation.kind === "read"
+        || operation.options?.whatIf === true;
+      add(
+        operation.target,
+        reading ? read : write,
+        !reading,
+      );
+      continue;
+    }
+    if ("source" in operation) {
+      const copies = operation.kind === "copy";
+      add(operation.source, copies ? read : write, !copies);
+      add(operation.destination, write, true);
+    }
+  }
+  return read.size === 0 && write.size === 0
+    ? undefined
+    : {
+        read: [...read],
+        write: [...write],
+        ...(ephemeral ? { ephemeral: true } : {}),
+      };
+}
+
 function reviewTouchesProtectedWindowsSystemTemp(
   review: AutoModePermissionReview,
 ): boolean {
@@ -19695,7 +19811,7 @@ function reviewTouchesProtectedWindowsSystemTemp(
 
 function createRuntimeOwnedAutoModeGuardrail(
   guardrail: AutoModeToolGuardrail,
-  workspaceSandboxCalls: Set<string>,
+  workspaceSandboxCalls: Map<string, AutoModePermissionReview>,
 ): RuntimeOwnedAutoModeGuardrail {
   const allowedCalls = new Set<string>();
   return {
@@ -19727,9 +19843,11 @@ function createRuntimeOwnedAutoModeGuardrail(
     },
     consumeWorkspaceSandboxCall(call) {
       const key = runtimeAutoModeDecisionKey(call);
-      if (key === undefined || !workspaceSandboxCalls.has(key)) return false;
+      if (key === undefined) return undefined;
+      const review = workspaceSandboxCalls.get(key);
+      if (review === undefined) return undefined;
       workspaceSandboxCalls.delete(key);
-      return true;
+      return review;
     },
     clearAllowedCalls() {
       allowedCalls.clear();
@@ -19830,7 +19948,7 @@ function createRuntimeSessionAutoModeGuardrail(input: {
       return true;
     },
     consumeWorkspaceSandboxCall(call) {
-      return currentGuardrail?.consumeWorkspaceSandboxCall(call) ?? false;
+      return currentGuardrail?.consumeWorkspaceSandboxCall(call);
     },
     clearAllowedCalls() {
       allowedCalls.clear();
@@ -19919,7 +20037,7 @@ async function createRuntimeAutoModeGuardrail(input: {
   if (cached?.engine === engine) return cached.guardrail;
   if (cached) sessionCache.delete(cacheKey);
   let cacheEntry: RuntimeAutoModeGuardrailCacheEntry | undefined;
-  const workspaceSandboxCalls = new Set<string>();
+  const workspaceSandboxCalls = new Map<string, AutoModePermissionReview>();
   const bootstrap = await replApi.bootstrapAutoMode({
     askUser: async (call, reason, signals, diagnostics) => {
       const record = input.getRecord();
@@ -19975,7 +20093,7 @@ async function createRuntimeAutoModeGuardrail(input: {
     admitWorkspaceSandboxCall: (call, review) => {
       if (reviewTouchesProtectedWindowsSystemTemp(review)) return;
       const key = runtimeAutoModeDecisionKey(call);
-      if (key !== undefined) workspaceSandboxCalls.add(key);
+      if (key !== undefined) workspaceSandboxCalls.set(key, review);
     },
     getCurrentProviderName: () => input.getRecord()?.provider ?? input.provider,
     getCurrentModel: () => input.getRecord()?.model ?? input.model,

@@ -1642,11 +1642,19 @@ export interface KodaXShellSandboxPrepareInput {
   readonly reportObservation?: (observation: KodaXShellSandboxObservation) => void;
 }
 
+/** Exclusive host filesystem fence acquired before a sandbox grants temporary ACLs. */
+export interface KodaXFileSystemEffectLease {
+  bindEffectProcess(pid: number, windowsJobContained: boolean): Promise<void>;
+  finishEffectProcess(): Promise<void>;
+  release(): Promise<void>;
+}
+
 export interface KodaXPreparedShellSandboxInvocation {
   readonly executable: string;
   readonly args: readonly string[];
   readonly env: NodeJS.ProcessEnv;
   readonly windowsVerbatimArguments?: boolean;
+  readonly fileSystemEffectLease?: KodaXFileSystemEffectLease;
   cleanup(): Promise<KodaXShellSandboxObservation | undefined>;
 }
 

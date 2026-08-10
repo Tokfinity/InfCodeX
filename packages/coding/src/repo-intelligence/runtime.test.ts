@@ -13,7 +13,10 @@ import {
   _getRepoIntelligenceCacheSizesForTesting,
   _resetRepoIntelligenceCachesForTesting,
 } from './runtime.js';
-import { shutdownRepoIntelligenceWorkerForTest } from './semantic-worker-client.js';
+import {
+  isRepoIntelligenceWorkerRunningForTest,
+  shutdownRepoIntelligenceWorkerForTest,
+} from './semantic-worker-client.js';
 
 function createWorkspaceFixture(workspaceRoot: string): void {
   mkdirSync(join(workspaceRoot, 'packages', 'app', 'src'), { recursive: true });
@@ -115,6 +118,33 @@ describe('repo-intelligence runtime facade', () => {
       status: 'ok',
     });
     expect(result.module.sourceFileCount).toBeGreaterThan(0);
+  });
+
+  it('keeps the repo-intelligence worker warm across the first prompt window', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await getModuleContext(
+      { executionCwd: tempDir },
+      {
+        targetPath: 'packages/app/src/index.ts',
+        mode: 'full',
+      },
+    );
+    expect(isRepoIntelligenceWorkerRunningForTest()).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(isRepoIntelligenceWorkerRunningForTest()).toBe(true);
+
+    await getModuleContext(
+      { executionCwd: tempDir },
+      {
+        targetPath: 'packages/app/src/index.ts',
+        mode: 'full',
+      },
+    );
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(isRepoIntelligenceWorkerRunningForTest()).toBe(false);
   });
 
   it('keeps the shared light profile available', async () => {

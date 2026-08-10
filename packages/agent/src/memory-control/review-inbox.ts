@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Dirent } from 'node:fs';
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
@@ -38,6 +38,14 @@ export interface PendingEpisodeReviewV2 {
 
 export type PendingEpisodeReview = PendingEpisodeReviewV1 | PendingEpisodeReviewV2;
 
+export interface PendingEpisodeReviewFilter {
+  readonly configHome?: string;
+  readonly tenantId: string;
+  readonly agentId?: string;
+  /** Omit for every project; pass null for ownerless reviews only. */
+  readonly projectId?: string | null;
+}
+
 export type EpisodeReviewJobStatus =
   | 'pending'
   | 'processing'
@@ -64,6 +72,22 @@ export interface EpisodeReviewJobState {
   readonly nextCompletionAttemptAt?: string;
   readonly lastError?: string;
   readonly updatedAt: string;
+}
+
+export interface PendingEpisodeReviewSummary {
+  readonly version: 1 | 2;
+  readonly jobId?: string;
+  readonly reviewKey: string;
+  readonly ownerSessionRef: string;
+  readonly createdAt: string;
+  readonly status: EpisodeReviewJobStatus | 'unknown';
+  readonly providerAttempts?: number;
+  readonly applyAttempts?: number;
+  readonly completionAttempts?: number;
+  readonly nextAttemptAt?: string;
+  readonly nextApplyAttemptAt?: string;
+  readonly nextCompletionAttemptAt?: string;
+  readonly lastError?: string;
 }
 
 export interface EpisodeReviewClaim {
@@ -344,6 +368,9 @@ export async function claimEpisodeReview(
       await writeJsonAtomic(jobStatePath(identity, envelope.jobId), {
         ...state,
         status: 'processing',
+        nextAttemptAt: undefined,
+        nextApplyAttemptAt: undefined,
+        nextCompletionAttemptAt: undefined,
         claimEpoch: epoch,
         claimToken: token,
         leaseDeadline,
@@ -861,35 +888,131 @@ async function readVerifiedEpisodeReviewActions(
   return actions.sort((left, right) => left.actionId.localeCompare(right.actionId));
 }
 
-export async function listPendingEpisodeReviews(filter: {
-  readonly configHome?: string;
-  readonly tenantId: string;
-  readonly agentId?: string;
-  readonly projectId?: string;
-}): Promise<readonly PendingEpisodeReview[]> {
+interface PendingEpisodeReviewRecord {
+  readonly entry: PendingEpisodeReview;
+  readonly state?: EpisodeReviewJobState;
+  readonly stateError?: string;
+  readonly completed?: boolean;
+}
+
+async function countForeignProjectPendingReviews(
+  filter: Pick<PendingEpisodeReviewFilter, 'configHome' | 'tenantId' | 'agentId'>,
+): Promise<number> {
   const tenantRoot = tenantInboxRoot(filter.tenantId, filter.configHome);
   const expectedAgent = filter.agentId === undefined
     ? undefined
     : hashMemoryIdentityComponent('agent', filter.agentId);
-  const expectedProject = filter.projectId === undefined
-    ? undefined
-    : hashMemoryIdentityComponent('project', filter.projectId);
-  const sessionDirs = await readDirectories(tenantRoot);
-  const entries: PendingEpisodeReview[] = [];
-  for (const sessionDir of sessionDirs) {
-    await recoverStaleClaimsWithAuthority(filter.configHome, tenantRoot, sessionDir);
+  let count = 0;
+  for (const sessionDir of await readDirectories(tenantRoot)) {
     const pendingDir = path.join(tenantRoot, sessionDir, 'pending');
     for (const filename of await readJsonFiles(pendingDir)) {
-      const entry = await readPending(path.join(pendingDir, filename));
-      if (entry === undefined) continue;
-      if (expectedAgent !== undefined && entry.ownerAgentHash !== expectedAgent) continue;
-      if (expectedProject !== undefined && entry.ownerProjectHash !== expectedProject) continue;
-      entries.push(entry);
+      try {
+        const record = await readPendingRecord(path.join(pendingDir, filename), {
+          cleanupCompleted: false,
+          tolerateInvalidState: true,
+          ownerMatches: (entry) => (
+            entry.ownerProjectHash !== undefined
+            && (expectedAgent === undefined || entry.ownerAgentHash === expectedAgent)
+          ),
+        });
+        if (record !== undefined && record.completed !== true) count += 1;
+      } catch (error) {
+        count += 1;
+        emitKodaXDiagnostic({
+          source: 'memory.review-inbox',
+          level: 'warn',
+          message: 'Foreign project review could not be classified during deferred counting.',
+          detail: { sessionDir, filename, error: error instanceof Error ? error.message : String(error) },
+        });
+      }
     }
   }
-  return entries.sort((left, right) =>
-    left.createdAt.localeCompare(right.createdAt)
-    || left.reviewKey.localeCompare(right.reviewKey));
+  return count;
+}
+
+async function scanPendingEpisodeReviews(
+  filter: PendingEpisodeReviewFilter,
+  tolerateInvalidState = false,
+): Promise<readonly PendingEpisodeReviewRecord[]> {
+  const tenantRoot = tenantInboxRoot(filter.tenantId, filter.configHome);
+  const expectedAgent = filter.agentId === undefined
+    ? undefined
+    : hashMemoryIdentityComponent('agent', filter.agentId);
+  const expectedProject = typeof filter.projectId === 'string'
+    ? hashMemoryIdentityComponent('project', filter.projectId)
+    : undefined;
+  const ownerMatches = (entry: PendingEpisodeReview): boolean => (
+    (expectedAgent === undefined || entry.ownerAgentHash === expectedAgent)
+    && (filter.projectId === undefined
+      || (filter.projectId === null
+        ? entry.ownerProjectHash === undefined
+        : entry.ownerProjectHash === expectedProject))
+  );
+  const sessionDirs = await readDirectories(tenantRoot);
+  const records: PendingEpisodeReviewRecord[] = [];
+  for (const sessionDir of sessionDirs) {
+    try {
+      await recoverStaleClaimsWithAuthority(
+        filter.configHome,
+        tenantRoot,
+        sessionDir,
+        ownerMatches,
+      );
+    } catch (error) {
+      if (!tolerateInvalidState) throw error;
+      emitKodaXDiagnostic({
+        source: 'memory.review-inbox',
+        level: 'warn',
+        message: 'Episode review summary skipped stale-claim recovery for an invalid Session.',
+        detail: { sessionDir, error: error instanceof Error ? error.message : String(error) },
+      });
+    }
+    const pendingDir = path.join(tenantRoot, sessionDir, 'pending');
+    for (const filename of await readJsonFiles(pendingDir)) {
+      const record = await readPendingRecord(
+        path.join(pendingDir, filename),
+        { tolerateInvalidState, ownerMatches },
+      );
+      if (record === undefined) continue;
+      records.push(record);
+    }
+  }
+  return records.sort((left, right) =>
+    left.entry.createdAt.localeCompare(right.entry.createdAt)
+    || left.entry.reviewKey.localeCompare(right.entry.reviewKey));
+}
+
+export async function listPendingEpisodeReviews(
+  filter: PendingEpisodeReviewFilter,
+): Promise<readonly PendingEpisodeReview[]> {
+  return (await scanPendingEpisodeReviews(filter)).map((record) => record.entry);
+}
+
+export async function listPendingEpisodeReviewSummaries(
+  filter: PendingEpisodeReviewFilter,
+): Promise<readonly PendingEpisodeReviewSummary[]> {
+  return (await scanPendingEpisodeReviews(filter, true)).map(({ entry, state, stateError }) => ({
+    version: entry.version,
+    ...(entry.version === 2 ? { jobId: entry.jobId } : {}),
+    reviewKey: entry.reviewKey,
+    ownerSessionRef: entry.ownerSessionRef,
+    createdAt: entry.createdAt,
+    status: entry.version === 1 ? 'pending' : state?.status ?? 'unknown',
+    ...(state === undefined ? {} : {
+      providerAttempts: state.providerAttempts,
+      applyAttempts: state.applyAttempts,
+      completionAttempts: state.completionAttempts,
+      ...(state.nextAttemptAt === undefined ? {} : { nextAttemptAt: state.nextAttemptAt }),
+      ...(state.nextApplyAttemptAt === undefined
+        ? {}
+        : { nextApplyAttemptAt: state.nextApplyAttemptAt }),
+      ...(state.nextCompletionAttemptAt === undefined
+        ? {}
+        : { nextCompletionAttemptAt: state.nextCompletionAttemptAt }),
+      ...(state.lastError === undefined ? {} : { lastError: state.lastError }),
+    }),
+    ...(state === undefined && stateError !== undefined ? { lastError: stateError } : {}),
+  }));
 }
 
 export async function completeEpisodeReview(
@@ -1135,15 +1258,18 @@ export async function drainPendingEpisodeReviews(
   identity: MemoryContextIdentity,
   options: EpisodeReviewDrainOptions,
 ): Promise<EpisodeReviewDrainResult> {
-  const pending = await listPendingEpisodeReviews({
+  const ownerFilter = {
     ...(identity.configHome === undefined ? {} : { configHome: identity.configHome }),
     tenantId: identity.tenantId,
     agentId: identity.agentId,
-    ...(identity.projectId !== undefined ? { projectId: identity.projectId } : {}),
+  } satisfies PendingEpisodeReviewFilter;
+  const owned = await listPendingEpisodeReviews({
+    ...ownerFilter,
+    projectId: identity.projectId ?? null,
   });
-  const owned = identity.projectId === undefined
-    ? pending.filter((entry) => entry.ownerProjectHash === undefined)
-    : pending;
+  const foreignProjectCount = identity.projectId === undefined
+    ? await countForeignProjectPendingReviews(ownerFilter)
+    : 0;
   const maxEntries = Math.max(1, Math.min(8, options.maxEntries ?? 8));
   const result: {
     reviewed: number;
@@ -1154,7 +1280,7 @@ export async function drainPendingEpisodeReviews(
   } = {
     reviewed: 0,
     discarded: 0,
-    deferred: pending.length - owned.length,
+    deferred: foreignProjectCount,
     failed: 0,
     failures: [],
   };
@@ -1506,7 +1632,11 @@ async function restoreClaim(
   }]);
 }
 
-async function recoverStaleClaims(tenantRoot: string, sessionDir: string): Promise<void> {
+async function recoverStaleClaims(
+  tenantRoot: string,
+  sessionDir: string,
+  ownerMatches: (entry: PendingEpisodeReview) => boolean,
+): Promise<void> {
   const sessionRoot = path.join(tenantRoot, sessionDir);
   const processingDir = path.join(sessionRoot, 'processing');
   const claims: Array<QueuedReviewFile & { readonly stale: boolean }> = [];
@@ -1514,7 +1644,7 @@ async function recoverStaleClaims(tenantRoot: string, sessionDir: string): Promi
     const claimPath = path.join(processingDir, filename);
     try {
       const stale = Date.now() - (await stat(claimPath)).mtimeMs > REVIEW_CLAIM_STALE_MS;
-      const entry = await readPending(claimPath);
+      const entry = await readPending(claimPath, { ownerMatches });
       if (entry === undefined) continue;
       claims.push({ entry, filePath: claimPath, queue: 'processing', stale });
     } catch (error) {
@@ -1531,8 +1661,8 @@ async function recoverStaleClaims(tenantRoot: string, sessionDir: string): Promi
       for (const { filePath } of stale) await rm(filePath, { force: true });
       continue;
     }
-    if (await readPending(target) !== undefined) {
-      await restoreQueuedReviewFiles(sessionRoot, stale);
+    if (await readPending(target, { ownerMatches }) !== undefined) {
+      await restoreQueuedReviewFiles(sessionRoot, stale, ownerMatches);
       continue;
     }
     const liveIdentities = new Set(
@@ -1548,7 +1678,7 @@ async function recoverStaleClaims(tenantRoot: string, sessionDir: string): Promi
       }
       continue;
     }
-    await restoreQueuedReviewFiles(sessionRoot, stale);
+    await restoreQueuedReviewFiles(sessionRoot, stale, ownerMatches);
   }
 }
 
@@ -1804,10 +1934,14 @@ async function readJsonFiles(root: string): Promise<readonly string[]> {
   }
 }
 
-async function readPending(
+async function readPendingRecord(
   filePath: string,
-  options: { readonly cleanupCompleted?: boolean } = {},
-): Promise<PendingEpisodeReview | undefined> {
+  options: {
+    readonly cleanupCompleted?: boolean;
+    readonly tolerateInvalidState?: boolean;
+    readonly ownerMatches?: (entry: PendingEpisodeReview) => boolean;
+  } = {},
+): Promise<PendingEpisodeReviewRecord | undefined> {
   try {
     const value: unknown = JSON.parse(await readFile(filePath, 'utf8'));
     if (!isRecord(value)
@@ -1832,40 +1966,71 @@ async function readPending(
       return invalidPending(filePath, 'invalid digest');
     }
     const entry = value as unknown as PendingEpisodeReview;
+    if (options.ownerMatches !== undefined && !options.ownerMatches(entry)) return undefined;
+    let completed = false;
     if (entry.version === 1
       && await episodeReviewReceiptExists(path.dirname(path.dirname(filePath)), entry)) {
       if (options.cleanupCompleted !== false) {
         await removeCompletedPendingBestEffort(filePath, entry.reviewKey);
         return undefined;
       }
+      completed = true;
     }
+    let state: EpisodeReviewJobState | undefined;
+    let stateError: string | undefined;
     if (entry.version === 2) {
       const jobId = entry.jobId;
-      const state = await readTypedJson(
-        path.join(
-          path.dirname(path.dirname(filePath)),
-          'jobs',
-          safeKey(jobId),
-          'state.json',
-        ),
-        isEpisodeReviewJobState,
+      const statePath = path.join(
+        path.dirname(path.dirname(filePath)),
+        'jobs',
+        safeKey(jobId),
+        'state.json',
       );
-      if (state !== undefined && state.jobId !== jobId) {
-        throw new Error(`review job state identity mismatch: ${jobId}`);
+      try {
+        state = await readTypedJson(statePath, isEpisodeReviewJobState);
+        if (state !== undefined && state.jobId !== jobId) {
+          throw new Error(`review job state identity mismatch: ${jobId}`);
+        }
+      } catch (error) {
+        if (!options.tolerateInvalidState) throw error;
+        state = undefined;
+        stateError = 'invalid persisted review job state';
+        emitKodaXDiagnostic({
+          source: 'memory.review-inbox',
+          level: 'warn',
+          message: 'Episode review summary found an invalid job state.',
+          detail: { statePath, error: error instanceof Error ? error.message : String(error) },
+        });
       }
       if (state?.status === 'completed') {
         if (options.cleanupCompleted !== false) {
           await removeCompletedPendingBestEffort(filePath, jobId);
           return undefined;
         }
+        completed = true;
       }
     }
-    return entry;
+    return {
+      entry,
+      ...(state === undefined ? {} : { state }),
+      ...(stateError === undefined ? {} : { stateError }),
+      ...(completed ? { completed: true } : {}),
+    };
   } catch (error) {
     if (isMissing(error)) return undefined;
     if (error instanceof SyntaxError) return invalidPending(filePath, 'invalid JSON');
     throw error;
   }
+}
+
+async function readPending(
+  filePath: string,
+  options: {
+    readonly cleanupCompleted?: boolean;
+    readonly ownerMatches?: (entry: PendingEpisodeReview) => boolean;
+  } = {},
+): Promise<PendingEpisodeReview | undefined> {
+  return (await readPendingRecord(filePath, options))?.entry;
 }
 
 async function removeCompletedPendingBestEffort(
@@ -1892,12 +2057,13 @@ async function recoverStaleClaimsWithAuthority(
   configHome: string | undefined,
   tenantRoot: string,
   sessionDir: string,
+  ownerMatches: (entry: PendingEpisodeReview) => boolean,
 ): Promise<void> {
   const sessionRoot = path.join(tenantRoot, sessionDir);
   await withEpisodeReviewRootRegistryKeyLock(configHome, sessionDir, () => (
     withLearningFileLock(
       path.join(sessionRoot, '.branch-authority.lock'),
-      () => recoverStaleClaims(tenantRoot, sessionDir),
+      () => recoverStaleClaims(tenantRoot, sessionDir, ownerMatches),
       REVIEW_AUTHORITY_LOCK_ACQUIRE_TIMEOUT_MS,
     )
   ));
@@ -1966,14 +2132,24 @@ function queuedReviewIdentity(entry: PendingEpisodeReview): string {
 async function restoreQueuedReviewFiles(
   sessionRoot: string,
   queued: readonly QueuedReviewFile[],
+  ownerMatches?: (entry: PendingEpisodeReview) => boolean,
 ): Promise<void> {
   for (const [target, matching] of groupQueuedReviewsByPendingTarget(sessionRoot, queued)) {
-    let winner = await readPending(target);
+    let winner = await readPending(target, { ownerMatches });
     if (winner === undefined) {
-      const selected = [...matching].sort(compareQueuedReviewRecoveryPriority)[0];
-      if (selected !== undefined) {
-        await writeJsonAtomic(target, selected.entry);
-        winner = selected.entry;
+      let targetOccupied = false;
+      try {
+        await lstat(target);
+        targetOccupied = true;
+      } catch (error) {
+        if (!isMissing(error)) throw error;
+      }
+      if (!targetOccupied) {
+        const selected = [...matching].sort(compareQueuedReviewRecoveryPriority)[0];
+        if (selected !== undefined) {
+          await writeJsonAtomic(target, selected.entry);
+          winner = selected.entry;
+        }
       }
     }
     if (winner === undefined) continue;

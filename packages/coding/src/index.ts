@@ -81,6 +81,7 @@ export {
   awaitLatestCodingMemoryReviewDrain,
   canonicalMemoryProjectId,
   deriveCodingMemoryIdentity,
+  deriveCodingMemoryReviewIdentities,
   drainCodingMemoryReviewInbox,
 } from './memory-runtime.js';
 export {
@@ -149,6 +150,7 @@ export type {
   KodaXSessionOptions,
   KodaXContextTokenSnapshot,
   KodaXContextOptions,
+  KodaXFileSystemEffectLease,
   KodaXPreparedShellSandboxInvocation,
   KodaXShellSandboxBackend,
   KodaXShellSandboxObservation,
@@ -238,6 +240,10 @@ export type {
   TodoList,
   SessionErrorMetadata,
 } from './types.js';
+
+export {
+  acquireExclusiveFileSystemEffectLease,
+} from './tools/_internal/file-mutation-queue.js';
 
 export { normalizeKodaXAgentMode } from './types.js';
 export {

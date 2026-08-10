@@ -501,6 +501,11 @@ export function acquireFileSystemMutationLease(): Promise<FileSystemMutationLeas
   return acquireEffectLease('shell');
 }
 
+/** Excludes every model-started shell while a temporary host namespace is visible. */
+export function acquireExclusiveFileSystemEffectLease(): Promise<FileSystemMutationLeaseRelease> {
+  return acquireEffectLease('namespace');
+}
+
 function acquireDirectFileMutationLease(): Promise<FileSystemMutationLeaseRelease> {
   return acquireEffectLease('direct');
 }

@@ -1,12 +1,13 @@
 import { EventEmitter } from 'node:events';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 
 import { SkillRegistry } from '@kodax-ai/agent';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { acquireFileSystemMutationLease } from '../packages/coding/src/tools/_internal/file-mutation-queue.js';
 
 const capturedBrokerRequests = vi.hoisted(
   () => [] as Array<Readonly<Record<string, unknown>>>,
@@ -25,6 +26,7 @@ const capturedSyncSpawns = vi.hoisted(
     readonly command: string;
     readonly args: readonly string[];
     readonly cwd?: string;
+    readonly input?: string;
   }>,
 );
 const capturedWrappedCommands = vi.hoisted(
@@ -61,10 +63,14 @@ const workspaceSessionControl = vi.hoisted(() => ({
   delayWrap: false,
   releaseWrap: undefined as (() => void) | undefined,
   malformedReady: false,
+  delayClose: false,
+  releaseClose: undefined as (() => void) | undefined,
+  closeExitCode: 0,
 }));
 const windowsSandboxMock = vi.hoisted(() => ({
   runnerSource: '',
   wfpOutcome: 'blocked' as 'blocked' | 'access_denied' | 'timeout',
+  guardReady: true,
   user: {
     provisioned: true,
     sid: 'S-1-5-21-1000',
@@ -89,9 +95,34 @@ vi.mock('node:child_process', async (importOriginal) => {
     spawnSync: vi.fn((
       command: string,
       args: readonly string[] = [],
-      options?: { readonly cwd?: string },
+      options?: { readonly cwd?: string; readonly input?: string },
     ) => {
-      capturedSyncSpawns.push({ command, args: [...args], cwd: options?.cwd });
+      capturedSyncSpawns.push({
+        command,
+        args: [...args],
+        cwd: options?.cwd,
+        input: options?.input,
+      });
+      const encodedIndex = args.indexOf('-EncodedCommand');
+      if (encodedIndex >= 0) {
+        const script = Buffer.from(args[encodedIndex + 1] ?? '', 'base64').toString('utf16le');
+        if (script.includes('KodaXAsrtAclGuard-v1')) {
+          const payload = JSON.parse(options?.input ?? '{}') as {
+            readonly install?: boolean;
+            readonly paths?: readonly { readonly path: string }[];
+          };
+          const missing = windowsSandboxMock.guardReady || payload.install === true
+            ? []
+            : (payload.paths ?? []).map((entry) => entry.path);
+          if (payload.install === true) windowsSandboxMock.guardReady = true;
+          return {
+            status: 0,
+            signal: null,
+            stdout: JSON.stringify({ missing }),
+            stderr: '',
+          };
+        }
+      }
       if (args.includes('wfp') && args.includes('verify')) {
         if (windowsSandboxMock.wfpOutcome === 'timeout') {
           return {
@@ -224,10 +255,17 @@ vi.mock('node:child_process', async (importOriginal) => {
         });
         child.stdin.once('finish', () => {
           if (stubbornBroker.mode !== 'none') return;
-          control.end();
-          child.exitCode = 0;
-          child.emit('exit', 0, null);
-          child.emit('close', 0, null);
+          const completeClose = (): void => {
+            control.end();
+            child.exitCode = workspaceSessionControl.closeExitCode;
+            child.emit('exit', workspaceSessionControl.closeExitCode, null);
+            child.emit('close', workspaceSessionControl.closeExitCode, null);
+          };
+          if (workspaceSessionControl.delayClose) {
+            workspaceSessionControl.releaseClose = completeClose;
+          } else {
+            completeClose();
+          }
         });
         queueMicrotask(() => {
           child.emit('spawn');
@@ -410,6 +448,10 @@ afterEach(async () => {
   workspaceSessionControl.delayWrap = false;
   workspaceSessionControl.releaseWrap = undefined;
   workspaceSessionControl.malformedReady = false;
+  workspaceSessionControl.delayClose = false;
+  workspaceSessionControl.releaseClose?.();
+  workspaceSessionControl.releaseClose = undefined;
+  workspaceSessionControl.closeExitCode = 0;
   await resetAsrtWorkspaceSessionsForTest();
   capturedBrokerRequests.length = 0;
   capturedSpawnEnvironments.length = 0;
@@ -428,6 +470,7 @@ afterEach(async () => {
   sandboxInitialize.mockResolvedValue();
   windowsSandboxMock.runnerSource = '';
   windowsSandboxMock.wfpOutcome = 'blocked';
+  windowsSandboxMock.guardReady = true;
   windowsSandboxMock.user = {
     provisioned: true,
     sid: 'S-1-5-21-1000',
@@ -467,6 +510,105 @@ async function createRegistry(script = 'hello.mjs'): Promise<SkillRegistry> {
 }
 
 describe('ASRT workspace shell adapter', () => {
+  it('starts the shared fail-closed workspace warm-up before the first shell call', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-shell-warm-'));
+    tempRoots.push(root);
+
+    createAsrtShellSandbox({
+      workspaceRoot: root,
+      shouldSandbox: () => true,
+      failClosed: true,
+    });
+
+    await vi.waitFor(() => {
+      const sessions = capturedSpawnArgv.filter((argv) => argv.some((arg) => (
+        arg.includes('sandbox-workspace-session')
+        || arg === '__asrt-workspace-session'
+      )));
+      expect(sessions).toHaveLength(1);
+      const importIndex = sessions[0]!.indexOf('--import');
+      if (importIndex >= 0) {
+        expect(sessions[0]![importIndex + 1]).toMatch(/^file:\/\//);
+      }
+    });
+  });
+
+  it('serializes workspace ACL initialization behind active filesystem effects', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-acl-fence-'));
+    tempRoots.push(root);
+    const releaseActiveEffect = await acquireFileSystemMutationLease();
+    let preparing: ReturnType<ReturnType<typeof createAsrtShellSandbox>['prepare']>;
+    let preparedPrematurely = false;
+    let sessionCountWhileBlocked = 0;
+    try {
+      const sandbox = createAsrtShellSandbox({
+        workspaceRoot: root,
+        shouldSandbox: () => true,
+        failClosed: true,
+      });
+      preparing = sandbox.prepare({
+        toolCallId: 'acl-fence',
+        toolInput: { command: 'echo safe' },
+        command: 'echo safe',
+        cwd: root,
+        env: process.env,
+      });
+      preparedPrematurely = await Promise.race([
+        preparing.then(() => true),
+        new Promise<false>((resolve) => setTimeout(() => resolve(false), 300)),
+      ]);
+      sessionCountWhileBlocked = capturedWorkspaceSessionConfigs.length;
+    } finally {
+      await releaseActiveEffect();
+    }
+
+    const invocation = await preparing!;
+    try {
+      expect(preparedPrematurely).toBe(false);
+      expect(sessionCountWhileBlocked).toBe(0);
+      expect(invocation).toBeDefined();
+    } finally {
+      await invocation?.cleanup();
+    }
+  });
+
+  it.runIf(process.platform === 'win32')(
+    'keeps the eager workspace session free of broad Agent Home grants',
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-shell-lean-warm-'));
+      const agentHome = path.join(root, 'agent-home');
+      const agentsDirectory = path.join(agentHome, 'agents');
+      const sessionsDirectory = path.join(agentHome, 'sessions');
+      const workspace = path.join(root, 'workspace');
+      tempRoots.push(root);
+      await mkdir(workspace, { recursive: true });
+      await mkdir(agentsDirectory, { recursive: true });
+      await mkdir(sessionsDirectory, { recursive: true });
+      vi.stubEnv('KODAX_HOME', agentHome);
+
+      createAsrtShellSandbox({
+        workspaceRoot: workspace,
+        shouldSandbox: () => true,
+        failClosed: true,
+      });
+
+      await vi.waitFor(() => expect(capturedWorkspaceSessionConfigs).toHaveLength(1));
+      const config = capturedWorkspaceSessionConfigs[0] as {
+        readonly filesystem: {
+          readonly allowWrite: readonly string[];
+          readonly denyWrite: readonly string[];
+        };
+      };
+      expect(config.filesystem.allowWrite).not.toContain(path.resolve(agentsDirectory));
+      expect(config.filesystem.allowWrite).not.toContain(path.resolve(sessionsDirectory));
+      expect(config.filesystem.denyWrite).not.toContain(
+        path.resolve(agentHome, 'runtime'),
+      );
+      expect(config.filesystem.denyWrite).toEqual([]);
+      expect(config.filesystem.allowWrite.length).toBeLessThan(20);
+    },
+  );
+
   it('prepares only an admitted concrete call with workspace/temp writes and normal local network', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-shell-'));
     tempRoots.push(root);
@@ -478,11 +620,19 @@ describe('ASRT workspace shell adapter', () => {
     const runtimeDirectory = path.join(customAgentHome, 'runtime');
     const legacyProcessesDirectory = path.join(customAgentHome, 'processes');
     const learnedDirectory = path.join(customAgentHome, 'learned');
+    const brokenAgentHomeLink = path.join(customAgentHome, 'broken-link');
+    const nestedBrokenContainer = path.join(customAgentHome, 'broken-container');
+    const nestedBrokenAgentHomeLink = path.join(nestedBrokenContainer, 'broken-link');
+    const agentHomeRootAlias = path.join(customAgentHome, 'root-alias');
+    const ordinaryWorkingDirectory = path.join(customAgentHome, 'work-output');
+    const newOrdinaryOutput = path.join(ordinaryWorkingDirectory, 'nested', 'result.txt');
     await mkdir(agentsDirectory, { recursive: true });
     await mkdir(sessionsDirectory, { recursive: true });
     await mkdir(runtimeDirectory, { recursive: true });
     await mkdir(legacyProcessesDirectory, { recursive: true });
     await mkdir(learnedDirectory, { recursive: true });
+    await mkdir(ordinaryWorkingDirectory, { recursive: true });
+    await mkdir(nestedBrokenContainer, { recursive: true });
     const reviewableConfig = path.join(customAgentHome, 'config.json');
     const reviewableToken = path.join(customAgentHome, 'mcp-tokens', 'token.json');
     await mkdir(path.dirname(reviewableToken), { recursive: true });
@@ -491,9 +641,15 @@ describe('ASRT workspace shell adapter', () => {
     if (process.platform === 'win32') {
       await symlink(
         path.join(customAgentHome, 'missing-target'),
-        path.join(customAgentHome, 'broken-link'),
+        brokenAgentHomeLink,
         'junction',
       );
+      await symlink(
+        path.join(customAgentHome, 'missing-nested-target'),
+        nestedBrokenAgentHomeLink,
+        'junction',
+      );
+      await symlink(customAgentHome, agentHomeRootAlias, 'junction');
     }
     const homePathEntry = process.platform === 'win32'
       ? `${home[0]!.toLowerCase()}${home.slice(1)}`
@@ -506,7 +662,21 @@ describe('ASRT workspace shell adapter', () => {
       ordinaryHomePathEntry,
       process.env.PATH,
     ].filter((entry): entry is string => entry !== undefined).join(path.delimiter));
-    const shouldSandbox = vi.fn(() => true);
+    const shouldSandbox = vi.fn(() => ({
+      agentHomeAccess: {
+        read: [reviewableConfig, reviewableToken],
+        write: [
+          agentsDirectory,
+          sessionsDirectory,
+          newOrdinaryOutput,
+          customAgentHome,
+          runtimeDirectory,
+          brokenAgentHomeLink,
+          nestedBrokenAgentHomeLink,
+          agentHomeRootAlias,
+        ],
+      },
+    }));
     const reportObservation = vi.fn();
     const sandbox = createAsrtShellSandbox({
       workspaceRoot: root,
@@ -567,7 +737,29 @@ describe('ASRT workspace shell adapter', () => {
           path.resolve(agentsDirectory),
           path.resolve(sessionsDirectory),
         ]));
+        expect(request.config.filesystem.allowWrite).not.toContain(
+          path.resolve(reviewableToken),
+        );
+        expect(request.config.filesystem.allowWrite).toContain(
+          path.resolve(ordinaryWorkingDirectory),
+        );
+        expect(request.config.filesystem.allowWrite).not.toContain(
+          path.resolve(customAgentHome),
+        );
+        expect(request.config.filesystem.allowRead).toEqual(expect.arrayContaining([
+          path.resolve(reviewableConfig),
+          path.resolve(reviewableToken),
+        ]));
         expect(request.config.filesystem.allowWrite).not.toContain(path.resolve(runtimeDirectory));
+        expect(request.config.filesystem.allowWrite).not.toContain(
+          path.resolve(brokenAgentHomeLink),
+        );
+        expect(request.config.filesystem.allowWrite).not.toContain(
+          path.resolve(nestedBrokenContainer),
+        );
+        expect(request.config.filesystem.allowWrite).not.toContain(
+          path.resolve(agentHomeRootAlias),
+        );
         expect(request.config.filesystem.allowWrite)
           .not.toContain(path.resolve(legacyProcessesDirectory));
         expect(request.config.filesystem.allowWrite).not.toContain(path.resolve(learnedDirectory));
@@ -575,7 +767,7 @@ describe('ASRT workspace shell adapter', () => {
         expect(request.config.filesystem.allowWrite).toContain(path.resolve(customAgentHome));
       }
       expect(request.config.filesystem.allowWrite).not.toContain(childControlledTemp);
-      expect(request.config.filesystem.denyRead).toEqual(expect.arrayContaining([
+      const sensitiveHomeReads = [
         '.ssh', '.aws', '.azure', '.gnupg', '.kube', '.docker', '.kodax', '.agents',
         '.codex', '.claude', '.gemini', '.direnv', '.terraform.d',
         path.join('.cargo', 'credentials.toml'),
@@ -634,16 +826,49 @@ describe('ASRT workspace shell adapter', () => {
         'id_dsa',
         'id_ecdsa',
         'id_ed25519',
-      ].map((relative) => path.join(home, relative))));
-      expect(request.config.filesystem.denyRead).not.toContain(path.resolve(customAgentHome));
-      expect(request.config.filesystem.denyRead).not.toContain(path.resolve(reviewableConfig));
+      ].map((relative) => path.join(home, relative));
+      if (process.platform === 'win32') {
+        expect(request.config.filesystem.denyRead).toEqual([]);
+        expect(request.config.filesystem.denyWrite).toEqual([]);
+        const guardCall = capturedSyncSpawns.find((call) => {
+          const encodedIndex = call.args.indexOf('-EncodedCommand');
+          if (encodedIndex < 0) return false;
+          return Buffer.from(call.args[encodedIndex + 1] ?? '', 'base64')
+            .toString('utf16le')
+            .includes('KodaXAsrtAclGuard-v1');
+        });
+        expect(guardCall?.input).toBeDefined();
+        const guarded = JSON.parse(guardCall!.input!) as {
+          readonly paths: readonly {
+            readonly path: string;
+            readonly directory: boolean;
+            readonly mode: string;
+          }[];
+        };
+        expect(guarded.paths).toContainEqual({
+          path: path.resolve(customAgentHome),
+          directory: true,
+          mode: 'read',
+        });
+        if (statSync(path.join(home, '.ssh'), { throwIfNoEntry: false })) {
+          expect(guarded.paths).toContainEqual({
+            path: path.resolve(home, '.ssh'),
+            directory: true,
+            mode: 'read',
+          });
+        }
+      } else {
+        expect(request.config.filesystem.denyRead).toEqual(
+          expect.arrayContaining(sensitiveHomeReads),
+        );
+      }
       expect(request.config.filesystem.denyRead).not.toContain(path.resolve(reviewableToken));
       expect(request.config.filesystem.denyWrite)
-        .toContain(path.resolve(customAgentHome, 'runtime'));
+        .not.toContain(path.resolve(customAgentHome, 'runtime'));
       expect(request.config.filesystem.denyWrite)
-        .toContain(path.resolve(customAgentHome, 'processes'));
+        .not.toContain(path.resolve(customAgentHome, 'processes'));
       expect(request.config.filesystem.denyWrite)
-        .toContain(path.resolve(customAgentHome, 'learned'));
+        .not.toContain(path.resolve(customAgentHome, 'learned'));
       expect(request.config.filesystem.denyWrite)
         .not.toContain(path.resolve(customAgentHome));
       expect(request.config.filesystem.allowRead).not.toContain(homePathEntry);
@@ -660,21 +885,19 @@ describe('ASRT workspace shell adapter', () => {
         };
       };
       expect(sessionConfig.filesystem.denyRead).toEqual(
-        process.platform === 'win32'
-          ? [path.resolve(customAgentHome, 'sandbox-runtime')]
-          : request.config.filesystem.denyRead,
+        request.config.filesystem.denyRead,
       );
       if (process.platform === 'win32') {
         const runnerDirectory = request.config.filesystem.allowRead.find(
           (entry) => entry.includes(path.join('sandbox-runtime', 'runner')),
         );
         expect(runnerDirectory).toBeDefined();
-        expect(request.config.filesystem.denyWrite).toContain(runnerDirectory);
+        expect(request.config.filesystem.denyWrite).not.toContain(runnerDirectory);
         expect(request.config.windows?.srtWin?.path).toBe(
           path.join(runnerDirectory!, 'srt-win.exe'),
         );
         expect(sessionConfig.filesystem.allowRead).toContain(runnerDirectory);
-        expect(sessionConfig.filesystem.denyWrite).toContain(runnerDirectory);
+        expect(sessionConfig.filesystem.denyWrite).not.toContain(runnerDirectory);
         expect(sessionConfig.windows?.srtWin?.path).toBe(
           path.join(runnerDirectory!, 'srt-win.exe'),
         );
@@ -694,6 +917,14 @@ describe('ASRT workspace shell adapter', () => {
       expect(request.fallbackToNormalExecution).toBe(false);
       expect(request.env.TEST_API_KEY).toBe('must-not-cross-the-broker');
       expect(request.env.AWS_ACCESS_KEY_ID).toBe('must-not-cross-the-broker-either');
+      if (process.platform === 'win32') {
+        expect(request.env.TEMP).toContain(`${path.sep}kodax-sandbox${path.sep}`);
+        expect(request.env.TMP).toBe(request.env.TEMP);
+        expect(request.env.TMPDIR).toBe(request.env.TEMP);
+        expect(request.env.TEMP).not.toBe(childControlledTemp);
+        expect(request.env.GIT_CONFIG_GLOBAL).toBe('NUL');
+        expect(request.env.GIT_CONFIG_NOSYSTEM).toBe('1');
+      }
       await writeFile(request.observationFile, JSON.stringify({
         version: 1,
         state: 'applied',
@@ -710,6 +941,61 @@ describe('ASRT workspace shell adapter', () => {
       policyId: 'kodax-workspace-shell-v1',
     });
   });
+
+  it.runIf(process.platform === 'win32')(
+    'keeps persistent Windows sensitive-root guards outside ASRT startup propagation',
+    async () => {
+      const agentHome = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-agent-home-'));
+      tempRoots.push(agentHome);
+      vi.stubEnv('KODAX_HOME', agentHome);
+      const sandbox = createAsrtShellSandbox({
+        workspaceRoot: os.homedir(),
+        shouldSandbox: () => true,
+        failClosed: true,
+      });
+
+      const prepared = await sandbox.prepare({
+        toolCallId: 'bash-home-workspace',
+        toolInput: { command: 'echo safe' },
+        command: 'echo safe',
+        cwd: os.homedir(),
+        env: process.env,
+      });
+      if (!prepared) throw new Error('expected home workspace invocation');
+      try {
+        const requestFile = prepared.args.find((arg) => arg.endsWith('.json'));
+        if (!requestFile) throw new Error('expected broker request');
+        const request = JSON.parse(readFileSync(requestFile, 'utf8')) as {
+          readonly config: { readonly filesystem: { readonly denyRead: readonly string[] } };
+        };
+        expect(request.config.filesystem.denyRead).toEqual([]);
+        const guardedPaths = capturedSyncSpawns.flatMap((call) => {
+          const encodedIndex = call.args.indexOf('-EncodedCommand');
+          if (encodedIndex < 0) return [];
+          const script = Buffer.from(call.args[encodedIndex + 1] ?? '', 'base64')
+            .toString('utf16le');
+          if (!script.includes('KodaXAsrtAclGuard-v1') || !call.input) return [];
+          return (JSON.parse(call.input) as {
+            readonly paths: readonly { readonly path: string }[];
+          }).paths.map((entry) => entry.path);
+        });
+        expect(guardedPaths).toContain(path.join(os.homedir(), '.ssh'));
+        const guardScript = capturedSyncSpawns
+          .map((call) => {
+            const encodedIndex = call.args.indexOf('-EncodedCommand');
+            return encodedIndex < 0
+              ? ''
+              : Buffer.from(call.args[encodedIndex + 1] ?? '', 'base64')
+                .toString('utf16le');
+          })
+          .find((script) => script.includes('KodaXAsrtAclGuard-v1'));
+        expect(guardScript).toContain('icacls.exe');
+        expect(guardScript).not.toContain('Set-Acl');
+      } finally {
+        await prepared.cleanup();
+      }
+    },
+  );
 
   it.runIf(process.platform === 'win32')(
     'canonicalizes a junction workspace before granting Agent Home write roots',
@@ -729,7 +1015,9 @@ describe('ASRT workspace shell adapter', () => {
 
       const sandbox = createAsrtShellSandbox({
         workspaceRoot: workspaceAlias,
-        shouldSandbox: () => true,
+        shouldSandbox: () => ({
+          agentHomeAccess: { read: [], write: [agentsDirectory] },
+        }),
         failClosed: true,
       });
       const prepared = await sandbox.prepare({
@@ -751,6 +1039,60 @@ describe('ASRT workspace shell adapter', () => {
         expect(request.config.filesystem.allowWrite).not.toContain(path.resolve(agentHome));
         expect(request.config.filesystem.allowWrite).not.toContain(path.resolve(runtimeDirectory));
         expect(request.config.filesystem.allowWrite).toContain(path.resolve(agentsDirectory));
+      } finally {
+        await prepared.cleanup();
+      }
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'installs write-only Git metadata guards before stripping ASRT denies',
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-git-guards-'));
+      tempRoots.push(root);
+      const gitDirectory = path.join(root, '.git');
+      const gitConfig = path.join(gitDirectory, 'config');
+      const gitHooks = path.join(gitDirectory, 'hooks');
+      await mkdir(gitHooks, { recursive: true });
+      await writeFile(gitConfig, '[core]\n', 'utf8');
+
+      const sandbox = createAsrtShellSandbox({
+        workspaceRoot: root,
+        shouldSandbox: () => true,
+        failClosed: true,
+      });
+      const prepared = await sandbox.prepare({
+        toolCallId: 'bash-git-guards',
+        toolInput: { command: 'git status --short' },
+        command: 'git status --short',
+        cwd: root,
+        env: process.env,
+      });
+      if (!prepared) throw new Error('expected Git guard workspace invocation');
+      try {
+        const guardPayloads = capturedSyncSpawns.flatMap((call) => {
+          const encodedIndex = call.args.indexOf('-EncodedCommand');
+          if (encodedIndex < 0 || !call.input) return [];
+          const script = Buffer.from(call.args[encodedIndex + 1] ?? '', 'base64')
+            .toString('utf16le');
+          return script.includes('KodaXAsrtAclGuard-v1')
+            ? [JSON.parse(call.input) as {
+                readonly install: boolean;
+                readonly paths: readonly { readonly path: string; readonly mode: string }[];
+              }]
+            : [];
+        });
+        expect(guardPayloads).toContainEqual(expect.objectContaining({
+          install: true,
+          paths: expect.arrayContaining([
+            { path: gitConfig, mode: 'write', directory: false },
+            { path: gitHooks, mode: 'write', directory: true },
+          ]),
+        }));
+        const sessionConfig = capturedWorkspaceSessionConfigs.at(-1) as {
+          readonly filesystem: { readonly denyWrite: readonly string[] };
+        };
+        expect(sessionConfig.filesystem.denyWrite).toEqual([]);
       } finally {
         await prepared.cleanup();
       }
@@ -840,6 +1182,259 @@ describe('ASRT workspace shell adapter', () => {
       || arg === '__asrt-workspace-session'
     )))).toHaveLength(1);
   });
+
+  it.runIf(process.platform === 'win32')(
+    'reuses bounded safe Agent Home scopes but retires review-only scopes after cleanup',
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-scoped-session-'));
+      const agentHome = path.join(root, 'agent-home');
+      const safeDirectory = path.join(agentHome, 'tool-results');
+      const reviewedConfig = path.join(agentHome, 'config.json');
+      await mkdir(safeDirectory, { recursive: true });
+      await writeFile(reviewedConfig, '{}', 'utf8');
+      vi.stubEnv('KODAX_HOME', agentHome);
+      tempRoots.push(root);
+
+      let access: {
+        read: string[];
+        write: string[];
+        ephemeral?: boolean;
+      } = {
+        read: [path.join(safeDirectory, 'result.txt')],
+        write: [],
+      };
+      const sandbox = createAsrtShellSandbox({
+        workspaceRoot: root,
+        shouldSandbox: () => ({ agentHomeAccess: access }),
+        failClosed: true,
+      });
+      const prepare = async (id: string): Promise<void> => {
+        const invocation = await sandbox.prepare({
+          toolCallId: id,
+          toolInput: { command: 'echo safe' },
+          command: 'echo safe',
+          cwd: root,
+          env: process.env,
+        });
+        if (!invocation) throw new Error('expected scoped sandbox invocation');
+        await invocation.cleanup();
+      };
+
+      await prepare('safe-1');
+      await prepare('safe-2');
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(2);
+
+      access = {
+        read: [reviewedConfig],
+        write: [],
+        ephemeral: true,
+      };
+      await prepare('reviewed-1');
+      await prepare('reviewed-2');
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(4);
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'holds an exclusive filesystem fence while a review-only Agent Home ACL is live',
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-exclusive-review-'));
+      const agentHome = path.join(root, 'agent-home');
+      const reviewedConfig = path.join(agentHome, 'config.json');
+      await mkdir(agentHome, { recursive: true });
+      await writeFile(reviewedConfig, '{}', 'utf8');
+      vi.stubEnv('KODAX_HOME', agentHome);
+      tempRoots.push(root);
+      const sandbox = createAsrtShellSandbox({
+        workspaceRoot: root,
+        shouldSandbox: () => ({
+          agentHomeAccess: { read: [reviewedConfig], write: [], ephemeral: true },
+        }),
+        failClosed: true,
+      });
+
+      const invocation = await sandbox.prepare({
+        toolCallId: 'review-exclusive',
+        toolInput: { command: 'type config.json' },
+        command: 'type config.json',
+        cwd: root,
+        env: process.env,
+      });
+      if (!invocation) throw new Error('expected review-only sandbox invocation');
+      let overlappingLease: Awaited<ReturnType<typeof acquireFileSystemMutationLease>> | undefined;
+      let overlapError: unknown;
+      try {
+        overlappingLease = await acquireFileSystemMutationLease();
+      } catch (error: unknown) {
+        overlapError = error;
+      } finally {
+        await overlappingLease?.();
+      }
+      expect(overlapError).toBeInstanceOf(Error);
+
+      await invocation.cleanup();
+      const admittedAfterCleanup = await acquireFileSystemMutationLease();
+      await admittedAfterCleanup();
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'isolates and removes each workspace-session temp directory',
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-session-temp-'));
+      const agentHome = path.join(root, 'agent-home');
+      const safeDirectory = path.join(agentHome, 'tool-results');
+      await mkdir(safeDirectory, { recursive: true });
+      await writeFile(path.join(safeDirectory, 'one.txt'), '', 'utf8');
+      await writeFile(path.join(safeDirectory, 'two.txt'), '', 'utf8');
+      vi.stubEnv('KODAX_HOME', agentHome);
+      tempRoots.push(root);
+      let selectedPath = path.join(safeDirectory, 'one.txt');
+      const sandbox = createAsrtShellSandbox({
+        workspaceRoot: root,
+        shouldSandbox: () => ({
+          agentHomeAccess: { read: [], write: [selectedPath] },
+        }),
+        failClosed: true,
+      });
+      const prepare = async (id: string): Promise<void> => {
+        const invocation = await sandbox.prepare({
+          toolCallId: id,
+          toolInput: { command: 'echo safe' },
+          command: 'echo safe',
+          cwd: root,
+          env: process.env,
+        });
+        if (!invocation) throw new Error('expected scoped sandbox invocation');
+        await invocation.cleanup();
+      };
+
+      await prepare('temp-one');
+      selectedPath = path.join(safeDirectory, 'two.txt');
+      await prepare('temp-two');
+      const sessionTemps = capturedWorkspaceSessionConfigs.map((config) => {
+        const filesystem = config.filesystem as { readonly allowWrite: readonly string[] };
+        return filesystem.allowWrite.find((candidate) => (
+          candidate.includes(`${path.sep}kodax-sandbox${path.sep}`)
+        ));
+      }).filter((candidate): candidate is string => candidate !== undefined);
+      expect(sessionTemps).toHaveLength(capturedWorkspaceSessionConfigs.length);
+      expect(new Set(sessionTemps).size).toBe(sessionTemps.length);
+
+      await resetAsrtWorkspaceSessionsForTest();
+      await expect(Promise.all(sessionTemps.map(async (directory) => {
+        await expect(stat(directory)).rejects.toThrow();
+      }))).resolves.toBeDefined();
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'bounds cached safe Agent Home ACL scopes',
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-scope-cap-'));
+      const agentHome = path.join(root, 'agent-home');
+      const safeDirectory = path.join(agentHome, 'tool-results');
+      await mkdir(safeDirectory, { recursive: true });
+      for (let index = 0; index < 9; index += 1) {
+        await writeFile(path.join(safeDirectory, `${index}.txt`), '', 'utf8');
+      }
+      vi.stubEnv('KODAX_HOME', agentHome);
+      tempRoots.push(root);
+
+      let selectedPath = path.join(safeDirectory, '0.txt');
+      const sandbox = createAsrtShellSandbox({
+        workspaceRoot: root,
+        shouldSandbox: () => ({
+          agentHomeAccess: { read: [], write: [selectedPath] },
+        }),
+        failClosed: true,
+      });
+      const prepare = async (index: number): Promise<void> => {
+        selectedPath = path.join(safeDirectory, `${index}.txt`);
+        const invocation = await sandbox.prepare({
+          toolCallId: `scope-${index}`,
+          toolInput: { command: 'echo safe' },
+          command: 'echo safe',
+          cwd: root,
+          env: process.env,
+        });
+        if (!invocation) throw new Error('expected bounded scoped invocation');
+        await invocation.cleanup();
+      };
+
+      for (let index = 0; index < 8; index += 1) await prepare(index);
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(9);
+
+      workspaceSessionControl.delayClose = true;
+      const ninth = prepare(8);
+      await vi.waitFor(() => expect(workspaceSessionControl.releaseClose).toBeDefined());
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(9);
+      workspaceSessionControl.delayClose = false;
+      workspaceSessionControl.releaseClose?.();
+      workspaceSessionControl.releaseClose = undefined;
+      await ninth;
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(10);
+
+      await prepare(8);
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(10);
+      await prepare(0);
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(11);
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'does not replace an Agent Home scope when its ACL reset exit is unclean',
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-reset-fail-'));
+      const agentHome = path.join(root, 'agent-home');
+      const safeDirectory = path.join(agentHome, 'tool-results');
+      await mkdir(safeDirectory, { recursive: true });
+      for (let index = 0; index < 9; index += 1) {
+        await writeFile(path.join(safeDirectory, `${index}.txt`), '', 'utf8');
+      }
+      vi.stubEnv('KODAX_HOME', agentHome);
+      tempRoots.push(root);
+
+      let selectedPath = path.join(safeDirectory, '0.txt');
+      const reportObservation = vi.fn();
+      const sandbox = createAsrtShellSandbox({
+        workspaceRoot: root,
+        shouldSandbox: () => ({
+          agentHomeAccess: { read: [], write: [selectedPath] },
+        }),
+        failClosed: true,
+      });
+      const prepare = async (index: number) => {
+        selectedPath = path.join(safeDirectory, `${index}.txt`);
+        const invocation = await sandbox.prepare({
+          toolCallId: `reset-fail-${index}`,
+          toolInput: { command: 'echo safe' },
+          command: 'echo safe',
+          cwd: root,
+          env: process.env,
+          reportObservation,
+        });
+        await invocation?.cleanup();
+        return invocation;
+      };
+
+      for (let index = 0; index < 8; index += 1) {
+        expect(await prepare(index)).toBeDefined();
+      }
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(9);
+
+      workspaceSessionControl.closeExitCode = 1;
+      await expect(prepare(8)).resolves.toBeUndefined();
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(9);
+      expect(reportObservation).toHaveBeenLastCalledWith({
+        version: 1,
+        state: 'fallback',
+        reason: 'prepare_failed',
+        execution: 'normal_permission_policy',
+      });
+    },
+  );
 
   it('cancels a prepare wait without cancelling the shared warm-up', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-session-cancel-'));
@@ -936,7 +1531,7 @@ describe('ASRT workspace shell adapter', () => {
     })).resolves.toBeUndefined();
     expect(capturedProcessTreeKillOptions).toContainEqual(expect.objectContaining({
       gracefulStdinEnd: true,
-      gracefulMs: process.platform === 'win32' ? 130_000 : 1_500,
+      gracefulMs: process.platform === 'win32' ? 15_000 : 1_500,
     }));
     expect(capturedKillSignals).toContain('SIGTERM');
     expect(capturedKillSignals).toContain('SIGKILL');
@@ -1117,6 +1712,7 @@ describe('ASRT workspace shell adapter', () => {
   it('runs a standalone SDK command with the caller-owned containment policy', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-sdk-sandbox-'));
     tempRoots.push(root);
+    await mkdir(path.join(root, 'output', 'protected'), { recursive: true });
     await doctorSandboxRuntime({ refresh: true });
 
     await expect(runKodaXSandboxed({
@@ -1166,18 +1762,33 @@ describe('ASRT workspace shell adapter', () => {
     );
     expect(request.config.filesystem.allowRead).toContain(path.join(root, 'input'));
     expect(request.config.filesystem.allowWrite).toEqual([path.join(root, 'output')]);
-    expect(request.config.filesystem.denyRead).toContain(path.join(os.homedir(), '.ssh'));
-    expect(request.config.filesystem.denyWrite).toContain(
-      path.join(root, 'output', 'protected'),
-    );
     if (process.platform === 'win32') {
+      expect(request.config.filesystem.denyRead).toEqual([]);
+      expect(request.config.filesystem.denyWrite).toEqual([
+        path.join(root, 'output', 'protected'),
+      ]);
       expect(protectedRunnerDirectory).toBeDefined();
-      expect(request.config.filesystem.denyWrite).toContain(protectedRunnerDirectory);
       expect(request.config.windows?.srtWin?.path).toBe(
         path.join(protectedRunnerDirectory!, 'srt-win.exe'),
       );
       expect(capturedSpawnCwds).toContain(protectedRunnerDirectory);
+      const guardedPaths = capturedSyncSpawns.flatMap((call) => {
+        const encodedIndex = call.args.indexOf('-EncodedCommand');
+        if (encodedIndex < 0) return [];
+        const script = Buffer.from(call.args[encodedIndex + 1] ?? '', 'base64')
+          .toString('utf16le');
+        if (!script.includes('KodaXAsrtAclGuard-v1') || !call.input) return [];
+        return (JSON.parse(call.input) as {
+          readonly paths: readonly { readonly path: string }[];
+        }).paths.map((entry) => entry.path);
+      });
+      expect(guardedPaths).toContain(path.join(os.homedir(), '.ssh'));
+      expect(guardedPaths).not.toContain(path.join(root, 'output', 'protected'));
     } else {
+      expect(request.config.filesystem.denyRead).toContain(path.join(os.homedir(), '.ssh'));
+      expect(request.config.filesystem.denyWrite).toContain(
+        path.join(root, 'output', 'protected'),
+      );
       expect(protectedRunnerDirectory).toBeUndefined();
       expect(request.config.windows).toBeUndefined();
     }
@@ -1314,6 +1925,31 @@ describe('ASRT Skill-script adapter', () => {
       expect(windowsSandboxMock.grants).toHaveLength(1);
       await resetAsrtWorkspaceSessionsForTest();
       expect(windowsSandboxMock.revokes).toHaveLength(1);
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'fails closed quickly when persistent ACL guards require explicit setup',
+    async () => {
+      windowsSandboxMock.guardReady = false;
+
+      await expect(doctorSandboxRuntime({ refresh: true })).resolves.toMatchObject({
+        ready: false,
+        setupRequired: true,
+        diagnostics: expect.arrayContaining([
+          expect.stringContaining('[acl_guards_missing]'),
+        ]),
+      });
+      const guardPayloads = capturedSyncSpawns.flatMap((call) => {
+        const encodedIndex = call.args.indexOf('-EncodedCommand');
+        if (encodedIndex < 0 || !call.input) return [];
+        const script = Buffer.from(call.args[encodedIndex + 1] ?? '', 'base64')
+          .toString('utf16le');
+        return script.includes('KodaXAsrtAclGuard-v1')
+          ? [JSON.parse(call.input) as { readonly install: boolean }]
+          : [];
+      });
+      expect(guardPayloads).toEqual([expect.objectContaining({ install: false })]);
     },
   );
 
@@ -1474,7 +2110,7 @@ describe('ASRT Skill-script adapter', () => {
       );
       if (process.platform === 'win32') {
         expect(runnerDirectory).toBeDefined();
-        expect(request.config.filesystem.denyWrite).toContain(runnerDirectory);
+        expect(request.config.filesystem.denyWrite).toEqual([]);
         expect(request.config.windows?.srtWin?.path).toBe(
           path.join(runnerDirectory!, 'srt-win.exe'),
         );

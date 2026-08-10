@@ -7,6 +7,10 @@
  * escape hatch when the LLM-managed index drifts or gets corrupted.
  *
  * Subcommands:
+ *   /memory status           - show capture/review pipeline health
+ *   /memory reviews [limit]  - list persisted episode-review jobs
+ *   /memory proposals        - list actionable Memory proposals
+ *   /memory pending          - compatibility alias for `proposals`
  *   /memory                  — alias for `list`
  *   /memory list             — show MEMORY.md + file count + memory dir
  *   /memory rebuild          — regenerate MEMORY.md from topic frontmatter
@@ -32,7 +36,7 @@ import chalk from 'chalk';
 
 import {
   createMemoryControlPlane,
-  listPendingEpisodeReviews,
+  listPendingEpisodeReviewSummaries,
   parseMemoryFile,
   resolveMemoryEntrypoint,
   resolveMemoryRoot,
@@ -41,10 +45,13 @@ import {
   type MemoryGovernanceReport,
   type MemoryRejectResult,
   type MemoryType,
+  type PendingEpisodeReviewSummary,
 } from '@kodax-ai/agent';
 import {
   deriveCodingMemoryIdentity,
+  deriveCodingMemoryReviewIdentities,
   resolveProvider,
+  type KodaXOptions,
 } from '@kodax-ai/coding';
 
 import type { Command } from './types.js';
@@ -57,6 +64,34 @@ interface ProposalPreviewCacheEntry {
 }
 
 const proposalPreviewFingerprints = new Map<string, ProposalPreviewCacheEntry>();
+
+async function listCurrentProjectEpisodeReviews(
+  options: KodaXOptions,
+  cwd: string,
+  sessionId: string,
+): Promise<readonly PendingEpisodeReviewSummary[]> {
+  const identityCwd = options.context?.executionCwd ?? options.context?.gitRoot ?? cwd;
+  const identity = options.context?.memoryIdentity
+    ?? deriveCodingMemoryIdentity(options, identityCwd, sessionId);
+  const ownerIdentities = deriveCodingMemoryReviewIdentities(options, identity, identityCwd);
+  const pages = await Promise.all(ownerIdentities.map((owner) => (
+    listPendingEpisodeReviewSummaries({
+      configHome: owner.configHome,
+      tenantId: owner.tenantId,
+      agentId: owner.agentId,
+      projectId: owner.projectId ?? null,
+    })
+  )));
+  const unique = new Map<string, PendingEpisodeReviewSummary>();
+  for (const review of pages.flat()) {
+    const key = review.jobId ?? `${review.ownerSessionRef}:${review.reviewKey}`;
+    if (!unique.has(key)) unique.set(key, review);
+  }
+  return [...unique.values()].sort((left, right) => (
+    left.createdAt.localeCompare(right.createdAt)
+    || left.reviewKey.localeCompare(right.reviewKey)
+  ));
+}
 
 function formatMemoryError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -222,24 +257,34 @@ async function statusMemory(
   // Section 3: cross-session pending reviews from the tenant inbox.
   const kodaxOptions = callbacks.createKodaXOptions?.();
   let pendingCount: number | undefined;
+  let automaticReviewCount: number | undefined;
+  let attentionReviewCount: number | undefined;
+  let unknownReviewCount: number | undefined;
   let oldestPendingAge: string | undefined;
   if (kodaxOptions !== undefined) {
-    const identity = deriveCodingMemoryIdentity(kodaxOptions, cwd, context.sessionId);
-    const pending = await listPendingEpisodeReviews({
-      configHome: identity.configHome,
-      tenantId: identity.tenantId,
-    });
+    const pending = await listCurrentProjectEpisodeReviews(
+      kodaxOptions,
+      cwd,
+      context.sessionId,
+    );
     pendingCount = pending.length;
+    const counts = countReviewStates(pending);
+    automaticReviewCount = counts.automatic;
+    attentionReviewCount = counts.attention;
+    unknownReviewCount = counts.unknown;
     const oldest = pending[0];
     if (oldest !== undefined) {
       oldestPendingAge = formatPendingAge(oldest.createdAt, Date.now());
     }
   }
-  console.log(chalk.cyan('\n[memory] pending episode reviews (all sessions)'));
+  console.log(chalk.cyan('\n[memory] pending episode reviews (current project, all sessions)'));
   if (pendingCount === undefined) {
     console.log(chalk.dim('  unavailable — KodaX options are not bound in this session'));
   } else {
     console.log(chalk.dim(`  pending: ${pendingCount}`));
+    console.log(chalk.dim(`  automatic queue: ${automaticReviewCount ?? 0}`));
+    console.log(chalk.dim(`  needs attention: ${attentionReviewCount ?? 0}`));
+    console.log(chalk.dim(`  unknown state: ${unknownReviewCount ?? 0}`));
     if (oldestPendingAge !== undefined) {
       console.log(chalk.dim(`  oldest pending age: ${oldestPendingAge}`));
     }
@@ -275,14 +320,30 @@ async function statusMemory(
 
   // Diagnosis: locate the broken pipeline segment, if any.
   const warnings: string[] = [];
-  if (digests === 0) {
+  if (pendingCount !== undefined && pendingCount > 0) {
+    if ((automaticReviewCount ?? 0) > 0) {
+      warnings.push(
+        digests === 0
+          ? 'review segment: pending reviews from earlier sessions are waiting'
+          : receipts === 0
+            ? 'review segment: digests captured but no review ever completed; the backlog is growing'
+            : 'review segment: pending reviews are still waiting',
+      );
+    }
+    if ((attentionReviewCount ?? 0) > 0) {
+      warnings.push(
+        `review segment: ${attentionReviewCount} job(s) need operator attention and cannot be processed by review-drain`,
+      );
+    }
+    if ((unknownReviewCount ?? 0) > 0) {
+      warnings.push(
+        `review segment: ${unknownReviewCount} job(s) have missing or invalid state and require repair`,
+      );
+    }
+  } else if (digests === 0) {
     warnings.push('capture segment: no memory outcome digests recorded in this session yet');
   } else if (receipts === 0) {
-    warnings.push(
-      pendingCount !== undefined && pendingCount > 0
-        ? 'review segment: digests captured but no review ever completed; the backlog is growing'
-        : 'review segment: digests captured but no review completed in this session',
-    );
+    warnings.push('review segment: digests captured but no review completed in this session');
   }
   if (reviewerMissing) {
     warnings.push('reviewer missing: configure a provider (`kodax setup`) to unblock episode review');
@@ -292,7 +353,7 @@ async function statusMemory(
     for (const warning of warnings) {
       console.log(chalk.yellow(`  ! ${warning}`));
     }
-    if (pendingCount !== undefined && pendingCount > 0) {
+    if ((automaticReviewCount ?? 0) > 0) {
       console.log(chalk.dim('  Run `kodax memory review-drain` to process the backlog in the foreground.'));
     }
   }
@@ -307,6 +368,101 @@ function formatPendingAge(createdAt: string, nowMs: number): string {
   const hours = Math.floor(minutes / 60);
   if (hours < 48) return `${hours}h`;
   return `${Math.floor(hours / 24)}d`;
+}
+
+function countReviewStates(reviews: readonly PendingEpisodeReviewSummary[]): {
+  readonly automatic: number;
+  readonly attention: number;
+  readonly unknown: number;
+} {
+  let automatic = 0;
+  let attention = 0;
+  let unknown = 0;
+  for (const review of reviews) {
+    if (review.status === 'attention') attention += 1;
+    else if (review.status === 'unknown') unknown += 1;
+    else automatic += 1;
+  }
+  return { automatic, attention, unknown };
+}
+
+function parseReviewListLimit(raw: string | undefined): number | undefined {
+  if (raw === undefined) return 20;
+  if (!/^\d+$/.test(raw)) return undefined;
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) && parsed > 0 && parsed <= 200
+    ? parsed
+    : undefined;
+}
+
+function formatReviewAttempts(review: PendingEpisodeReviewSummary): string {
+  if (review.providerAttempts === undefined) return 'legacy review job';
+  return [
+    `provider=${review.providerAttempts}`,
+    `apply=${review.applyAttempts ?? 0}`,
+    `completion=${review.completionAttempts ?? 0}`,
+  ].join(', ');
+}
+
+async function listEpisodeReviews(
+  context: InteractiveContext,
+  callbacks: Parameters<Command['handler']>[2],
+  cwd: string,
+  rawLimit: string | undefined,
+): Promise<void> {
+  const limit = parseReviewListLimit(rawLimit);
+  if (limit === undefined) {
+    console.log(chalk.yellow('\n[memory] review list limit must be an integer from 1 to 200.\n'));
+    return;
+  }
+  const options = callbacks.createKodaXOptions?.();
+  if (options === undefined) {
+    console.log(chalk.yellow('\n[memory] episode-review jobs are unavailable in this session.'));
+    console.log(chalk.dim('  KodaX options are not bound; use `/memory status` for diagnostics.\n'));
+    return;
+  }
+  const reviews = await listCurrentProjectEpisodeReviews(
+    options,
+    cwd,
+    context.sessionId,
+  );
+  const visible = reviews.slice(0, limit);
+  const counts = countReviewStates(reviews);
+  console.log(chalk.cyan('\n[memory] episode-review jobs'));
+  console.log(chalk.dim(`  showing ${visible.length} of ${reviews.length} (oldest first)`));
+  console.log(chalk.dim(
+    `  automatic queue: ${counts.automatic}, needs attention: ${counts.attention}, unknown state: ${counts.unknown}`,
+  ));
+  if (visible.length === 0) console.log(chalk.dim('  (none)'));
+  for (const review of visible) {
+    const job = review.jobId?.slice(0, 12) ?? `legacy:${review.reviewKey}`;
+    console.log(`  ${chalk.cyan(job)} ${chalk.dim(`[${review.status}]`)} ${review.reviewKey}`);
+    console.log(chalk.dim(
+      `    age=${formatPendingAge(review.createdAt, Date.now())}, session=${review.ownerSessionRef}, attempts: ${formatReviewAttempts(review)}`,
+    ));
+    if (review.nextAttemptAt !== undefined) {
+      console.log(chalk.dim(`    next provider attempt: ${review.nextAttemptAt}`));
+    }
+    if (review.nextApplyAttemptAt !== undefined) {
+      console.log(chalk.dim(`    next apply attempt: ${review.nextApplyAttemptAt}`));
+    }
+    if (review.nextCompletionAttemptAt !== undefined) {
+      console.log(chalk.dim(`    next completion attempt: ${review.nextCompletionAttemptAt}`));
+    }
+    if (review.lastError !== undefined) {
+      console.log(chalk.yellow(`    last error: ${review.lastError.slice(0, 160)}`));
+    }
+  }
+  if (counts.automatic > 0) {
+    console.log(chalk.dim('\n  Process the automatic queue with `kodax memory review-drain [--max N]`.'));
+  }
+  if (counts.attention > 0) {
+    console.log(chalk.yellow('  Attention jobs require operator intervention and are not auto-drained.'));
+  }
+  if (counts.unknown > 0) {
+    console.log(chalk.yellow('  Unknown-state jobs require persisted-state repair before draining.'));
+  }
+  console.log();
 }
 
 async function rebuildMemory(memoryDir: string, entrypointPath: string): Promise<void> {
@@ -371,6 +527,7 @@ function proposalLabel(proposal: MemoryActionProposal): string {
 
 function printMemoryInbox(proposals: readonly MemoryActionProposal[]): void {
   console.log(chalk.cyan('\n[memory] pending memory proposals'));
+  console.log(chalk.dim('  These are proposed Memory mutations, not episode-review jobs.'));
   if (proposals.length === 0) {
     console.log(chalk.dim('  (none)\n'));
     return;
@@ -455,7 +612,9 @@ function printHelp(): void {
   console.log(chalk.dim('  /memory                 List MEMORY.md + memory directory'));
   console.log(chalk.dim('  /memory list            Same as `/memory`'));
   console.log(chalk.dim('  /memory status          Show pipeline health: digests, receipts, backlog, reviewer'));
-  console.log(chalk.dim('  /memory pending         List pending memory learning proposals'));
+  console.log(chalk.dim('  /memory reviews [limit] List pending episode-review jobs (default 20)'));
+  console.log(chalk.dim('  /memory proposals       List actionable memory proposals'));
+  console.log(chalk.dim('  /memory pending         Compatibility alias for `/memory proposals`'));
   console.log(chalk.dim('  /memory show <id>       Preview a memory proposal'));
   console.log(chalk.dim('  /memory approve <id>    Approve and apply a memory proposal'));
   console.log(chalk.dim('  /memory reject <id>     Reject a memory proposal'));
@@ -472,7 +631,9 @@ function printDetailedHelp(): void {
   console.log(chalk.cyan('  /memory                 ') + chalk.dim('Show MEMORY.md + topic file count'));
   console.log(chalk.cyan('  /memory list            ') + chalk.dim('Alias for `/memory`'));
   console.log(chalk.cyan('  /memory status          ') + chalk.dim('Show pipeline health + review backlog diagnosis'));
-  console.log(chalk.cyan('  /memory pending         ') + chalk.dim('List pending memory learning proposals'));
+  console.log(chalk.cyan('  /memory reviews [limit] ') + chalk.dim('List pending episode-review jobs (default 20)'));
+  console.log(chalk.cyan('  /memory proposals       ') + chalk.dim('List actionable memory proposals'));
+  console.log(chalk.cyan('  /memory pending         ') + chalk.dim('Compatibility alias for `/memory proposals`'));
   console.log(chalk.cyan('  /memory show <id>       ') + chalk.dim('Preview a memory proposal'));
   console.log(chalk.cyan('  /memory approve <id>    ') + chalk.dim('Approve and apply a memory proposal'));
   console.log(chalk.cyan('  /memory reject <id>     ') + chalk.dim('Reject a memory proposal'));
@@ -504,8 +665,8 @@ function printDetailedHelp(): void {
 export const memoryCommand: Command = {
   name: 'memory',
   description: 'Inspect, govern, or rebuild per-project memory',
-  usage: '/memory [list|status|pending|show|approve|reject|curate|rebuild|open|help]',
-  argumentHint: 'list | status | pending | show <id> | approve <id> | reject <id> [reason] | curate | rebuild | open | help',
+  usage: '/memory [list|status|reviews|proposals|pending|show|approve|reject|curate|rebuild|open|help]',
+  argumentHint: 'list | status | reviews [limit] | proposals | pending | show <id> | approve <id> | reject <id> [reason] | curate | rebuild | open | help',
   handler: async (args, context, callbacks) => {
     const cwd = resolveCwd(context);
     const memoryDir = resolveMemoryRoot(cwd);
@@ -529,7 +690,19 @@ export const memoryCommand: Command = {
       await statusMemory(memoryDir, entrypointPath, context, callbacks, cwd);
       return;
     }
+    if (sub === 'reviews') {
+      await listEpisodeReviews(context, callbacks, cwd, args[1]);
+      return;
+    }
     if (sub === 'pending' || sub === 'inbox') {
+      console.log(chalk.dim(
+        '[memory] `pending` is a compatibility alias for /memory proposals; '
+        + 'episode-review jobs: /memory reviews.',
+      ));
+      printMemoryInbox(await controller.listInbox());
+      return;
+    }
+    if (sub === 'proposals') {
       printMemoryInbox(await controller.listInbox());
       return;
     }

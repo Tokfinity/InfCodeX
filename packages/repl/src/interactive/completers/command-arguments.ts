@@ -179,7 +179,10 @@ const TOGGLE_ARGS: ArgumentDefinition[] = [
 
 const MEMORY_ARGS: ArgumentDefinition[] = [
   { name: 'list', description: 'List project memory files', type: 'enum' },
-  { name: 'pending', description: 'List pending memory proposals', type: 'enum' },
+  { name: 'status', description: 'Show memory pipeline health and backlog count', type: 'enum' },
+  { name: 'reviews', description: 'List pending episode-review jobs', type: 'enum' },
+  { name: 'proposals', description: 'List actionable memory proposals', type: 'enum' },
+  { name: 'pending', description: 'Compatibility alias for proposals', type: 'enum' },
   { name: 'show', description: 'Preview a memory proposal', type: 'enum' },
   { name: 'approve', description: 'Approve a memory proposal', type: 'enum' },
   { name: 'reject', description: 'Reject a memory proposal', type: 'enum' },
@@ -191,6 +194,8 @@ const MEMORY_ARGS: ArgumentDefinition[] = [
 
 const LEARN_SUBCOMMAND_ARGS: ArgumentDefinition[] = [
   { name: 'list', description: 'List learned capabilities', type: 'enum' },
+  { name: 'ready', description: 'List capabilities ready for review/control', type: 'enum' },
+  { name: 'pending', description: 'Compatibility alias for ready capabilities', type: 'enum' },
   { name: 'show', description: 'Inspect one exact learned capability', type: 'enum' },
   { name: 'review', description: 'Start or restart bounded canary review', type: 'enum' },
   { name: 'trust', description: 'Explicitly trust a reviewed revision', type: 'enum' },

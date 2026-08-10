@@ -4,7 +4,9 @@ import {
   mkdtemp,
   readFile,
   readdir,
+  rename,
   rm,
+  stat,
   utimes,
   writeFile,
 } from "node:fs/promises";
@@ -34,6 +36,7 @@ import {
   failEpisodeReviewAttempt,
   freezeEpisodeReviewInput,
   inspectEpisodeReviewJob,
+  listPendingEpisodeReviewSummaries,
   listPendingEpisodeReviews,
   persistPendingEpisodeReview,
   withPendingEpisodeReviewSessionFence,
@@ -812,6 +815,72 @@ describe("FEATURE_260 episode review inbox", () => {
     ).resolves.toMatchObject([{ digest: { id: staleDigest.id } }]);
   });
 
+  it("does not overwrite a foreign same-key v1 entry during scoped stale recovery", async () => {
+    home = await mkdtemp(
+      path.join(os.tmpdir(), "kodax-review-inbox-v1-foreign-collision-"),
+    );
+    const owner = { ...identity, configHome: home };
+    const reviewKey = "review-legacy-v1-foreign-collision";
+    const ownedDigest = {
+      ...digest(1),
+      id: "digest-legacy-v1-owned-processing",
+      reviewKey,
+    };
+    const foreignDigest = {
+      ...digest(2),
+      id: "digest-legacy-v1-foreign-pending",
+      reviewKey,
+    };
+    const sessionRoot = path.join(
+      home,
+      "memory-review-inbox",
+      hashMemoryIdentityComponent("tenant", owner.tenantId),
+      hashMemoryIdentityComponent("session", owner.sessionId),
+    );
+    const pendingDir = path.join(sessionRoot, "pending");
+    const processingDir = path.join(sessionRoot, "processing");
+    await mkdir(pendingDir, { recursive: true });
+    await mkdir(processingDir, { recursive: true });
+    const legacyEntry = (
+      reviewDigest: KodaXMemoryOutcomeDigest,
+      projectId: string,
+    ) => ({
+      version: 1,
+      reviewKey,
+      digest: reviewDigest,
+      ownerSessionRef: owner.sessionId,
+      ownerAgentHash: hashMemoryIdentityComponent("agent", owner.agentId),
+      ownerProjectHash: hashMemoryIdentityComponent("project", projectId),
+      createdAt: reviewDigest.createdAt,
+    });
+    const pendingPath = path.join(
+      pendingDir,
+      `${hashMemoryIdentityComponent("review", reviewKey)}.json`,
+    );
+    const processingPath = path.join(processingDir, "stale-owned-claim.json");
+    await writeFile(
+      pendingPath,
+      `${JSON.stringify(legacyEntry(foreignDigest, "project-b"))}\n`,
+      "utf8",
+    );
+    await writeFile(
+      processingPath,
+      `${JSON.stringify(legacyEntry(ownedDigest, owner.projectId))}\n`,
+      "utf8",
+    );
+    const staleTime = new Date(Date.now() - 6 * 60_000);
+    await utimes(processingPath, staleTime, staleTime);
+
+    await expect(listPendingEpisodeReviews({
+      configHome: home,
+      tenantId: owner.tenantId,
+      agentId: owner.agentId,
+      projectId: owner.projectId,
+    })).resolves.toEqual([]);
+    await expect(readFile(pendingPath, "utf8")).resolves.toContain(foreignDigest.id);
+    await expect(readFile(processingPath, "utf8")).resolves.toContain(ownedDigest.id);
+  });
+
   it("does not replay a distinct stale legacy claim after the same key completes", async () => {
     home = await mkdtemp(
       path.join(os.tmpdir(), "kodax-review-inbox-v1-receipt-gate-"),
@@ -1383,6 +1452,13 @@ describe("FEATURE_260 episode review inbox", () => {
       sessionId: identity.sessionId,
     } as const;
     await persistPendingEpisodeReview(projectless, digest());
+    await persistPendingEpisodeReview(identity, digest(2));
+
+    await expect(listPendingEpisodeReviews({
+      tenantId: identity.tenantId,
+      agentId: identity.agentId,
+      projectId: null,
+    })).resolves.toMatchObject([{ reviewKey: "review-1" }]);
 
     const result = await drainPendingEpisodeReviews(projectless, {
       revalidate: async () => "eligible",
@@ -1390,10 +1466,68 @@ describe("FEATURE_260 episode review inbox", () => {
     });
 
     expect(result.reviewed).toBe(1);
-    expect(result.deferred).toBe(0);
+    expect(result.deferred).toBe(1);
     expect(
       await listPendingEpisodeReviews({ tenantId: identity.tenantId }),
-    ).toEqual([]);
+    ).toMatchObject([{ reviewKey: "review-2" }]);
+  });
+
+  it("does not recover or clean foreign project files during a project-less drain", async () => {
+    home = await mkdtemp(
+      path.join(os.tmpdir(), "kodax-review-inbox-projectless-readonly-"),
+    );
+    setAgentConfigHome(home);
+    const projectless = {
+      tenantId: identity.tenantId,
+      agentId: identity.agentId,
+      sessionId: identity.sessionId,
+    } as const;
+    const completed = await persistPendingEpisodeReview(identity, digest(1));
+    const stale = await persistPendingEpisodeReview(identity, digest(2));
+    const sessionRoot = path.join(
+      home,
+      "memory-review-inbox",
+      hashMemoryIdentityComponent("tenant", identity.tenantId),
+      hashMemoryIdentityComponent("session", identity.sessionId),
+    );
+    const completedStatePath = path.join(
+      sessionRoot,
+      "jobs",
+      hashMemoryIdentityComponent("review", completed.entry.jobId),
+      "state.json",
+    );
+    const completedState = JSON.parse(
+      await readFile(completedStatePath, "utf8"),
+    ) as Record<string, unknown>;
+    await writeFile(
+      completedStatePath,
+      `${JSON.stringify({ ...completedState, status: "completed" })}\n`,
+      "utf8",
+    );
+    const processingDir = path.join(sessionRoot, "processing");
+    const processingPath = path.join(processingDir, "foreign-stale.json");
+    await mkdir(processingDir, { recursive: true });
+    await rename(stale.path, processingPath);
+    const staleTime = new Date(Date.now() - 6 * 60_000);
+    await utimes(processingPath, staleTime, staleTime);
+    const completedBefore = {
+      body: await readFile(completed.path, "utf8"),
+      mtimeMs: (await stat(completed.path)).mtimeMs,
+    };
+    const processingBefore = {
+      body: await readFile(processingPath, "utf8"),
+      mtimeMs: (await stat(processingPath)).mtimeMs,
+    };
+
+    await expect(drainPendingEpisodeReviews(projectless, {
+      revalidate: async () => "eligible",
+      review: async () => [],
+    })).resolves.toMatchObject({ reviewed: 0, deferred: 0, failed: 0 });
+
+    await expect(readFile(completed.path, "utf8")).resolves.toBe(completedBefore.body);
+    expect((await stat(completed.path)).mtimeMs).toBe(completedBefore.mtimeMs);
+    await expect(readFile(processingPath, "utf8")).resolves.toBe(processingBefore.body);
+    expect((await stat(processingPath)).mtimeMs).toBe(processingBefore.mtimeMs);
   });
 
   it("ignores persisted digests with an invalid evidence shape", async () => {
@@ -2331,6 +2465,180 @@ describe("FEATURE_263 fenced episode review protocol", () => {
       lastError: "skill apply failed: record CAS failed",
       nextApplyAttemptAt: "2026-07-12T00:02:00.000Z",
     });
+    await expect(listPendingEpisodeReviewSummaries({
+      tenantId: identity.tenantId,
+    })).resolves.toEqual([
+      expect.objectContaining({
+        reviewKey: persisted.entry.reviewKey,
+        nextApplyAttemptAt: "2026-07-12T00:02:00.000Z",
+      }),
+    ]);
+  });
+
+  it("clears consumed provider retry deadlines before exposing an apply retry", async () => {
+    home = await mkdtemp(
+      path.join(os.tmpdir(), "kodax-review-v2-phase-retry-"),
+    );
+    setAgentConfigHome(home);
+    const persisted = await persistPendingEpisodeReview(identity, digest());
+    const firstClaim = await claimEpisodeReview(identity, persisted.entry.jobId, {
+      now: new Date("2026-07-12T00:01:00.000Z"),
+    });
+    if (firstClaim === undefined) throw new Error("expected first review claim");
+    await failEpisodeReviewAttempt(
+      identity,
+      firstClaim,
+      { kind: "provider_error", message: "provider failed once" },
+      new Date("2026-07-12T00:01:00.000Z"),
+    );
+    const retryClaim = await claimEpisodeReview(identity, persisted.entry.jobId, {
+      now: new Date("2026-07-12T00:02:00.000Z"),
+    });
+    if (retryClaim === undefined) throw new Error("expected retry claim");
+    const input = await freezeEpisodeReviewInput(identity, retryClaim, {
+      evidence: { digest: digest() },
+      promptRevision: "p1",
+      schemaRevision: "s1",
+      policyRevision: "g1",
+      providerRevision: "provider-a",
+    }, new Date("2026-07-12T00:02:00.100Z"));
+    await commitEpisodeReviewDecision(identity, retryClaim, {
+      inputHash: input.evidenceHash,
+      memoryProposalIds: ["proposal-1"],
+    }, new Date("2026-07-12T00:02:00.200Z"));
+    await failEpisodeReviewApply(
+      identity,
+      retryClaim,
+      { carrier: "memory", message: "apply failed once" },
+      new Date("2026-07-12T00:02:00.300Z"),
+    );
+
+    const [summary] = await listPendingEpisodeReviewSummaries({
+      tenantId: identity.tenantId,
+    });
+    expect(summary).toMatchObject({
+      nextApplyAttemptAt: "2026-07-12T00:03:00.300Z",
+    });
+    expect(summary?.nextAttemptAt).toBeUndefined();
+  });
+
+  it("keeps healthy review summaries visible beside an invalid job state", async () => {
+    home = await mkdtemp(
+      path.join(os.tmpdir(), "kodax-review-v2-summary-invalid-state-"),
+    );
+    setAgentConfigHome(home);
+    const invalid = await persistPendingEpisodeReview(identity, digest(1));
+    await persistPendingEpisodeReview(identity, digest(2));
+    const invalidStatePath = path.join(
+      home,
+      "memory-review-inbox",
+      hashMemoryIdentityComponent("tenant", identity.tenantId),
+      hashMemoryIdentityComponent("session", identity.sessionId),
+      "jobs",
+      hashMemoryIdentityComponent("review", invalid.entry.jobId),
+      "state.json",
+    );
+    await writeFile(invalidStatePath, "{not-json", "utf8");
+
+    const summaries = await listPendingEpisodeReviewSummaries({
+      tenantId: identity.tenantId,
+    });
+
+    expect(summaries).toHaveLength(2);
+    expect(summaries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        reviewKey: invalid.entry.reviewKey,
+        status: "unknown",
+        lastError: "invalid persisted review job state",
+      }),
+      expect.objectContaining({ reviewKey: "review-2", status: "pending" }),
+    ]));
+  });
+
+  it("tolerates a mismatched state only in the observability summary", async () => {
+    home = await mkdtemp(
+      path.join(os.tmpdir(), "kodax-review-v2-summary-mismatched-state-"),
+    );
+    setAgentConfigHome(home);
+    const persisted = await persistPendingEpisodeReview(identity, digest());
+    const statePath = path.join(
+      home,
+      "memory-review-inbox",
+      hashMemoryIdentityComponent("tenant", identity.tenantId),
+      hashMemoryIdentityComponent("session", identity.sessionId),
+      "jobs",
+      hashMemoryIdentityComponent("review", persisted.entry.jobId),
+      "state.json",
+    );
+    const state = JSON.parse(await readFile(statePath, "utf8")) as Record<string, unknown>;
+    await writeFile(statePath, `${JSON.stringify({ ...state, jobId: "wrong-job" })}\n`, "utf8");
+
+    const [summary] = await listPendingEpisodeReviewSummaries({
+      tenantId: identity.tenantId,
+    });
+    expect(summary).toMatchObject({
+      reviewKey: persisted.entry.reviewKey,
+      status: "unknown",
+      lastError: "invalid persisted review job state",
+    });
+    expect(summary?.providerAttempts).toBeUndefined();
+    await expect(listPendingEpisodeReviews({
+      tenantId: identity.tenantId,
+    })).rejects.toThrow("review job state identity mismatch");
+  });
+
+  it("does not let a foreign project's invalid state block the owned drain", async () => {
+    home = await mkdtemp(
+      path.join(os.tmpdir(), "kodax-review-v2-foreign-invalid-state-"),
+    );
+    setAgentConfigHome(home);
+    await persistPendingEpisodeReview(identity, digest(1));
+    const foreignIdentity = { ...identity, projectId: "project-b" };
+    const foreign = await persistPendingEpisodeReview(foreignIdentity, digest(2));
+    const foreignStatePath = path.join(
+      home,
+      "memory-review-inbox",
+      hashMemoryIdentityComponent("tenant", identity.tenantId),
+      hashMemoryIdentityComponent("session", identity.sessionId),
+      "jobs",
+      hashMemoryIdentityComponent("review", foreign.entry.jobId),
+      "state.json",
+    );
+    await writeFile(foreignStatePath, "{not-json", "utf8");
+
+    await expect(listPendingEpisodeReviews({
+      tenantId: identity.tenantId,
+      agentId: identity.agentId,
+      projectId: identity.projectId,
+    })).resolves.toMatchObject([{ reviewKey: "review-1" }]);
+    await expect(drainPendingEpisodeReviews(identity, {
+      revalidate: async () => "eligible",
+      review: async () => [],
+    })).resolves.toMatchObject({ reviewed: 1, failed: 0 });
+  });
+
+  it("keeps an owned invalid state fail-closed for strict drain listing", async () => {
+    home = await mkdtemp(
+      path.join(os.tmpdir(), "kodax-review-v2-owned-invalid-state-"),
+    );
+    setAgentConfigHome(home);
+    const persisted = await persistPendingEpisodeReview(identity, digest());
+    const statePath = path.join(
+      home,
+      "memory-review-inbox",
+      hashMemoryIdentityComponent("tenant", identity.tenantId),
+      hashMemoryIdentityComponent("session", identity.sessionId),
+      "jobs",
+      hashMemoryIdentityComponent("review", persisted.entry.jobId),
+      "state.json",
+    );
+    await writeFile(statePath, "{not-json", "utf8");
+
+    await expect(listPendingEpisodeReviews({
+      tenantId: identity.tenantId,
+      agentId: identity.agentId,
+      projectId: identity.projectId,
+    })).rejects.toThrow("invalid review protocol record");
   });
 
   it("keeps independent Memory and Skill retry budgets", async () => {

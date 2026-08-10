@@ -473,7 +473,7 @@ async function drainStartedCodingMemoryReviewInbox(
     failed: 0,
     failures: [] as Array<EpisodeReviewDrainResult['failures'][number]>,
   };
-  for (const ownerIdentity of reviewInboxOwnerIdentities(options, identity)) {
+  for (const ownerIdentity of deriveCodingMemoryReviewIdentities(options, identity)) {
     const spent = result.reviewed + result.discarded + result.failed;
     if (spent >= 2) break;
     const partial = await drainPendingEpisodeReviews(ownerIdentity, {
@@ -520,13 +520,13 @@ async function drainStartedCodingMemoryReviewInbox(
   return result;
 }
 
-function reviewInboxOwnerIdentities(
+export function deriveCodingMemoryReviewIdentities(
   options: KodaXOptions,
   identity: MemoryContextIdentity,
+  cwd = resolveExecutionCwd(options.context),
 ): readonly MemoryContextIdentity[] {
   if (identity.projectId === undefined) return [identity];
-  const projectRoot = resolveExecutionCwd(options.context);
-  const localProjectId = `local:${path.resolve(projectRoot).toLowerCase()}`;
+  const localProjectId = `local:${path.resolve(cwd).toLowerCase()}`;
   if (identity.projectId === localProjectId) return [identity];
   return [identity, { ...identity, projectId: localProjectId }];
 }

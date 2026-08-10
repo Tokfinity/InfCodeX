@@ -27,6 +27,9 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  claimEpisodeReview,
+  failEpisodeReviewAttempt,
+  persistPendingEpisodeReview,
   setAgentConfigHome,
   resolveLearningProposalStore,
   resolveMemoryRoot,
@@ -36,7 +39,8 @@ import {
   type KodaXSessionLineage,
   type MemoryLearningHandoff,
   type MemoryReviewModelInput,
-} from '@kodax-ai/agent';import type { KodaXOptions } from '@kodax-ai/coding';
+} from '@kodax-ai/agent';
+import { deriveCodingMemoryIdentity, type KodaXOptions } from '@kodax-ai/coding';
 
 import { memoryCommand } from './memory-command.js';
 
@@ -519,6 +523,101 @@ describe('FEATURE_289 §3.5 — /memory status', () => {
     expect(log.contains('capture segment')).toBe(false);
   });
 
+  it('diagnoses a previous-session backlog as a review problem', async () => {
+    const options = configuredCallbacks.createKodaXOptions?.();
+    if (options === undefined) throw new Error('test setup expected KodaX options');
+    const previousIdentity = deriveCodingMemoryIdentity(options, cwd, 'previous-session');
+    await persistPendingEpisodeReview(previousIdentity, {
+      id: 'digest-previous-session',
+      reviewKey: 'review:previous-session',
+      sessionId: previousIdentity.sessionId,
+      branchId: 'main',
+      sequence: 1,
+      objective: 'diagnose a cross-session backlog',
+      approach: 'persist before opening a new session',
+      outcome: 'succeeded',
+      summary: 'waiting for review',
+      evidenceRefs: [],
+      visibility: 'prompt_safe',
+      createdAt: '2026-08-01T00:00:00.000Z',
+    });
+
+    const { log, restore } = captureConsole();
+    try {
+      await invokeStatus({}, configuredCallbacks);
+    } finally {
+      restore();
+    }
+
+    expect(log.contains('pending: 1')).toBe(true);
+    expect(log.contains('review segment: pending reviews from earlier sessions are waiting')).toBe(true);
+    expect(log.contains('capture segment')).toBe(false);
+  });
+
+  it('does not claim that no review completed when a receipt exists beside a backlog', async () => {
+    const options = configuredCallbacks.createKodaXOptions?.();
+    if (options === undefined) throw new Error('test setup expected KodaX options');
+    const previousIdentity = deriveCodingMemoryIdentity(options, cwd, 'pending-sibling-session');
+    await persistPendingEpisodeReview(previousIdentity, {
+      id: 'digest-pending-sibling',
+      reviewKey: 'review:pending-sibling',
+      sessionId: previousIdentity.sessionId,
+      branchId: 'main',
+      sequence: 1,
+      objective: 'retain a separate pending review',
+      approach: 'persist in a sibling session',
+      outcome: 'succeeded',
+      summary: 'still waiting',
+      evidenceRefs: [],
+      visibility: 'prompt_safe',
+      createdAt: '2026-08-01T00:00:00.000Z',
+    });
+    const lineage: KodaXSessionLineage = {
+      version: 2,
+      activeEntryId: null,
+      entries: [{
+        id: 'digest-completed',
+        parentId: null,
+        timestamp: '2026-08-01T01:00:00.000Z',
+        type: 'memory_outcome_digest',
+        digest: {
+          id: 'digest-completed',
+          reviewKey: 'review:completed',
+          sessionId: 'session-status-test',
+          branchId: 'main',
+          sequence: 1,
+          objective: 'complete a review',
+          approach: 'review it',
+          outcome: 'succeeded',
+          summary: 'completed',
+          evidenceRefs: [],
+          visibility: 'prompt_safe',
+          createdAt: '2026-08-01T01:00:00.000Z',
+        },
+      }, {
+        id: 'receipt-completed',
+        parentId: null,
+        timestamp: '2026-08-01T01:01:00.000Z',
+        type: 'memory_review_receipt',
+        reviewKey: 'review:completed',
+        proposalIds: [],
+        status: 'no_action',
+        completedAt: '2026-08-01T01:01:00.000Z',
+      }],
+    };
+
+    const { log, restore } = captureConsole();
+    try {
+      await invokeStatus({ lineage }, configuredCallbacks);
+    } finally {
+      restore();
+    }
+
+    expect(log.contains('review receipts : 1')).toBe(true);
+    expect(log.contains('review segment: pending reviews are still waiting')).toBe(true);
+    expect(log.contains('no review ever completed')).toBe(false);
+  });
+
   it('reports a missing reviewer when the provider is not configured', async () => {
     const callbacks: Partial<MemoryCommandCallbacks> = {
       // An unresolvable provider name is deterministically unconfigured.
@@ -545,6 +644,339 @@ describe('FEATURE_289 §3.5 — /memory status', () => {
     }
 
     expect(log.contains('unavailable — KodaX options are not bound in this session')).toBe(true);
+  });
+  it('lists persisted episode-review jobs separately from memory proposals', async () => {
+    const options = configuredCallbacks.createKodaXOptions?.();
+    if (options === undefined) throw new Error('test setup expected KodaX options');
+    for (const [sequence, sessionId] of [[1, 'review-session-a'], [2, 'review-session-b']] as const) {
+      const identity = deriveCodingMemoryIdentity(options, cwd, sessionId);
+      await persistPendingEpisodeReview(identity, {
+        id: `digest-${sequence}`,
+        reviewKey: `review:digest-${sequence}`,
+        sessionId,
+        branchId: 'main',
+        sequence,
+        objective: 'inspect the memory backlog',
+        approach: 'persist an episode review',
+        outcome: 'succeeded',
+        summary: `pending review ${sequence}`,
+        evidenceRefs: [],
+        visibility: 'prompt_safe',
+        createdAt: `2026-08-0${sequence}T00:00:00.000Z`,
+      });
+    }
+
+    const context = {
+      messages: [],
+      runtimeInfo: { workspaceRoot: cwd, executionCwd: cwd },
+      sessionId: 'session-status-test',
+    };
+    const { log, restore } = captureConsole();
+    try {
+      await memoryCommand.handler(
+        ['reviews', '1'],
+        context as never,
+        configuredCallbacks as MemoryCommandCallbacks,
+        {} as never,
+      );
+    } finally {
+      restore();
+    }
+
+    expect(log.contains('[memory] episode-review jobs')).toBe(true);
+    expect(log.contains('showing 1 of 2')).toBe(true);
+    expect(log.contains('review:digest-1')).toBe(true);
+    expect(log.contains('review:digest-2')).toBe(false);
+    expect(log.contains('kodax memory review-drain')).toBe(true);
+  });
+
+  it('separates attention jobs from the automatic review queue', async () => {
+    const options = configuredCallbacks.createKodaXOptions?.();
+    if (options === undefined) throw new Error('test setup expected KodaX options');
+    const identity = deriveCodingMemoryIdentity(options, cwd, 'attention-session');
+    const persisted = await persistPendingEpisodeReview(identity, {
+      id: 'digest-attention',
+      reviewKey: 'review:attention',
+      sessionId: identity.sessionId,
+      branchId: 'main',
+      sequence: 1,
+      objective: 'surface an exhausted review',
+      approach: 'exhaust provider retries',
+      outcome: 'failed',
+      summary: 'operator intervention required',
+      evidenceRefs: [],
+      visibility: 'prompt_safe',
+      createdAt: '2026-08-01T00:00:00.000Z',
+    });
+    for (const minute of [1, 2, 7, 37]) {
+      const now = new Date(`2026-08-01T00:${String(minute).padStart(2, '0')}:00.000Z`);
+      const claim = await claimEpisodeReview(identity, persisted.entry.jobId, { now });
+      if (claim === undefined) throw new Error('test setup expected a claim');
+      await failEpisodeReviewAttempt(identity, claim, {
+        kind: 'provider_error',
+        message: 'review provider failed',
+      }, now);
+    }
+
+    const statusOutput = captureConsole();
+    try {
+      await invokeStatus({}, configuredCallbacks);
+    } finally {
+      statusOutput.restore();
+    }
+    expect(statusOutput.log.contains('pending: 1')).toBe(true);
+    expect(statusOutput.log.contains('automatic queue: 0')).toBe(true);
+    expect(statusOutput.log.contains('needs attention: 1')).toBe(true);
+    expect(statusOutput.log.contains('cannot be processed by review-drain')).toBe(true);
+    expect(statusOutput.log.contains('Run `kodax memory review-drain`')).toBe(false);
+
+    const reviewsOutput = captureConsole();
+    try {
+      await memoryCommand.handler(
+        ['reviews'],
+        {
+          messages: [],
+          runtimeInfo: { workspaceRoot: cwd, executionCwd: cwd },
+          sessionId: 'session-status-test',
+        } as never,
+        configuredCallbacks as MemoryCommandCallbacks,
+        {} as never,
+      );
+    } finally {
+      reviewsOutput.restore();
+    }
+    expect(reviewsOutput.log.contains('needs attention: 1')).toBe(true);
+    expect(reviewsOutput.log.contains('Process this queue with')).toBe(false);
+  });
+
+  it('does not recommend a current-project drain for another project backlog', async () => {
+    const options = configuredCallbacks.createKodaXOptions?.();
+    if (options === undefined) throw new Error('test setup expected KodaX options');
+    const currentIdentity = deriveCodingMemoryIdentity(options, cwd, 'foreign-project-session');
+    await persistPendingEpisodeReview({
+      ...currentIdentity,
+      projectId: 'remote:foreign.example/other-project',
+    }, {
+      id: 'digest-foreign-project',
+      reviewKey: 'review:foreign-project',
+      sessionId: currentIdentity.sessionId,
+      branchId: 'main',
+      sequence: 1,
+      objective: 'belong to another project',
+      approach: 'persist under a foreign project identity',
+      outcome: 'succeeded',
+      summary: 'must not be advertised as locally drainable',
+      evidenceRefs: [],
+      visibility: 'prompt_safe',
+      createdAt: '2026-08-01T00:00:00.000Z',
+    });
+
+    const statusOutput = captureConsole();
+    try {
+      await invokeStatus({}, configuredCallbacks);
+    } finally {
+      statusOutput.restore();
+    }
+    expect(statusOutput.log.contains('pending: 0')).toBe(true);
+    expect(statusOutput.log.contains('Run `kodax memory review-drain`')).toBe(false);
+
+    const reviewsOutput = captureConsole();
+    try {
+      await memoryCommand.handler(
+        ['reviews'],
+        {
+          messages: [],
+          runtimeInfo: { workspaceRoot: cwd, executionCwd: cwd },
+          sessionId: 'session-status-test',
+        } as never,
+        configuredCallbacks as MemoryCommandCallbacks,
+        {} as never,
+      );
+    } finally {
+      reviewsOutput.restore();
+    }
+    expect(reviewsOutput.log.contains('showing 0 of 0')).toBe(true);
+    expect(reviewsOutput.log.contains('(none)')).toBe(true);
+    expect(reviewsOutput.log.contains('review:foreign-project')).toBe(false);
+  });
+
+  it('uses the production execution cwd for local review ownership', async () => {
+    const executionCwd = path.join(cwd, 'nested-execution-cwd');
+    fs.mkdirSync(executionCwd, { recursive: true });
+    const callbacks: Partial<MemoryCommandCallbacks> = {
+      createKodaXOptions: () => ({
+        provider: 'anthropic',
+        context: { executionCwd },
+        memoryReviewer: configuredCallbacks.createKodaXOptions?.().memoryReviewer,
+      } as KodaXOptions),
+    };
+    const options = callbacks.createKodaXOptions?.();
+    if (options === undefined) throw new Error('test setup expected KodaX options');
+    const owner = deriveCodingMemoryIdentity(options, executionCwd, 'nested-session');
+    await persistPendingEpisodeReview(owner, {
+      id: 'digest-nested-cwd',
+      reviewKey: 'review:nested-cwd',
+      sessionId: owner.sessionId,
+      branchId: 'main',
+      sequence: 1,
+      objective: 'retain local ownership from a nested cwd',
+      approach: 'persist with the production execution cwd',
+      outcome: 'succeeded',
+      summary: 'visible from the matching review drain',
+      evidenceRefs: [],
+      visibility: 'prompt_safe',
+      createdAt: '2026-08-01T00:00:00.000Z',
+    });
+
+    const output = captureConsole();
+    try {
+      await memoryCommand.handler(
+        ['reviews'],
+        {
+          messages: [],
+          runtimeInfo: { workspaceRoot: cwd, executionCwd },
+          sessionId: 'session-status-test',
+        } as never,
+        callbacks as MemoryCommandCallbacks,
+        {} as never,
+      );
+    } finally {
+      output.restore();
+    }
+
+    expect(output.log.contains('showing 1 of 1')).toBe(true);
+    expect(output.log.contains('review:nested-cwd')).toBe(true);
+  });
+
+  it('honors a host-provided production memory identity', async () => {
+    const customIdentity = {
+      configHome: tempHome,
+      tenantId: 'tenant-host-bound',
+      userId: 'user-host-bound',
+      workspaceId: 'workspace-host-bound',
+      agentId: 'agent-host-bound',
+      projectId: 'remote:host.example/project',
+      sessionId: 'session-host-bound',
+    } as const;
+    const callbacks: Partial<MemoryCommandCallbacks> = {
+      createKodaXOptions: () => ({
+        provider: 'anthropic',
+        context: { executionCwd: cwd, memoryIdentity: customIdentity },
+      } as KodaXOptions),
+    };
+    await persistPendingEpisodeReview(customIdentity, {
+      id: 'digest-host-bound',
+      reviewKey: 'review:host-bound',
+      sessionId: customIdentity.sessionId,
+      branchId: 'main',
+      sequence: 1,
+      objective: 'use a host-provided owner identity',
+      approach: 'persist under the production owner',
+      outcome: 'succeeded',
+      summary: 'visible to the matching embedded REPL',
+      evidenceRefs: [],
+      visibility: 'prompt_safe',
+      createdAt: '2026-08-01T00:00:00.000Z',
+    });
+
+    const output = captureConsole();
+    try {
+      await memoryCommand.handler(
+        ['reviews'],
+        {
+          messages: [],
+          runtimeInfo: { workspaceRoot: cwd, executionCwd: cwd },
+          sessionId: 'different-repl-session',
+        } as never,
+        callbacks as MemoryCommandCallbacks,
+        {} as never,
+      );
+    } finally {
+      output.restore();
+    }
+
+    expect(output.log.contains('showing 1 of 1')).toBe(true);
+    expect(output.log.contains('review:host-bound')).toBe(true);
+  });
+
+  it('keeps a host-provided project-less identity scoped to ownerless reviews', async () => {
+    const projectlessIdentity = {
+      configHome: tempHome,
+      tenantId: 'tenant-host-projectless',
+      agentId: 'agent-host-projectless',
+      sessionId: 'session-host-projectless',
+    } as const;
+    const foreignIdentity = {
+      ...projectlessIdentity,
+      projectId: 'remote:host.example/foreign-project',
+    } as const;
+    const callbacks: Partial<MemoryCommandCallbacks> = {
+      createKodaXOptions: () => ({
+        provider: 'anthropic',
+        context: { executionCwd: cwd, memoryIdentity: projectlessIdentity },
+      } as KodaXOptions),
+    };
+    await persistPendingEpisodeReview(projectlessIdentity, {
+      id: 'digest-host-projectless',
+      reviewKey: 'review:host-projectless',
+      sessionId: projectlessIdentity.sessionId,
+      branchId: 'main',
+      sequence: 1,
+      objective: 'query only ownerless reviews',
+      approach: 'use the host-provided owner identity',
+      outcome: 'succeeded',
+      summary: 'visible to the matching embedded REPL',
+      evidenceRefs: [],
+      visibility: 'prompt_safe',
+      createdAt: '2026-08-01T00:00:00.000Z',
+    });
+    await persistPendingEpisodeReview(foreignIdentity, {
+      id: 'digest-host-foreign-project',
+      reviewKey: 'review:host-foreign-project',
+      sessionId: foreignIdentity.sessionId,
+      branchId: 'main',
+      sequence: 2,
+      objective: 'keep another project private',
+      approach: 'persist under a project-owned identity',
+      outcome: 'failed',
+      summary: 'must not appear in the project-less REPL',
+      evidenceRefs: [],
+      visibility: 'prompt_safe',
+      createdAt: '2026-08-01T00:01:00.000Z',
+    });
+
+    const output = captureConsole();
+    try {
+      await memoryCommand.handler(
+        ['reviews'],
+        {
+          messages: [],
+          runtimeInfo: { workspaceRoot: cwd, executionCwd: cwd },
+          sessionId: 'different-repl-session',
+        } as never,
+        callbacks as MemoryCommandCallbacks,
+        {} as never,
+      );
+    } finally {
+      output.restore();
+    }
+
+    expect(output.log.contains('showing 1 of 1')).toBe(true);
+    expect(output.log.contains('review:host-projectless')).toBe(true);
+    expect(output.log.contains('review:host-foreign-project')).toBe(false);
+  });
+
+  it('labels pending as the proposal compatibility alias', async () => {
+    const { log, restore } = captureConsole();
+    try {
+      await invoke(['pending'], cwd);
+    } finally {
+      restore();
+    }
+
+    expect(log.contains('compatibility alias for /memory proposals')).toBe(true);
+    expect(log.contains('episode-review jobs: /memory reviews')).toBe(true);
+    expect(log.contains('proposed Memory mutations, not episode-review jobs')).toBe(true);
   });
 });
 

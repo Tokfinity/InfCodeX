@@ -175,6 +175,39 @@ describe('toolBash', () => {
     });
   });
 
+  it('uses a sandbox-provided exclusive filesystem lease for the command lifetime', async () => {
+    const order: string[] = [];
+    const fileSystemEffectLease = {
+      bindEffectProcess: vi.fn(async () => { order.push('bind'); }),
+      finishEffectProcess: vi.fn(async () => { order.push('finish'); }),
+      release: vi.fn(async () => { order.push('release'); }),
+    };
+    const cleanup = vi.fn(async () => {
+      order.push('cleanup');
+      return undefined;
+    });
+    const prepare = vi.fn(async () => ({
+      executable: process.execPath,
+      args: ['-e', 'process.stdout.write("exclusive")'],
+      env: process.env,
+      fileSystemEffectLease,
+      cleanup,
+    }));
+
+    const result = await toolBash({ command: 'echo unsandboxed' }, {
+      backups: new Map(),
+      toolCallId: 'bash-sandbox-exclusive-lease',
+      shellSandbox: { prepare },
+    });
+
+    expect(completedCommandBody(result)).toContain('exclusive');
+    expect(fileSystemEffectLease.bindEffectProcess).toHaveBeenCalledOnce();
+    expect(fileSystemEffectLease.finishEffectProcess).toHaveBeenCalledOnce();
+    expect(fileSystemEffectLease.release).toHaveBeenCalledOnce();
+    expect(order.indexOf('finish')).toBeLessThan(order.indexOf('cleanup'));
+    expect(order.indexOf('cleanup')).toBeLessThan(order.indexOf('release'));
+  });
+
   it('falls back to ordinary execution when sandbox preparation unexpectedly fails', async () => {
     const reportToolSandboxObservation = vi.fn();
     const prepare = vi.fn(async () => {

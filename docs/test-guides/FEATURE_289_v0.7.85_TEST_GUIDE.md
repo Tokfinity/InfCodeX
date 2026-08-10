@@ -18,10 +18,10 @@
 
 - Memory directory: `0 entries` (or absent).
 - This-session pipeline: `digests: 0, receipts: 0, notices: 0`.
-- Cross-session pending: `0 pending` (or a tenant-level count if other projects
-  share the same `~/.kodax` home).
+- Current-project, cross-session pending: `0 pending`; jobs owned by another
+  project under the same `~/.kodax` home are not advertised as locally drainable.
 - Reviewer: `auto-installed (production)` or `MISSING` (if no provider configured).
-- Diagnosis: `No digests captured yet — break at capture segment.`
+- Diagnosis: `capture segment: no memory outcome digests recorded in this session yet`.
 
 **Pass criterion:** renders without error; all sections present even with zeros.
 
@@ -40,13 +40,73 @@ and ended normally, producing a `memory_outcome_digest`).
 
 **Expected:**
 
-- Digests ≥ 1 (the previous session's outcome digest).
-- Receipts: 0 if no review has completed yet (the normal pre-F289 state).
-- Pending: ≥ 1 (the captured job waiting for review).
-- Diagnosis: `Digests captured but no review receipts — break at review segment.`
-  (This is the exact signal F289 was built to surface.)
+- This-session digests and receipts are both `0`; the previous Session's
+  lineage is intentionally not reported as current-Session activity.
+- Cross-session pending is at least `1` (the captured job waiting for review).
+- Diagnosis: `pending reviews from earlier sessions are waiting` at the review
+  segment, not a false capture-segment warning.
 
 **Pass criterion:** diagnosis correctly identifies the review-segment break.
+
+---
+
+## Test 2a: Inspect the actual episode-review backlog
+
+**Prerequisite:** at least one pending review job from Test 2.
+
+**Steps:**
+
+1. Run `/memory reviews 20`.
+2. Compare its total with the `pending` count from `/memory status`.
+3. Run `/memory proposals`, then `/memory pending`.
+4. Run `/learn ready`, then `/learn pending`.
+
+**Expected:**
+
+- `/memory reviews 20` shows up to 20 oldest jobs and includes status,
+  review key, owner Session, age, attempt counts, provider/apply/completion
+  retry timestamps, and last error when those fields exist. Its total matches
+  `/memory status`.
+- Both surfaces split the total into the automatic queue, jobs that need
+  operator attention, and jobs with unknown persisted state. `review-drain`
+  is suggested only when the automatic queue is non-empty; `attention` and
+  `unknown` jobs are never presented as automatically drainable.
+- `/memory proposals` lists actionable Memory changes, not review jobs.
+  `/memory pending` produces the same list but labels itself as a compatibility
+  alias and points to `/memory reviews`.
+- `/learn ready` lists ready learned capabilities. `/learn pending` produces
+  the same query and labels itself as a compatibility alias; it does not claim
+  to show the episode-review inbox.
+- Every empty result prints `(none)` or an explicit empty-state message; no
+  command silently returns a blank Ink history entry.
+
+**SDK parity:**
+
+```ts
+import {
+  listPendingEpisodeReviewSummaries,
+} from '@kodax-ai/kodax/experimental-memory';
+import {
+  deriveCodingMemoryIdentity,
+  deriveCodingMemoryReviewIdentities,
+} from '@kodax-ai/kodax/coding';
+
+const identity = options.context?.memoryIdentity
+  ?? deriveCodingMemoryIdentity(options, executionCwd, sessionId);
+const owners = deriveCodingMemoryReviewIdentities(options, identity, executionCwd);
+const reviews = (await Promise.all(owners.map((owner) =>
+  listPendingEpisodeReviewSummaries({
+    configHome: owner.configHome,
+    tenantId: owner.tenantId,
+    agentId: owner.agentId,
+    projectId: owner.projectId ?? null,
+  })))).flat();
+```
+
+Using the same owner identities as the production drain makes the SDK result
+contain the same persisted review keys shown by `/memory reviews`. Learned
+capabilities remain available through
+`runtime.learning.list({ lifecycle: 'ready' })`.
 
 ---
 

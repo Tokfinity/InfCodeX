@@ -2019,19 +2019,30 @@ describe("createKodaXRuntime", () => {
     )) as { readonly activeRunIds: readonly string[]; readonly recentRunIds: readonly string[] };
     expect(index.activeRunIds).toEqual([]);
     expect(index.recentRunIds).toHaveLength(200);
+    const indexedEventFile = path.join(
+      runsDir,
+      index.recentRunIds[0]!,
+      "events.jsonl",
+    );
+    await fs.writeFile(indexedEventFile, '{"legacy":"terminal-event"}\n', "utf-8");
 
     const originalReadFileSync = mutableNodeFs.readFileSync;
     const statusReads: string[] = [];
+    const eventReads: string[] = [];
     mutableNodeFs.readFileSync = ((file, options) => {
-      if (String(file).endsWith(`${path.sep}status.json`)) statusReads.push(String(file));
+      const resolvedFile = String(file);
+      if (resolvedFile.endsWith(`${path.sep}status.json`)) statusReads.push(resolvedFile);
+      if (resolvedFile === indexedEventFile) eventReads.push(resolvedFile);
       return originalReadFileSync(file, options);
     }) as typeof nodeFs.readFileSync;
     syncBuiltinESMExports();
     let restarted: Awaited<ReturnType<typeof createKodaXRuntime>> | undefined;
     let startupStatusReads = 0;
+    let startupEventReads = 0;
     try {
       restarted = await createKodaXRuntime({ homeDir: tempRoot });
       startupStatusReads = statusReads.length;
+      startupEventReads = eventReads.length;
       await expect(restarted.runs.list()).resolves.toHaveLength(200);
       await expect(restarted.runs.get("indexed-terminal-000")).resolves.toMatchObject({
         runId: "indexed-terminal-000",
@@ -2043,6 +2054,7 @@ describe("createKodaXRuntime", () => {
       await restarted?.close();
     }
     expect(startupStatusReads).toBe(200);
+    expect(startupEventReads).toBe(0);
   });
 
   it("rebuilds a run-status index when a legacy writer publishes an unindexed active Run", async () => {

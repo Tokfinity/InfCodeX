@@ -45,6 +45,19 @@
 > whole-root deletion. Shell effects and privileged direct-file sinks use a
 > cross-process category lease so neither can overlap the other's canonical
 > path validation/write window; same-category work remains concurrent.
+> Windows ACL reuse distinguishes automatic-safe scope from review-only scope.
+> The eagerly warmed session grants only the workspace and a disposable,
+> per-session temp directory. Automatic-safe Agent Home access reuses one of at
+> most eight sessions keyed by the exact canonical read/write roots, and cache
+> eviction waits for ACL reset before admitting a replacement. Review-only
+> access is one-shot and holds the cross-process filesystem-effect fence from
+> before ACL initialization until reset completes because the Windows backend
+> uses a shared restricted-user SID. Existing
+> targets are granted directly and creates use the nearest existing safe parent;
+> the root object, escaping links, and host control trees are revalidated before
+> the ACL is built. Explicit deny ACEs are retained only as carve-outs beneath
+> granted roots; ungranted real-user trees rely on the restricted user's default
+> lack of access and are never recursively stamped per command.
 >
 > **v0.7.84 release addendum:** Agent progress persistence is bounded to one
 > in-flight durable projection plus one latest replacement. Terminal settlement

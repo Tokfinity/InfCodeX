@@ -1,9 +1,20 @@
 /** Experimental KodaX Memory Agent SDK. */
 export * from '@kodax-ai/agent/experimental-memory';
 export type {
+  EpisodeReviewDrainOptions,
+  EpisodeReviewDrainResult,
   MemoryApplicability,
   MemoryContextIdentity,
   MemoryController,
   MemoryPack,
-} from '@kodax-ai/agent/memory-control';
-export { createMemoryControlPlane } from '@kodax-ai/agent/memory-control';
+  PendingEpisodeReview,
+  PendingEpisodeReviewFilter,
+  PendingEpisodeReviewSummary,
+} from '@kodax-ai/agent';
+export {
+  createMemoryControlPlane,
+  drainPendingEpisodeReviews,
+  inspectEpisodeReviewJob,
+  listPendingEpisodeReviewSummaries,
+  listPendingEpisodeReviews,
+} from '@kodax-ai/agent';

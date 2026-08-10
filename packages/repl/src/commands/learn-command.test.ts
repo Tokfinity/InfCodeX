@@ -728,4 +728,74 @@ describe('FEATURE_224 /learn command', () => {
     expect(log.contains('id=lc-project-a-release-check')).toBe(true);
     expect(log.contains('id=lc-project-b-release-check')).toBe(true);
   });
+
+  it('routes Learning Center text through the Ink-captured console channel', async () => {
+    const consoleLines: string[] = [];
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+      consoleLines.push(args.map(String).join(' '));
+    });
+    const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as never);
+    try {
+      await invoke(['list'], cwd, {
+        learning: {
+          list: vi.fn(async () => ({ items: [], revision: 0 })),
+        },
+      });
+    } finally {
+      consoleSpy.mockRestore();
+      stdoutSpy.mockRestore();
+    }
+
+    expect(consoleLines.some((line) => line.includes('[learn] Learning Center'))).toBe(true);
+    expect(consoleLines.some((line) => line.includes('(none)'))).toBe(true);
+    expect(stdoutSpy).not.toHaveBeenCalled();
+  });
+
+  it('prints an explicit empty state instead of opening an empty Learning Center', async () => {
+    const openLearningCenter = vi.fn(async () => undefined);
+    const { log, restore } = captureOutput();
+    try {
+      await invoke([], cwd, {
+        learning: {
+          list: vi.fn(async () => ({ items: [], revision: 0 })),
+        },
+        openLearningCenter,
+      });
+    } finally {
+      restore();
+    }
+
+    expect(openLearningCenter).not.toHaveBeenCalled();
+    expect(log.contains('Learning Center has no learned capabilities')).toBe(true);
+  });
+
+  it('uses ready as the explicit lifecycle command and explains the pending alias', async () => {
+    const list = vi.fn(async () => ({ items: [], revision: 0 }));
+    const { log, restore } = captureOutput();
+    try {
+      await invoke(['ready'], cwd, { learning: { list } });
+      await invoke(['pending'], cwd, { learning: { list } });
+    } finally {
+      restore();
+    }
+
+    expect(list).toHaveBeenNthCalledWith(1, expect.objectContaining({ lifecycle: 'ready' }));
+    expect(list).toHaveBeenNthCalledWith(2, expect.objectContaining({ lifecycle: 'ready' }));
+    expect(log.contains('compatibility alias for /learn ready')).toBe(true);
+    expect(log.contains('episode-review backlog: /memory reviews')).toBe(true);
+  });
+
+  it('labels the legacy proposal fallback when no Learning Center is bound', async () => {
+    const { log, restore } = captureOutput();
+    try {
+      await invoke(['pending'], cwd);
+      await invoke(['ready'], cwd);
+    } finally {
+      restore();
+    }
+
+    expect(log.contains('showing the legacy pending learning proposals')).toBe(true);
+    expect(log.contains('Learning Center controls are unavailable in this runtime')).toBe(true);
+    expect(log.contains('missing proposal id for ready')).toBe(false);
+  });
 });

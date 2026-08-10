@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-08-09_
+_Last Updated: 2026-08-10_
 
 ---
 
@@ -14,6 +14,9 @@ _Last Updated: 2026-08-09_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 289 | High | Resolved | Windows workspace sandbox recursively stamped broad home and temp ACLs in the shell timeout | v0.7.85 Agent Home shell hardening | v0.7.85 development | 2026-08-10 | 2026-08-10 |
+| 288 | Medium | Resolved | Repo-intelligence warm Worker retained its peak memory after cache construction | v0.7.41 startup prewarm | v0.7.85 development | 2026-08-10 | 2026-08-10 |
+| 287 | High | Resolved | Terminal Run recovery replayed complete event histories and blocked CLI startup | v0.7.79 Runtime lifecycle recovery | v0.7.85 development | 2026-08-10 | 2026-08-10 |
 | 286 | High | Resolved | Learned Skill fallback scope was searched in the wrong physical project root | v0.7.85 development multi-scope repair | v0.7.85 development | 2026-08-09 | 2026-08-09 |
 | 285 | High | Resolved | Auto mode left agent-home roots and Runtime control paths mutable | v0.7.74 deterministic read fast paths | v0.7.85 development | 2026-08-09 | 2026-08-09 |
 | 284 | High | Resolved | Managed-task compaction no-ops can permanently trip the summary circuit breaker | v0.7.80 managed-run-context stripping | v0.7.85 development | 2026-08-07 | 2026-08-08 |
@@ -189,6 +192,119 @@ _Last Updated: 2026-08-09_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 289: Windows workspace sandbox recursively stamped broad home and temp ACLs in the shell timeout
+
+- Priority: High
+- Status: Resolved
+- Introduced: v0.7.85 Agent Home shell hardening
+- Fixed: v0.7.85 development
+- Created: 2026-08-10
+- Resolved: 2026-08-10
+
+#### Root Cause
+
+Session `20260810_093626_ns0e7e8ba803f1` issued three independent Bash calls
+in one model turn. The dispatcher intentionally serialized Bash effects, while
+each command spent up to 60 seconds inside Windows ASRT ACL preparation. The UI
+therefore displayed the inverse queue staircase: 177.3 seconds, 117.1 seconds,
+and 60.5 seconds. The underlying Git and Node commands took only 273 ms, 146 ms,
+and 51 ms without sandbox preparation.
+
+Two broad grants caused the regression. Every workspace session granted all
+ordinary Agent Home children, and every session also granted the complete user
+temporary directory. Per-command sensitive-home denies then recursively stamped
+large trees such as `.codex`. A production-equivalent probe took 71.3 seconds
+to initialize 21 broad Agent Home/temp grants; granting only the repository and
+one isolated temp directory took 2.6 seconds.
+
+#### Resolution
+
+- Runtime starts the lean fail-closed workspace session in the background when
+  Run options are built, instead of making the first Bash call begin cold setup.
+- The eager Windows session no longer grants every Agent Home child. Permission
+  review supplies exact Agent Home read/write targets, and KodaX reuses a
+  session keyed by that minimal scope. Existing files are granted directly;
+  creation uses the nearest existing safe parent. Root, escaping-link, Runtime,
+  processes, Learned, and sandbox-control write scopes are rejected again at
+  this OS boundary. Ordinary repository commands stay on the lean session.
+  Automatic-safe scopes use a bounded eight-entry cache and finish reset before
+  replacement. Review-only scopes are one-shot and hold the exclusive
+  cross-process shell-effect fence from before ACL initialization through reset,
+  so the shared Windows SID cannot leak a reviewed grant to a concurrent shell.
+- Windows shell `TEMP`, `TMP`, and `TMPDIR` now point to a new disposable
+  per-session directory. KodaX removes it after session exit and never reuses an
+  accumulating temp tree.
+- Read/write deny ACEs are emitted only when they carve a protected descendant
+  out of an explicit grant. Ungranted real-user paths remain inaccessible to
+  the restricted sandbox user without recursive ACL stamping.
+- Tests cover eager warm-up, bounded grant count, exact safe Agent Home access,
+  root/control-plane denial, broken-link rejection, overlapping deny carve-outs,
+  bounded safe-scope reuse with retirement backpressure, exclusive review-only
+  cleanup, isolated temp disposal, cancellation, and fail-closed recovery. The
+  lean Windows probe initializes in 2.65 seconds and
+  executes its contained command in 108 ms.
+
+### 288: Repo-intelligence warm Worker retained its peak memory after cache construction
+
+- Priority: Medium
+- Status: Resolved
+- Introduced: v0.7.41 startup prewarm
+- Fixed: v0.7.85 development
+- Created: 2026-08-10
+- Resolved: 2026-08-10
+
+#### Root Cause
+
+Repo-intelligence correctly ran full semantic indexing in an unreferenced Worker,
+but `unref()` only allowed the process to exit; it did not terminate the Worker.
+On this 2,353-source-file workspace, one cold full warm-up took 13-18 seconds and
+raised process RSS by about 1.6 GB. The semantic results were cached, yet the
+Worker and its peak TypeScript analysis heap remained resident indefinitely.
+
+#### Resolution
+
+- The Worker now receives a 60-second idle deadline after its pending request
+  set becomes empty, aligned with the session result-cache window so the first
+  prompt and nearby semantic queries reuse the warm index. A new or still-running
+  request cancels retirement, and a detached request is untouched until it settles.
+- Session-level routing and preturn result caches remain available after Worker
+  retirement; a later cache miss starts a fresh isolated Worker.
+- The production probe reclaimed 1,677 MB after the idle boundary, reducing RSS
+  from 1,882 MB to 205 MB without changing the full-engine result.
+- MCP was checked independently: the two configured servers are lazy, register
+  in 0 ms, and remain idle until first use; fail-soft and replacement tests pass.
+
+### 287: Terminal Run recovery replayed complete event histories and blocked CLI startup
+
+- Priority: High
+- Status: Resolved
+- Introduced: v0.7.79 Runtime lifecycle recovery
+- Fixed: v0.7.85 development
+- Created: 2026-08-10
+- Resolved: 2026-08-10
+
+#### Root Cause
+
+`createKodaXRuntime()` loaded the bounded Run status index, then sent every
+persisted terminal Run through durable-terminal recovery. That path synchronously
+replayed each Run's complete `events.jsonl`, even though terminal status was
+already authoritative and no interrupt input needed reconciliation. The affected
+store contained 67 terminal Runs and 208.6 MB of event history, adding 69-86
+seconds before the interactive REPL could render its first prompt.
+
+#### Resolution
+
+- Terminal statuses without queued interrupt input are restored directly from
+  `status.json`; their event journals are not opened during startup.
+- Terminal Runs with queued interrupt input retain the existing replay path so
+  durable delivery reconciliation is not weakened. Non-terminal owner and
+  recovery rules are unchanged.
+- The regression test now seeds a terminal event journal and asserts zero event
+  reads during bounded status-index startup.
+- Runtime creation on the affected store fell from about 85.9 seconds to 188 ms.
+  The linked `kodax` command reaches its prompt again, and the isolated cold-start
+  benchmark reports p50 1.54 seconds and p95 2.10 seconds.
 
 ### 286: Learned Skill fallback scope was searched in the wrong physical project root
 
@@ -12039,7 +12155,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 166 (27 Open, 138 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 169 (27 Open, 141 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
