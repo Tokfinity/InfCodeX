@@ -164,7 +164,7 @@ export function sanitizeUnifiedLearningReviewInput(
 function sanitizeOutcomeDigest(
   digest: KodaXMemoryOutcomeDigest,
 ): KodaXMemoryOutcomeDigest {
-  const { lesson, preconditions, memoryIntent, ...required } = digest;
+  const { lesson, preconditions, memoryIntent, handledMemoryOperations, ...required } = digest;
   const safeLesson = lesson === undefined
     ? undefined
     : sanitizePromptSafeMemoryClaim(lesson, 512);
@@ -199,6 +199,27 @@ function sanitizeOutcomeDigest(
         }),
     ...(safeLesson === undefined ? {} : { lesson: safeLesson }),
     ...(safePreconditions === undefined ? {} : { preconditions: safePreconditions }),
+    ...(handledMemoryOperations === undefined
+      ? {}
+      : {
+          handledMemoryOperations: handledMemoryOperations.flatMap((operation) => {
+            const statement = operation.statement === undefined
+              ? undefined
+              : sanitizePromptSafeMemoryClaim(operation.statement, 1_024);
+            const claimKey = operation.claimKey === undefined
+              ? undefined
+              : sanitizePromptSafeMemoryClaim(operation.claimKey, 160);
+            const targetRefIds = safeReviewRefs(operation.targetRefIds);
+            if (statement === undefined && claimKey === undefined && targetRefIds.length === 0) return [];
+            return [{
+              operation: operation.operation,
+              ...(operation.disposition === undefined ? {} : { disposition: operation.disposition }),
+              ...(statement === undefined ? {} : { statement }),
+              ...(claimKey === undefined ? {} : { claimKey }),
+              targetRefIds,
+            }];
+          }),
+        }),
     ...(!hasAuthoritativeEvidence
       || safeCandidateStatement === undefined
       || safeUserQuote === undefined
@@ -293,14 +314,19 @@ export function normalizeUnifiedLearningReview(
   raw: unknown,
 ): UnifiedLearningReviewResult {
   const record = isRecord(raw) ? raw : {};
-  if (!isMemoryReviewPlan(record.memoryPlan)) {
+  const providerMemoryPlan = normalizeProviderMemoryPlan(
+    record.memoryPlan,
+    input.memory,
+    input.evidence.outcomeDigest,
+  );
+  if (providerMemoryPlan === undefined) {
     throw new EpisodeReviewFailure(
       'malformed_response',
       'unified reviewer returned an invalid Memory plan',
     );
   }
   const memoryPlan = bindMemoryPlanToInput(
-    record.memoryPlan,
+    providerMemoryPlan,
     input.memory,
     input.evidence.outcomeDigest,
     input.evidence.qualification,
@@ -312,6 +338,26 @@ export function normalizeUnifiedLearningReview(
   return {
     memoryPlan,
     ...(capabilityDecision === undefined ? {} : { capabilityDecision }),
+  };
+}
+
+function normalizeProviderMemoryPlan(
+  value: unknown,
+  input: MemoryReviewModelInput,
+  digest: KodaXMemoryOutcomeDigest,
+): MemoryReviewPlan | undefined {
+  if (isMemoryReviewPlan(value)) return value;
+  if (!isRecord(value)
+    || !Array.isArray(value.actions)
+    || !value.actions.every(isMemoryReviewAction)
+    || (value.warnings !== undefined && !isStringArray(value.warnings))) return undefined;
+  return {
+    trigger: input.trigger,
+    createdAt: digest.createdAt,
+    sourceRefs: input.sourceRefs,
+    candidateRefs: input.candidateRefs,
+    actions: value.actions,
+    warnings: value.warnings ?? [],
   };
 }
 
@@ -501,7 +547,13 @@ function isMemoryReviewPlan(value: unknown): value is MemoryReviewPlan {
 
 function isMemoryReviewAction(value: unknown): value is MemoryReviewDraftAction {
   if (!isRecord(value)) return false;
-  const mutatesMemory = value.action === 'write_memdir' || value.action === 'patch_memdir';
+  const mutatesMemory = value.action === 'write_memdir'
+    || value.action === 'patch_memdir'
+    || value.action === 'conflict_report';
+  const validClaimKind = ['fact', 'policy', 'preference', 'procedure', 'episode']
+    .includes(String(value.claimKind));
+  const validClaimKey = typeof value.claimKey === 'string'
+    && /^[a-z0-9._:-]{1,160}$/iu.test(value.claimKey.trim());
   return [
     'no_op',
     'link_refs',
@@ -521,6 +573,7 @@ function isMemoryReviewAction(value: unknown): value is MemoryReviewDraftAction 
     && optionalString(value.proposedBody)
     && (!mutatesMemory
       || (typeof value.proposedBody === 'string' && value.proposedBody.trim().length > 0))
+    && (!mutatesMemory || (validClaimKind && validClaimKey))
     && optionalEnum(value.claimKind, ['fact', 'policy', 'preference', 'procedure', 'episode'])
     && optionalString(value.claimKey)
     && optionalString(value.actionSignature)
@@ -553,16 +606,16 @@ function bindMemoryPlanToInput(
   return {
     ...plan,
     trigger: input.trigger,
+    createdAt: digest.createdAt,
     sourceRefs: input.sourceRefs,
     candidateRefs: input.candidateRefs,
+    warnings: unique([...input.warnings, ...plan.warnings]),
     episodeDigest: digest,
-    ...(floorToHumanQueue
-      ? {
-          actions: plan.actions.map((action) => (
-            action.risk === 'low' ? { ...action, risk: 'medium' as const } : action
-          )),
-        }
-      : {}),
+    actions: plan.actions.map((action) => ({
+      ...action,
+      ...(action.claimKey === undefined ? {} : { claimKey: action.claimKey.trim().toLowerCase() }),
+      ...(floorToHumanQueue && action.risk === 'low' ? { risk: 'medium' as const } : {}),
+    })),
   };
 }
 

@@ -248,9 +248,9 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     input_schema: MEMORY_INTENT_TOOL_SCHEMA,
     handler: toolMemoryIntent,
     sideEffect: 'mutates-state',
-    planModeAllowed: true,
+    planModeAllowed: false,
     classifierExemptReason:
-      'Captures only a prompt-bounded in-memory marker; durable review and Memory writes remain host-governed.',
+      'Exact user quotes authorize prompt-safe Memory mutations; the host control plane rejects ambiguous, broad, or restricted requests.',
     toClassifierInput: () => '',
   },
   {

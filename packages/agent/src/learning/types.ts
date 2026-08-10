@@ -48,9 +48,14 @@ export interface MemoryHandoffMetadata {
   readonly claimKind?: 'fact' | 'policy' | 'preference' | 'procedure' | 'episode';
   readonly claimKey?: string;
   readonly actionSignature?: string;
-  readonly persistenceKind?: 'create' | 'evidence_update' | 'condition_refinement';
+  readonly persistenceKind?: 'create' | 'evidence_update' | 'condition_refinement' | 'conflict';
+  /** User-facing explanation preserved across proposal-store restarts. */
+  readonly reviewRationale?: string;
+  /** User-facing risk preserved across proposal-store restarts. */
+  readonly reviewRisk?: LearningRisk;
   readonly targetRefId?: string;
   readonly targetStorageUri?: string;
+  readonly authorizationTargetFingerprint?: string;
   readonly preconditions?: string;
   readonly applicability?: MemoryApplicability;
   readonly requestedLifecycle?: 'active' | 'provisional';

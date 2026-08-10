@@ -253,12 +253,12 @@ describe('FEATURE_218 manual registry', () => {
     expect(content).toContain('memory_recall');
     expect(content).toContain('memory_intent');
     expect(content).toContain('exact quote');
-    expect(content).toContain('captured only');
-    expect(content).toContain('before any durable review job exists');
-    expect(content).toContain('root task is later cancelled');
-    expect(content).toContain('Foreground completion waits for durable enqueue');
-    expect(content).toContain('later run recovers');
-    expect(content).toContain('fallback');
+    expect(content).toContain('apply immediately');
+    expect(content).toContain('do not create a duplicate episode review');
+    expect(content).toContain('conversation-first');
+    expect(content).toContain('exceptional inferred changes remain reviewable');
+    expect(content).toContain('MEMORY.md is a derived projection');
+    expect(content).toContain('external application');
     expect(content).toContain('query()');
     expect(content).toContain('low-authority');
     expect(content).toContain('proposal/preview/fingerprint/apply');

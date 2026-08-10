@@ -174,8 +174,9 @@ subpath，且不可用时不会静默改为非隔离执行。KodaX 自身的 wor
 [SDK 指南第 29–30 节](public_docs/sdk/embedder-guide.md#29-evidence-gated-background-skill-learning-feature_263-v0778)。
 
 本次发布收口同时保证相邻表面不扭曲意图：Edit/Plan 可加载静态 Skill 指令，但不
-预授权其后续副作用；动态 Skill 命令必须由宿主显式控制 executor；根 AMA 使用受
-治理的 `memory_intent` 生命周期（包括在后续取消前已捕获的显式意图）；Workflow
+预授权其后续副作用；动态 Skill 命令必须由宿主显式控制 executor；根 AMA 会通过受
+治理的 `memory_intent` 控制面立即执行用户明确提出的记住、纠正与遗忘请求，只有异常
+或推断出的变更才进入可解释的决策；Workflow
 Actor wait 只有在 workflow 显式设置
 deadline 时才超时；embedded、Worker 与 daemon 的 Runtime Auto v4 均声明
 `fallbackPersistsEngine:false`。Actor owner 还会验证 Runtime identity，而不是只看
@@ -882,7 +883,7 @@ KodaX 有两层结构，SDK 用户需要分开理解：
 | `packages/agent`  | `@kodax-ai/kodax/skills`  | **窄子集** | 仅 Skills 系统 —— `SkillRegistry` / `loadFullSkill` / `expandSkillForLLM` 等 (26 exports = v0.7.43 之前 `@kodax-ai/skills` 完整 API) | Skill 加载器、IDE 插件 |
 | `packages/agent`  | `@kodax-ai/kodax/mcp`     | **窄子集** | 仅 MCP —— `McpCapabilityProvider` / `createMcpTransport` / `searchMcpCatalog` 等 (23 exports) | MCP server 宿主 |
 | `packages/agent`  | `@kodax-ai/kodax/media`   | **窄子集** | 结构化图片/文件/视频输入 artifact helpers (22 exports) | 桌面宿主、多模态客户端 |
-| `packages/agent`  | `@kodax-ai/kodax/experimental-memory` | **实验性子集** | F228-backed `MemoryAgent` / `MemorySession` scope、recall、query、observation、outcome 契约 | 显式评估 FEATURE_260 的 SDK 宿主 |
+| `packages/agent`  | `@kodax-ai/kodax/experimental-memory` | **实验性子集** | F228-backed `MemoryAgent` / `MemorySession` 生命周期，以及附加的 `MemoryManagementAgent` list/remember/forget 接口 | 显式评估 FEATURE_260 / FEATURE_292 的 SDK 宿主 |
 | `packages/coding` | `@kodax-ai/kodax/coding`  | 完整包 | Coding agent + 50+ 工具 + repo-intelligence (505 exports) | 构建 Claude Code 形态产品 |
 | `packages/repl`   | `@kodax-ai/kodax/repl`    | 完整包 | Ink TUI + 权限模式 + 命令系统 (217 exports) | 终端 UI 消费者 |
 | `packages/repl`   | `@kodax-ai/kodax/session` | **窄子集** | 仅会话管理 —— `listSessions` / `loadFullTranscript` / `appendClientNotice` / `forkSession` / `compactSession` / `watchSessions` 等 (17 exports) | 读取 session 历史的 IDE 插件和桌面宿主 |
@@ -904,7 +905,7 @@ runtime auto-resume 都会扫描最多 1000 条最新摘要并跳过 `msgCount=0
 runtime、消息、UI 历史、lineage、artifact、extension 状态、标题、tag 与 session ID，
 因此相对 shell 命令不会错误地落回启动目录。
 
-**实验性 Memory Agent SDK（FEATURE_260，v0.7.68）**：`/experimental-memory` 暴露基于既有 F228 治理平面的薄 `MemoryAgent` 与 scoped `MemorySession`。被动 recall 零等待，`query()` 只读且由主 Action LLM 主动选择；持久化仍必须经过 proposal/preview/fingerprint/apply。召回内容保持低权限，安全与 scope 边界仍由确定性代码门禁承担。直接 session 示例与宿主边界见 [SDK Embedder Guide §21](public_docs/sdk/embedder-guide.md#21-experimental-governed-memory--experimental-memory-feature_260-v0768)。
+**实验性 Memory Agent SDK（FEATURE_260 + FEATURE_292）**：`/experimental-memory` 保持基础 `MemoryAgent` / `MemorySession` 生命周期源码兼容；当 `createMemoryAgent()` 接收 `MemoryManagementController` 时，返回附加的 `MemoryManagementAgent`，提供与自然语言产品表面相同的 `list()`、`remember()`、`forget()` 治理操作。被动 recall 零等待，`query()` 只读且由主 Action LLM 主动选择。召回内容保持低权限，安全与 scope 边界仍由确定性代码门禁承担。直接 session 示例与宿主边界见 [SDK Embedder Guide §21](public_docs/sdk/embedder-guide.md#21-experimental-governed-memory--experimental-memory-feature_260--feature_275--feature_292-v0768v0785)。
 
 **双向 A2A 1.0（FEATURE_267，v0.7.69）**：`/a2a` 可发现 allowlist 内的 Agent Card，并通过既有 F258 plane 安装 JSON-RPC/SSE executor。配置中的出站 Agent 还会作为 `external:<name>` 自动注册到 embedded CLI 与用户 daemon Runtime，因此主 Agent 无需宿主代码即可编排。一个 `a2a.json` 可保存多个出站注册，但最多只有一个入站 server；入站可发布 Runtime 默认 Agent，或发布一个经过验证的 `~/.kodax/agents/*.md` Agent。内置 listener 仅允许 loopback，且不会返回 Fetch 兼容客户端禁止的端口；公网部署必须由宿主用 TLS、鉴权和授权包住 `handle()`。不宣称支持 A2A 0.3、gRPC、HTTP+JSON、push notification，也不会自动把本地 Agent 暴露到网络。详见 [SDK Embedder Guide §22](public_docs/sdk/embedder-guide.md#22-bidirectional-a2a-10--a2a-feature_267-v0769)。
 

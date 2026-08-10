@@ -540,7 +540,7 @@ describe('FEATURE_224 /learn command', () => {
     expect(log.contains('p-workflow-filter')).toBe(true);
   });
 
-  it('shows memory suggestions through /memory pending', async () => {
+  it('shows exceptional memory decisions through the legacy /memory pending alias', async () => {
     const proposal = requireReviewable(triageProceduralLearning({
       proposalId: 'p-memory-filter',
       origin: 'background_learning',
@@ -568,7 +568,7 @@ describe('FEATURE_224 /learn command', () => {
       restore();
     }
 
-    expect(log.contains('pending memory proposals')).toBe(true);
+    expect(log.contains('decisions that need you')).toBe(true);
     expect(log.contains('p-memory-filter')).toBe(true);
   });
 
@@ -782,7 +782,7 @@ describe('FEATURE_224 /learn command', () => {
     expect(list).toHaveBeenNthCalledWith(1, expect.objectContaining({ lifecycle: 'ready' }));
     expect(list).toHaveBeenNthCalledWith(2, expect.objectContaining({ lifecycle: 'ready' }));
     expect(log.contains('compatibility alias for /learn ready')).toBe(true);
-    expect(log.contains('episode-review backlog: /memory reviews')).toBe(true);
+    expect(log.contains('Memory pipeline health: /memory doctor')).toBe(true);
   });
 
   it('labels the legacy proposal fallback when no Learning Center is bound', async () => {

@@ -63,6 +63,9 @@
 
 ## Test 3 — `/memory list`（空状态）
 
+> Current `v0.7.85` behavior is superseded by FEATURE_292: `/memory` reads the
+> governed accepted-Memory state, while `MEMORY.md` is only a derived projection.
+
 ### 步骤
 
 1. 在一个没有写过 memory 的临时项目（或先 `rm -rf ~/.kodax/projects/<key>/memory/`）启 KodaX。
@@ -71,12 +74,11 @@
 ### 期望结果
 
 ```
-[memory] per-project memory directory
-  <agentConfigHome>/projects/<key>/memory
-  0 topic files
+[memory] accepted Memory
+  No accepted memories yet.
 
-  MEMORY.md does not exist yet.
-  The LLM will create it on first save — no action needed.
+  0 accepted; 0 topic files
+  storage: <agentConfigHome>/projects/<key>/memory
 ```
 
 ### 失败排查
@@ -87,6 +89,12 @@
 | 路径显错 / 含 NaN | Phase A `paths.ts` 边界 bug — 跑 `packages/agent/src/memory/paths.test.ts` |
 
 ---
+
+> FEATURE_292 update: the ordinary surface is natural language plus `/memory list`,
+> `remember`, `forget`, `decisions`, `show`, `approve`, `reject`, `doctor`, and
+> `open`. `open` launches the external editor/file browser. `rebuild` is a hidden
+> compatibility repair for the derived `MEMORY.md` projection only and is
+> intentionally absent from help and completion.
 
 ## Test 4 — `/memory rebuild`
 

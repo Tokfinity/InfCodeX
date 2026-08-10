@@ -1,6 +1,6 @@
 # KodaX Product Requirements
 
-> Last updated: 2026-08-07
+> Last updated: 2026-08-10
 >
 > Current implementation baseline: `v0.7.84` release
 > (`@kodax-ai/kodax@0.7.84` workspace package; npm publication remains manual)
@@ -450,19 +450,32 @@ can return only offered IDs. At most three candidates enter the next
 Action-LLM request, while stale, malformed, unknown, timed-out, cancelled, or
 failed selector results remain silent.
 
-An exact current-user `memory_intent` is authoritative evidence for the
-post-episode governed reviewer, not a direct Memory write. If the root task is
-later cancelled, that already captured intent may still reach durable review,
-but cancelled-task observations, lessons, checks, and inferred intent must not.
-Foreground completion ends after durable enqueue; semantic review may drain in
-the same process or be recovered by a later run.
+An exact current-user `memory_intent` is authoritative evidence for an immediate
+governed operation. Safe, explicit remember, correction, and forget requests
+must apply directly through the existing preview, fingerprint, applicability,
+and apply boundaries. Every new claim has a stable semantic key. Completed
+explicit operations are copied into the outcome only as host-owned de-duplication
+metadata, so ordinary autonomous episode and Skill review still runs without
+capturing the same claim twice. Ambiguous or broad requests require clarification;
+conflicts become durable, readable decisions with revision-bound cross-turn handles;
+secrets are rejected rather than persisted; inferred changes remain
+governed. Autonomous episode review continues in the background and auto-applies
+only deterministic low-risk verified changes.
 
-Durable changes must continue through proposal, preview, fingerprint, and apply.
+Durable changes must continue through proposal, preview, fingerprint, and apply,
+whether the host authorizes an explicit request immediately or exposes an
+exceptional decision.
 Identity and applicability checks, secret filtering, poisoning defenses, and
 managed-path mutation guards are deterministic code boundaries. KodaX must not
 add a second memory database, filesystem memory action space, resident Memory
 Specialist, hidden-reasoning storage, or runtime self-modification through this
 surface.
+
+Memory is conversation-first: asking what KodaX remembers, asking it to remember
+or correct something, and asking it to forget something must work without slash
+commands. `/memory` is an advanced inspection and recovery surface. `MEMORY.md`
+is a derived readable projection rather than the source of truth; `open` uses an
+external editor or file manager, and hidden `rebuild` only repairs that projection.
 
 ### Dynamic Workflow Harness
 

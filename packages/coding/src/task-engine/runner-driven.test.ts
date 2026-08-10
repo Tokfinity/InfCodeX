@@ -2697,7 +2697,7 @@ describe('buildRunnerLlmAdapter — empty-completion retry', () => {
 describe('runManagedTaskViaRunner — end-to-end', () => {
   // FEATURE_193 v0.7.43: Scout H0_DIRECT emit_scout_verdict flow it deleted (V1 chain retired — Scout role + emit_scout_verdict tool retired)
 
-  it('queues, reviews, and applies an explicit user preference through the AMA Memory loop', async () => {
+  it('applies an explicit user preference immediately through the AMA Memory control plane', async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), 'kodax-runner-memory-loop-'));
     const sessionId = 'runner-explicit-memory-intent';
     const identity: MemoryContextIdentity = {
@@ -2766,15 +2766,14 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
               actions: [{
                 action: 'write_memdir',
                 targetRefIds: [],
-                summary: 'Remember to verify implementation evidence before documentation status.',
-                rationale: 'The user explicitly established a stable working preference.',
+                summary: 'Remember verification preference',
+                rationale: 'The user explicitly requested this preference.',
                 confidence: 'high',
                 risk: 'low',
                 requiresApproval: true,
-                proposedBody:
-                  'When deciding whether a feature is implemented, inspect code and tests before using documentation as supporting context.',
                 claimKind: 'preference',
                 claimKey: 'verify-code-before-documentation',
+                proposedBody: 'inspect code and tests before trusting status documents.',
               }],
               warnings: [],
             },
@@ -2809,58 +2808,33 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
                 name: 'memory_intent',
                 input: {
                   operation: 'remember',
-                  statement: 'Inspect code and tests before trusting status documents.',
+                  statement: 'inspect code and tests before trusting status documents.',
                   userQuote: durableRequest,
+                  claimKind: 'preference',
+                  claimKey: 'verify-code-before-documentation',
                 },
               }],
             }
           : {
-              textBlocks: [{
-                text: '这条偏好已经提交给受治理的记忆流程；我不会把排队误报成已经持久化。',
-              }],
+              textBlocks: [{ text: '这条偏好已经记住。' }],
               toolBlocks: [],
             };
       });
 
       expect(result.success).toBe(true);
-      expect(outcome?.jobId).toMatch(/^[a-f0-9]{64}$/);
-      expect(outcome?.digest).toMatchObject({
-        objective: explicitPrompt.slice(0, 512),
-        memoryIntent: {
-          operation: 'remember',
-          evidenceRef: expect.stringMatching(/^user-intent:[a-f0-9]{24}$/),
-          candidateStatement: 'Inspect code and tests before trusting status documents.',
-          userQuote: durableRequest,
-        },
-      });
-      // Review is deliberately detached from foreground completion. Under the
-      // full parallel suite, filesystem-backed review can take longer than the
-      // default polling budget without violating that non-blocking contract.
-      await vi.waitFor(() => expect(receipts).toHaveLength(1), { timeout: 15_000 });
+      expect(outcome).toBeDefined();
+      expect(outcome?.digest.handledMemoryOperations).toMatchObject([{
+        operation: 'remember',
+        claimKey: 'verify-code-before-documentation',
+      }]);
+      await vi.waitFor(() => expect(receipts).toHaveLength(1), { timeout: 5_000 });
+      expect(receipts).toEqual([{ proposalIds: [] }]);
+      expect(notices).toEqual([]);
+      expect(reviewedInput).toBeDefined();
       const proposalStore = await readLearningProposalStore(
         resolveLearningProposalStore(home, home),
       );
-      expect(proposalStore.proposals).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          proposalId: receipts[0]?.proposalIds[0],
-          status: 'approved',
-        }),
-      ]));
-      await vi.waitFor(() => expect(notices).toHaveLength(1), { timeout: 5_000 });
-      expect(reviewedInput?.memory.trigger).toBe('explicit_remember');
-      expect(reviewedInput?.evidence.outcomeDigest.memoryIntent).toMatchObject({
-        operation: 'remember',
-        candidateStatement: 'Inspect code and tests before trusting status documents.',
-        userQuote: durableRequest,
-      });
-      expect(reviewedInput?.evidence.outcomeDigest.evidence).toContainEqual(
-        expect.objectContaining({
-          grade: 'authoritative',
-          source: 'user',
-        }),
-      );
-      expect(notices[0]?.summaries.length).toBeGreaterThan(0);
-      expect(notices[0]?.proposalIds.length).toBeGreaterThan(0);
+      expect(proposalStore.proposals).toMatchObject([{ status: 'approved', approvedBy: 'host' }]);
 
       const controller = createMemoryControlPlane({
         cwd: home,
@@ -2868,33 +2842,15 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
         projectDocs: [],
         discoverSkills: false,
       });
-      let appliedStorageUri: string | undefined;
-      await vi.waitFor(async () => {
-        const applied = (await controller.listRefs({ includePrivate: true }))
-          .find((ref) => ref.claimKey === 'verify-code-before-documentation');
-        expect(applied).toMatchObject({
-          claimKind: 'preference',
-          owner: 'user',
-          lifecycle: 'active',
-        });
-        appliedStorageUri = applied?.storageUri;
-        expect(appliedStorageUri).toBeDefined();
-      }, { timeout: 5_000 });
+      const applied = (await controller.listRefs({ kinds: ['memdir'] }))[0];
+      expect(applied).toMatchObject({ claimKind: 'preference', owner: 'user', lifecycle: 'active' });
+      const appliedStorageUri = applied?.storageUri;
       await expect(readFile(appliedStorageUri ?? '', 'utf8')).resolves.toContain(
-        'When deciding whether a feature is implemented, inspect code and tests',
+        'inspect code and tests before trusting status documents.',
       );
-      expect(sessionData?.lineage?.entries).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          type: 'memory_outcome_digest',
-          jobId: outcome?.jobId,
-        }),
-        expect.objectContaining({ type: 'memory_review_receipt' }),
-        expect.objectContaining({ type: 'client_notice' }),
+      expect(sessionData?.lineage?.entries ?? []).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: 'memory_outcome_digest' }),
       ]));
-      await vi.waitFor(async () => {
-        const pending = await listPendingEpisodeReviews(identity);
-        expect(pending).toHaveLength(0);
-      }, { timeout: 5_000 });
     } finally {
       await rm(home, {
         recursive: true,
@@ -2912,6 +2868,13 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
     const followUp = 'From now on, remember to run focused tests before reporting success.';
     let call = 0;
     let outcome: KodaXMemoryOutcomeDigest | undefined;
+    const identity: MemoryContextIdentity = {
+      configHome: home,
+      tenantId: 'tenant-runner-follow-up',
+      agentId: 'kodax-coding',
+      projectId: 'project-runner-follow-up',
+      sessionId,
+    };
     try {
       const result = await runManagedTaskViaRunner({
         ...makeOptions(),
@@ -2929,6 +2892,7 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
           configHome: home,
           executionCwd: home,
           gitRoot: home,
+          memoryIdentity: identity,
           interruptInput: {
             closeInputWindow() {},
             reopenInputWindow() {},
@@ -2959,8 +2923,10 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
               name: 'memory_intent',
               input: {
                 operation: 'remember',
-                statement: 'Run focused tests before reporting success.',
+                statement: 'run focused tests before reporting success.',
                 userQuote: followUp,
+                claimKind: 'procedure',
+                claimKey: 'project.procedure.report-verification',
               },
             }],
           };
@@ -2969,25 +2935,30 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
       });
 
       expect(result.success).toBe(true);
-      expect(outcome?.memoryIntent).toMatchObject({
-        operation: 'remember',
-        candidateStatement: 'Run focused tests before reporting success.',
-        userQuote: followUp,
-      });
+      expect(outcome).toBeDefined();
+      const controller = createMemoryControlPlane({ cwd: home, identity, discoverSkills: false });
+      expect(await controller.listRefs({ kinds: ['memdir'] })).toHaveLength(1);
     } finally {
       getMessageQueue().clear();
       await rm(home, { recursive: true, force: true });
     }
   }, 20_000);
 
-  it('submits a verified AMA memory_intent when the episode is later aborted', async () => {
+  it('keeps an immediately applied AMA Memory when the episode is later aborted', async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), 'kodax-runner-memory-cancelled-'));
     const sessionId = 'runner-memory-cancelled';
-    const userRequest = 'Going forward, run focused tests before reporting success.';
+    const userRequest = 'Going forward, remember to run focused tests before reporting success.';
     const abortController = new AbortController();
     let call = 0;
     let outcome: KodaXMemoryOutcomeDigest | undefined;
     const reviewTriggers: string[] = [];
+    const identity: MemoryContextIdentity = {
+      configHome: home,
+      tenantId: 'tenant-runner-cancelled',
+      agentId: 'kodax-coding',
+      projectId: 'project-runner-cancelled',
+      sessionId,
+    };
     try {
       const run = runManagedTaskViaRunner({
         ...makeOptions(),
@@ -3009,6 +2980,7 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
           configHome: home,
           executionCwd: home,
           gitRoot: home,
+          memoryIdentity: identity,
         },
         events: {
           onMemoryOutcomeDigest(digest) {
@@ -3026,8 +2998,10 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
               name: 'memory_intent',
               input: {
                 operation: 'remember',
-                statement: 'Run focused tests before reporting success.',
+                statement: 'run focused tests before reporting success.',
                 userQuote: userRequest,
+                claimKind: 'procedure',
+                claimKey: 'project.procedure.report-verification',
               },
             }],
           };
@@ -3038,23 +3012,10 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
       });
 
       await expect(run).rejects.toThrow('managed run interrupted after intent capture');
-      expect(outcome).toMatchObject({
-        outcome: 'cancelled',
-        objective: 'Run focused tests before reporting success.',
-        summary: 'Explicit memory intent captured before episode cancellation.',
-        evidenceRefs: [expect.stringMatching(/^user-intent:[a-f0-9]{24}$/)],
-        memoryIntent: {
-          operation: 'remember',
-          candidateStatement: 'Run focused tests before reporting success.',
-          userQuote: userRequest,
-        },
-      });
-      expect(outcome?.evidence).toHaveLength(1);
-      expect(outcome?.evidence?.[0]).toMatchObject({
-        grade: 'authoritative',
-        source: 'user',
-      });
-      await vi.waitFor(() => expect(reviewTriggers).toContain('explicit_remember'));
+      expect(outcome).toBeUndefined();
+      expect(reviewTriggers).not.toContain('episode_completed');
+      const controller = createMemoryControlPlane({ cwd: home, identity, discoverSkills: false });
+      expect(await controller.listRefs({ kinds: ['memdir'] })).toHaveLength(1);
     } finally {
       await rm(home, { recursive: true, force: true });
     }

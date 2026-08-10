@@ -485,6 +485,30 @@ describe("FEATURE_260 episode review inbox", () => {
     ).toEqual(["review-3"]);
   });
 
+  it("gives the newest review a fast lane while an old backlog still advances", async () => {
+    home = await mkdtemp(path.join(os.tmpdir(), "kodax-review-inbox-fast-lane-"));
+    setAgentConfigHome(home);
+    for (let sequence = 1; sequence <= 6; sequence += 1) {
+      await persistPendingEpisodeReview(identity, {
+        ...digest(sequence),
+        createdAt: `2026-07-12T00:00:0${sequence}.000Z`,
+      });
+    }
+    const reviewed: string[] = [];
+
+    const result = await drainPendingEpisodeReviews(identity, {
+      maxEntries: 2,
+      revalidate: async () => "eligible",
+      review: async (entry) => {
+        reviewed.push(entry.reviewKey);
+        return [`proposal-${entry.reviewKey}`];
+      },
+    });
+
+    expect(result).toMatchObject({ reviewed: 2, deferred: 4, failed: 0 });
+    expect(reviewed).toEqual(["review-6", "review-1"]);
+  });
+
   it("holds session authority through a legacy v1 review effect and receipt", async () => {
     home = await mkdtemp(
       path.join(os.tmpdir(), "kodax-review-inbox-v1-fence-"),
@@ -1397,7 +1421,7 @@ describe("FEATURE_260 episode review inbox", () => {
       deferred: 1,
       failed: 1,
       failures: [
-        { reviewKey: "review-1", error: "transient reviewer failure" },
+        { reviewKey: "review-2", error: "transient reviewer failure" },
       ],
     });
     expect(
@@ -2999,7 +3023,7 @@ describe("FEATURE_289 episode review drain fixes", () => {
     });
 
     expect(result).toMatchObject({ reviewed: 2, deferred: 1, failed: 0 });
-    expect(reviewed).toEqual(["review-2", "review-3"]);
+    expect(reviewed).toEqual(["review-3", "review-2"]);
     expect(
       await listPendingEpisodeReviews({ tenantId: identity.tenantId }),
     ).toMatchObject([{ reviewKey: "review-1" }]);

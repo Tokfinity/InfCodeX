@@ -39,14 +39,17 @@ describe('FEATURE_260 governed memory prompt', () => {
     expect(block).toContain('verify mutable current preconditions');
   });
 
-  it('submits explicit durable intent semantically without claiming that enqueue means applied', () => {
+  it('uses natural-language Memory management and reports only durable receipts', () => {
     const block = buildMemoryRulesSection('ignored');
 
     expect(block).toContain('memory_intent');
     expect(block).toContain('exact quote from the current user message');
     expect(block).toContain('Do not call it for ordinary narration');
-    expect(block).toContain('captured for end-of-episode governed submission');
-    expect(block).toContain('no durable review job exists yet');
-    expect(block).toContain('Do not claim that Memory was queued, persisted');
+    expect(block).toContain('Memory is natural-language-first');
+    expect(block).toContain('operation=decisions');
+    expect(block).toContain('approve or reject only after an exact current-user quote');
+    expect(block).toContain('remembered, updated, already_known, or forgotten receipt is durable');
+    expect(block).toContain('needs_clarification means no mutation happened');
+    expect(block).toContain('needs_review includes a durable decision');
   });
 });

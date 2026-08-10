@@ -57,7 +57,8 @@ import {
   persistPendingEpisodeReview,
   registerActiveRootQueueRoute,
   type CompactionConfig,
-  type MemoryController,
+  type KodaXHandledMemoryOperation,
+  type MemoryManagementController,
   type MemoryPack,
 } from '@kodax-ai/agent';
 import {
@@ -146,7 +147,6 @@ import { actorQueueId } from './actor-queue.js';
 import { resolvePerTurnProvider } from './per-turn-provider-resolution.js';
 import {
   deriveCodingMemoryIdentity,
-  detectMemoryReviewTrigger,
   drainCodingMemoryReviewInbox,
   persistMemoryOutcomeToSession,
 } from '../memory-runtime.js';
@@ -180,8 +180,8 @@ import {
 import {
   activateMemoryIntentTool,
   createMemoryIntentBinding,
+  extractPresentedMemoryTargetRefs,
   MEMORY_INTENT_TOOL_NAME,
-  type AcceptedMemoryIntent,
 } from '../tools/memory-intent.js';
 import {
   activateSessionHistoryTools,
@@ -659,11 +659,11 @@ export async function runSubstrate(
     memoryIdentity,
     sessionId,
   );
-  let memoryController: MemoryController | undefined;
+  let memoryController: MemoryManagementController | undefined;
   let memoryPack: MemoryPack | undefined;
   let memoryBranchEpoch: number | undefined;
   let memoryReviewDrain: Promise<void> = Promise.resolve();
-  let acceptedMemoryIntent: AcceptedMemoryIntent | undefined;
+  let preferredMemoryReviewJobId: string | undefined;
   if (options.context?.currentAgentId === undefined
     && options.context?.parentAgentId === undefined) {
     try {
@@ -682,17 +682,6 @@ export async function runSubstrate(
         includeSnippets: false,
       });
       await memoryController.maybeRunAutoCurator();
-      const feedbackTrigger = options.memoryReviewer === undefined
-        ? undefined
-        : detectMemoryReviewTrigger(prompt);
-      if (feedbackTrigger !== undefined) {
-        const plan = await memoryController.reviewMemoryFeedback({
-          trigger: feedbackTrigger,
-          userFeedback: prompt,
-          task: prompt,
-        });
-        events.onMemoryReview?.(plan);
-      }
       memoryReviewDrain = drainCodingMemoryReviewInbox(
         options,
         memoryIdentity,
@@ -914,6 +903,7 @@ export async function runSubstrate(
   };
   let memorySession: MemorySession | undefined;
   let memoryDecisionBinding: CodingMemoryContext | undefined;
+  const handledMemoryOperations: KodaXHandledMemoryOperation[] = [];
   const finalizeManagedProtocolResult = async (result: KodaXResult): Promise<KodaXResult> => {
     if (result.success) {
       emitLiveTurnCompletedOnce(result.interrupted ? 'interrupted' : 'completed');
@@ -940,48 +930,33 @@ export async function runSubstrate(
       try {
         const completedAt = new Date().toISOString();
         await memorySession.complete({
-          status: finalized.interrupted
-            ? 'cancelled'
-            : finalized.success ? 'succeeded' : 'failed',
-          summary: finalized.lastText,
-          evidence: [
-            ...(acceptedMemoryIntent === undefined
-              ? []
-              : [{
-                  ref: acceptedMemoryIntent.evidenceRef,
-                  requestedGrade: 'authoritative' as const,
-                  source: 'user' as const,
-                  observedAt: completedAt,
-                }]),
-            ...(finalized.interrupted
-              ? []
-              : [
-                ...(checks.length > 0
-                  ? checks.map((check) => ({
-                      ref: check.ref,
-                      requestedGrade: 'verified' as const,
-                      source: check.source,
-                      verdict: check.verdict,
-                      observedAt: check.observedAt,
-                    }))
-                  : [{
-                      ref: `host:run-terminal:${sessionId}`,
-                      requestedGrade: 'observed' as const,
-                      source: 'host' as const,
-                      observedAt: completedAt,
-                    }]),
-              ]),
-          ],
-          ...(acceptedMemoryIntent === undefined
-            ? {}
-            : {
-                memoryIntent: {
-                  operation: acceptedMemoryIntent.operation,
-                  evidenceRef: acceptedMemoryIntent.evidenceRef,
-                  candidateStatement: acceptedMemoryIntent.candidateStatement,
-                  userQuote: acceptedMemoryIntent.userQuote,
-                },
-              }),
+            status: finalized.interrupted
+              ? 'cancelled'
+              : finalized.success ? 'succeeded' : 'failed',
+            summary: finalized.lastText,
+            evidence: [
+              ...(finalized.interrupted
+                ? []
+                : [
+                    ...(checks.length > 0
+                      ? checks.map((check) => ({
+                          ref: check.ref,
+                          requestedGrade: 'verified' as const,
+                          source: check.source,
+                          verdict: check.verdict,
+                          observedAt: check.observedAt,
+                        }))
+                      : [{
+                          ref: `host:run-terminal:${sessionId}`,
+                          requestedGrade: 'observed' as const,
+                          source: 'host' as const,
+                          observedAt: completedAt,
+                        }]),
+                  ]),
+            ],
+            ...(handledMemoryOperations.length === 0
+              ? {}
+              : { handledMemoryOperations: [...handledMemoryOperations] }),
         });
         await memorySession.close();
       } catch (error) {
@@ -1027,6 +1002,7 @@ export async function runSubstrate(
           // drain releases its claim via defer instead of fossilizing
           // mid-judge in `processing`.
           Date.now() + 15_000,
+          preferredMemoryReviewJobId,
         ).then(() => undefined),
       ).catch((error: unknown) => {
         emitResilienceDebug('[memory:review-inbox:drain-error]', {
@@ -1131,7 +1107,7 @@ export async function runSubstrate(
         if (digest.visibility === 'prompt_safe'
           && options.session?.storage !== undefined
           && memoryBranchEpoch !== undefined) {
-          await persistPendingEpisodeReview(memoryIdentity, digest, {
+          const persisted = await persistPendingEpisodeReview(memoryIdentity, digest, {
             expectedBranchEpoch: memoryBranchEpoch,
             persistOwner: async (entry) => persistMemoryOutcomeToSession(
               options,
@@ -1140,6 +1116,7 @@ export async function runSubstrate(
               { jobId: entry.jobId },
             ),
           });
+          preferredMemoryReviewJobId = persisted.entry.jobId;
           return;
         }
         await persistMemoryOutcomeToSession(options, sessionId, digest);
@@ -1217,12 +1194,11 @@ export async function runSubstrate(
         runtimeSessionState.activeTools,
         true,
       );
-      ctx.memoryIntent = createMemoryIntentBinding({
+      ctx.memoryManagementIntent = createMemoryIntentBinding({
         getCurrentUserTurn: () => memoryIntentUserTurnRef.current,
-        sessionId,
-        onAccepted: (intent) => {
-          acceptedMemoryIntent = intent;
-        },
+        controlPlane: memoryController,
+        getPresentedTargets: () => extractPresentedMemoryTargetRefs(messages),
+        onHandledOperation: (operation) => handledMemoryOperations.push(operation),
       });
     }
   }

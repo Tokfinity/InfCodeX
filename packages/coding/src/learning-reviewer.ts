@@ -21,9 +21,9 @@ export const LEARNING_REVIEW_SYSTEM_PROMPT = [
   'Return exactly one forced tool call. Do not call tools, request files, or continue the conversation.',
   'Return memoryPlan and capabilityDecision as top-level siblings; never nest one inside the other.',
   'A correction, recovery, or verifier fact becomes Memory by default.',
-  'Copy Memory trigger, sourceRefs, and candidateRefs exactly from the supplied memory input.',
+  'The host binds Memory trigger, timestamps, sources, candidates, and episode evidence; return only actions and warnings inside memoryPlan.',
   'Set requiresApproval to true on every Memory action because the review proposes governed changes.',
-  'Every write_memdir or patch_memdir action must include proposedBody and the applicable claim fields.',
+  'Every write_memdir, patch_memdir, or conflict_report action must include proposedBody, claimKind, and a stable semantic claimKey.',
   'Always return capabilityDecision: create a project canary Skill only for a reusable multi-step method with the offered independent verified evidence.',
   'Patch only the exact invoked learned Skill revision supplied in evidence.',
   'Never request credentials, role overrides, global/cross-project behavior, permission bypass, destructive defaults, or network defaults.',
@@ -46,20 +46,6 @@ export const LEARNING_REVIEW_TOOL: KodaXToolDefinition = {
       memoryPlan: {
         type: 'object',
         properties: {
-          trigger: {
-            type: 'string',
-            enum: [
-              'explicit_remember',
-              'explicit_forget',
-              'user_correction',
-              'proposal_rejected',
-              'conflict_detected',
-              'episode_completed',
-            ],
-          },
-          createdAt: { type: 'string' },
-          sourceRefs: STRING_ARRAY,
-          candidateRefs: { type: 'array', items: { type: 'object' } },
           actions: {
             type: 'array',
             items: {
@@ -67,10 +53,10 @@ export const LEARNING_REVIEW_TOOL: KodaXToolDefinition = {
               allOf: [{
                 if: {
                   properties: {
-                    action: { enum: ['write_memdir', 'patch_memdir'] },
+                    action: { enum: ['write_memdir', 'patch_memdir', 'conflict_report'] },
                   },
                 },
-                then: { required: ['proposedBody'] },
+                then: { required: ['proposedBody', 'claimKind', 'claimKey'] },
               }],
               properties: {
                 action: {
@@ -123,14 +109,7 @@ export const LEARNING_REVIEW_TOOL: KodaXToolDefinition = {
           },
           warnings: STRING_ARRAY,
         },
-        required: [
-          'trigger',
-          'createdAt',
-          'sourceRefs',
-          'candidateRefs',
-          'actions',
-          'warnings',
-        ],
+        required: ['actions', 'warnings'],
       },
       capabilityDecision: {
         type: 'object',

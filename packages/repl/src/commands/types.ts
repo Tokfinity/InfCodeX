@@ -110,6 +110,8 @@ export interface CommandCallbacks {
   deleteSession?: (id: string) => Promise<void>;
   deleteAllSessions?: () => Promise<void>;
   createKodaXOptions?: () => KodaXOptions;
+  /** Opens a path in the host's external editor/file browser. */
+  openExternalPath?: (targetPath: string) => Promise<void>;
   reloadAgentsFiles?: () => Promise<AgentsFile[]>;
   confirm?: (message: string) => Promise<boolean>;
   readline?: readline.Interface;

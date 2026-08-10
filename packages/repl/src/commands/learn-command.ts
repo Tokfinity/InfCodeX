@@ -284,7 +284,7 @@ async function runLearningCenterCommand(
     if (subcommand === 'pending') {
       writeOutput(chalk.dim(
         '[learn] `pending` is a compatibility alias for /learn ready; '
-        + 'episode-review backlog: /memory reviews.',
+        + 'Memory pipeline health: /memory doctor.',
       ));
     }
     const page = await learning.list({

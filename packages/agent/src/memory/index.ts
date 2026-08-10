@@ -12,7 +12,7 @@
  *   - `@kodax-ai/coding` `prompts/memory-rules.ts` (Phase C) — emits the
  *     LLM teaching text using the resolved memory directory path.
  *   - `@kodax-ai/repl` `interactive/memory-command.ts` (Phase D) —
- *     `/memory list/edit/rebuild` slash commands.
+ *     conversation-first Memory management and `/memory` inspection commands.
  *   - `@kodax-ai/repl` `ui/InkREPL.tsx` (Phase D) — uses
  *     `isAutoManagedMemoryFile` for transcript badge rendering.
  */

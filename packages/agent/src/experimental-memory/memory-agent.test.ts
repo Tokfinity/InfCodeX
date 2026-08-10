@@ -512,6 +512,70 @@ describe('FEATURE_260 MemoryAgent', () => {
     }]);
   });
 
+  it('persists host-handled explicit operations for autonomous review de-duplication', async () => {
+    const digests: PersistedOutcomeDigest[] = [];
+    const session = await createMemoryAgent({
+      controlPlane: controller(),
+      persistOutcomeDigest: async (digest) => {
+        digests.push(digest);
+      },
+    }).startSession({ identity, objective: 'Remember the package manager and continue the task' });
+
+    await session.complete({
+      status: 'succeeded',
+      summary: 'The task completed after the explicit Memory operation.',
+      evidence: [],
+      handledMemoryOperations: [{
+        operation: 'remember',
+        statement: 'This project uses npm.',
+        claimKey: 'project.package-manager',
+        targetRefIds: ['memdir:package-manager.md'],
+      }],
+    });
+
+    expect(digests[0]?.handledMemoryOperations).toEqual([{
+      operation: 'remember',
+      statement: 'This project uses npm.',
+      claimKey: 'project.package-manager',
+      targetRefIds: ['memdir:package-manager.md'],
+    }]);
+  });
+
+  it('keeps safe handled-operation identity when its body cannot enter the digest', async () => {
+    const digests: PersistedOutcomeDigest[] = [];
+    const session = await createMemoryAgent({
+      controlPlane: controller(),
+      persistOutcomeDigest: async (digest) => { digests.push(digest); },
+    }).startSession({ identity, objective: 'Forget two legacy memories safely' });
+
+    await session.complete({
+      status: 'succeeded',
+      summary: 'The legacy memories were forgotten.',
+      evidence: [],
+      handledMemoryOperations: [{
+        operation: 'forget',
+        statement: 'x'.repeat(2_000),
+        claimKey: 'project.legacy.long',
+        targetRefIds: ['memdir:long.md'],
+      }, {
+        operation: 'forget',
+        statement: 'api_key=do-not-copy',
+        targetRefIds: ['memdir:restricted.md'],
+      }],
+    });
+
+    expect(digests[0]?.handledMemoryOperations).toMatchObject([{
+      operation: 'forget',
+      claimKey: 'project.legacy.long',
+      targetRefIds: ['memdir:long.md'],
+    }, {
+      operation: 'forget',
+      targetRefIds: ['memdir:restricted.md'],
+    }]);
+    expect(digests[0]?.handledMemoryOperations?.[0]?.statement).toHaveLength(1_024);
+    expect(digests[0]?.handledMemoryOperations?.[1]).not.toHaveProperty('statement');
+  });
+
   it('does not record exposure when a prompt-safe reminder exceeds the physical token reserve', async () => {
     const multiTokenCharacter = '\u0802';
     const trace: MemoryAgentTraceEvent[] = [];

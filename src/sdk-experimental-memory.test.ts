@@ -2,12 +2,19 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { persistPendingEpisodeReview } from '@kodax-ai/agent';
 
 import {
+  createMemoryAgent,
+  createMemoryControlPlane,
   listPendingEpisodeReviewSummaries,
   type MemoryContextIdentity,
+  type MemoryController,
+  type MemoryAgent,
+  type MemoryManagementAgent,
+  type MemoryManagementController,
+  type MemoryRefFilter,
 } from './sdk-experimental-memory.js';
 import { deriveCodingMemoryReviewIdentities } from './sdk-coding.js';
 
@@ -18,6 +25,64 @@ afterEach(async () => {
 });
 
 describe('@kodax-ai/kodax/experimental-memory review inbox', () => {
+  it('keeps the original public controller and agent interfaces source-compatible', () => {
+    expectTypeOf<keyof MemoryController>().not.toEqualTypeOf<'remember'>();
+    expectTypeOf<keyof MemoryAgent>().toEqualTypeOf<'startSession'>();
+    const legacy = createMemoryAgent({ controlPlane: {} as MemoryController });
+    const managed = createMemoryAgent({ controlPlane: {} as MemoryManagementController });
+    expectTypeOf(legacy).toEqualTypeOf<MemoryAgent>();
+    expectTypeOf(managed).toEqualTypeOf<MemoryManagementAgent>();
+    expect('remember' in legacy).toBe(false);
+  });
+  it('exposes effective remember, list, and forget operations through the MemoryAgent facade', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kodax-sdk-memory-management-'));
+    tempDirs.push(root);
+    const controller = createMemoryControlPlane({
+      cwd: root,
+      memoryRoot: join(root, 'memory'),
+      learningStorePath: join(root, 'learning', 'proposals.json'),
+      discoverSkills: false,
+    });
+    const agent = createMemoryAgent({ controlPlane: controller });
+
+    const remembered = await agent.remember({
+      statement: 'Prefer concise release notes.',
+      claimKind: 'preference',
+      claimKey: 'user.preference.release-notes',
+      evidenceRef: 'sdk:user-request',
+    });
+    const memories = await agent.list();
+    const accepted = memories[0];
+    if (accepted === undefined) throw new Error('expected SDK memory ref');
+    const forgotten = await agent.forget(accepted.handle, accepted.storageFingerprint);
+
+    expect(remembered.status).toBe('remembered');
+    expect(memories).toMatchObject([{
+      body: expect.stringContaining('Prefer concise release notes.'),
+      handle: expect.stringMatching(/^memdir:project:/u),
+      storageFingerprint: expect.stringMatching(/^sha256:/u),
+    }]);
+    expect(forgotten).toMatchObject({ acknowledged: true, operation: 'forget' });
+    expect(await agent.list()).toEqual([]);
+  });
+
+  it('keeps the management list scoped to accepted durable Memory for JavaScript callers', async () => {
+    const listRefs = vi.fn().mockResolvedValue([]);
+    const controller = {
+      listRefs,
+      readRef: vi.fn(),
+      remember: vi.fn(),
+      forgetRef: vi.fn(),
+    } as unknown as MemoryManagementController;
+    const agent = createMemoryAgent({ controlPlane: controller });
+
+    await (agent.list as (filter?: MemoryRefFilter) => Promise<readonly unknown[]>)({
+      kinds: ['project_doc'],
+    });
+
+    expect(listRefs).toHaveBeenCalledWith(expect.objectContaining({ kinds: ['memdir'] }));
+  });
+
   it('reads a persisted review job through the public KodaX SDK facade', async () => {
     const homeDir = await mkdtemp(join(tmpdir(), 'kodax-sdk-memory-'));
     tempDirs.push(homeDir);

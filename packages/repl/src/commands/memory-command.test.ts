@@ -1,23 +1,13 @@
 /**
- * FEATURE_124 (v0.7.43) Phase D — `/memory` slash command tests.
+ * Natural-language-first `/memory` escape-hatch tests.
  *
- * Covers the three sub-commands (list / rebuild / open) plus the
- * unknown-subcommand fallthrough. Uses a per-test `tempHome` +
+ * Covers product-state listing, direct ordinary operations, exceptional
+ * decisions, external opening, and hidden repair compatibility. Uses a per-test `tempHome` +
  * `setAgentConfigHome` override so the assertions never touch the real
  * `~/.kodax/projects/.../memory/` tree.
  *
- * What's covered:
- *   1. `list` with no MEMORY.md emits a setup hint
- *   2. `list` with MEMORY.md prints the index content + topic-file count
- *   3. `rebuild` writes a deterministic MEMORY.md (newest mtime first)
- *      and reports malformed frontmatter as a fallback line
- *   4. `rebuild` is a no-op when the directory is empty
- *   5. `open` prints both paths without writing anything
- *   6. unknown subcommand prints help + does NOT throw
- *
- * What's NOT covered (out of scope for this layer):
- *   - claudecode-shape SP injection (Phase B integration test)
- *   - LLM-side adherence to the prompt taxonomy (Phase E smoke eval)
+ * `MEMORY.md` is tested only as a derived storage artifact; normal list and
+ * natural-language paths use the Memory control plane as source of truth.
  */
 
 import * as fs from 'node:fs';
@@ -42,7 +32,7 @@ import {
 } from '@kodax-ai/agent';
 import { deriveCodingMemoryIdentity, type KodaXOptions } from '@kodax-ai/coding';
 
-import { memoryCommand } from './memory-command.js';
+import { externalOpenInvocation, memoryCommand } from './memory-command.js';
 
 interface CapturedLog {
   lines: string[];
@@ -77,10 +67,8 @@ async function invoke(
   cwd: string,
   callbacks: Partial<MemoryCommandCallbacks> = {},
 ) {
-  // The command type signature requires 4 args but the handler only
-  // reads `args` and `context.runtimeInfo`. Pass empty objects for the
-  // unused callbacks + currentConfig — cast through `never` mirrors
-  // copy-command.test.ts.
+  // Bind the minimal interactive context and optional host callbacks used by
+  // each command case; currentConfig is unused by this command.
   await memoryCommand.handler(
     args,
     buildContext(cwd) as never,
@@ -105,7 +93,7 @@ describe('FEATURE_124 Phase D — /memory command', () => {
     fs.rmSync(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
 
-  it('list with no MEMORY.md prints a setup hint', async () => {
+  it('list with no accepted Memory reports the product state instead of a missing index file', async () => {
     const { log, restore } = captureConsole();
     try {
       await invoke(['list'], cwd);
@@ -113,11 +101,12 @@ describe('FEATURE_124 Phase D — /memory command', () => {
       restore();
     }
 
-    expect(log.contains('per-project memory directory')).toBe(true);
-    expect(log.contains('MEMORY.md does not exist yet')).toBe(true);
+    expect(log.contains('No accepted memories yet')).toBe(true);
+    expect(log.contains('MEMORY.md does not exist yet')).toBe(false);
+    expect(log.contains('LLM will create')).toBe(false);
   });
 
-  it('list with MEMORY.md prints index content + topic file count', async () => {
+  it('list reads accepted topic content without treating MEMORY.md as source of truth', async () => {
     const memoryDir = resolveMemoryRoot(cwd);
     fs.mkdirSync(memoryDir, { recursive: true });
     fs.writeFileSync(
@@ -138,8 +127,98 @@ describe('FEATURE_124 Phase D — /memory command', () => {
       restore();
     }
 
-    expect(log.contains('Senior backend engineer')).toBe(true);
-    expect(log.contains('1 topic file')).toBe(true);
+    expect(log.contains('user_role')).toBe(true);
+    expect(log.contains('Body.')).toBe(true);
+    expect(log.contains('1 accepted across 1 storage scope')).toBe(true);
+  });
+
+  it('remember stores an ordinary explicit Memory immediately and list shows its body', async () => {
+    const { log, restore } = captureConsole();
+    try {
+      await invoke([
+        'remember',
+        '--kind',
+        'procedure',
+        '--key',
+        'project.release.focused-tests',
+        'Use',
+        'focused',
+        'tests',
+        'before',
+        'release.',
+      ], cwd);
+      await invoke(['list'], cwd);
+    } finally {
+      restore();
+    }
+
+    expect(log.contains('Memory remembered')).toBe(true);
+    expect(log.contains('Use focused tests before release.')).toBe(true);
+    expect(log.contains('pending memory proposals')).toBe(false);
+  });
+
+  it('requires the stable displayed handle before forgetting accepted Memory', async () => {
+    const { log, restore } = captureConsole();
+    try {
+      await invoke([
+        'remember',
+        '--kind',
+        'preference',
+        '--key',
+        'user.release-notes.length',
+        'Prefer',
+        'short',
+        'release',
+        'notes.',
+      ], cwd);
+      await invoke(['list'], cwd);
+      const handle = log.lines.join('\n').match(/ref: (memdir:[^\s]+\.md)/u)?.[1];
+      expect(handle).toBeDefined();
+      await invoke(['forget', handle!], cwd);
+      await invoke(['list'], cwd);
+    } finally {
+      restore();
+    }
+
+    expect(log.contains('Memory forgotten')).toBe(true);
+    expect(log.contains('No accepted memories yet')).toBe(true);
+  });
+
+  it('requires an explicit semantic key for slash remember and preserves fact conflicts', async () => {
+    const { log, restore } = captureConsole();
+    try {
+      await invoke(['remember', 'This', 'project', 'uses', 'npm.'], cwd);
+      await invoke([
+        'remember',
+        '--kind',
+        'fact',
+        '--key',
+        'project.package-manager',
+        'This',
+        'project',
+        'uses',
+        'npm.',
+      ], cwd);
+      await invoke([
+        'remember',
+        '--kind',
+        'fact',
+        '--key',
+        'project.package-manager',
+        'This',
+        'project',
+        'uses',
+        'pnpm.',
+      ], cwd);
+      await invoke(['decisions'], cwd);
+    } finally {
+      restore();
+    }
+
+    expect(log.contains('requires --key')).toBe(true);
+    expect(log.contains('Memory remembered')).toBe(true);
+    expect(log.contains('needs your decision')).toBe(true);
+    expect(log.contains('This project uses pnpm.')).toBe(true);
   });
 
   it('rebuild writes MEMORY.md sorted by mtime descending', async () => {
@@ -214,19 +293,47 @@ describe('FEATURE_124 Phase D — /memory command', () => {
     expect(fs.existsSync(resolveMemoryEntrypoint(cwd))).toBe(false);
   });
 
-  it('open prints both paths without writing anything', async () => {
+  it('open launches the storage artifact in an external editor without rewriting it', async () => {
+    await invoke([
+      'remember',
+      '--kind',
+      'procedure',
+      '--key',
+      'project.testing.focused',
+      'Use',
+      'focused',
+      'tests.',
+    ], cwd);
+    const before = fs.readFileSync(resolveMemoryEntrypoint(cwd), 'utf8');
+    const openExternalPath = vi.fn().mockResolvedValue(undefined);
     const { log, restore } = captureConsole();
     try {
-      await invoke(['open'], cwd);
+      await invoke(['open'], cwd, { openExternalPath });
     } finally {
       restore();
     }
 
-    expect(log.contains('open these paths in your editor')).toBe(true);
+    expect(log.contains('opened in your external editor/file browser')).toBe(true);
     expect(log.contains(resolveMemoryEntrypoint(cwd))).toBe(true);
-    expect(log.contains(resolveMemoryRoot(cwd))).toBe(true);
-    // No file was created as a side effect.
-    expect(fs.existsSync(resolveMemoryEntrypoint(cwd))).toBe(false);
+    expect(openExternalPath).toHaveBeenCalledWith(resolveMemoryEntrypoint(cwd));
+    expect(fs.readFileSync(resolveMemoryEntrypoint(cwd), 'utf8')).toBe(before);
+  });
+
+  it('open launches the current external Memory directory even before the first memory exists', async () => {
+    const openExternalPath = vi.fn().mockResolvedValue(undefined);
+
+    await invoke(['open'], cwd, { openExternalPath });
+
+    expect(openExternalPath).toHaveBeenCalledWith(resolveMemoryRoot(cwd));
+    expect(fs.statSync(resolveMemoryRoot(cwd)).isDirectory()).toBe(true);
+  });
+
+  it('builds a Windows external-open invocation without PowerShell argument ambiguity', () => {
+    const target = 'C:\\Users\\ADMIN\\.kodax\\projects\\project with spaces\\memory\\MEMORY.md';
+    const invocation = externalOpenInvocation('win32', target);
+
+    expect(invocation.executable.toLowerCase()).toMatch(/\\explorer\.exe$/);
+    expect(invocation.args).toEqual([target]);
   });
 
   it('unknown subcommand prints help and does not throw', async () => {
@@ -238,7 +345,7 @@ describe('FEATURE_124 Phase D — /memory command', () => {
     }
 
     expect(log.contains('unknown subcommand: frobnicate')).toBe(true);
-    expect(log.contains('Inspect or rebuild per-project memory')).toBe(true);
+    expect(log.contains('View and manage durable Memory')).toBe(true);
   });
 
   it('help subcommand prints usage', async () => {
@@ -249,7 +356,8 @@ describe('FEATURE_124 Phase D — /memory command', () => {
       restore();
     }
 
-    expect(log.contains('/memory rebuild')).toBe(true);
+    expect(log.contains('/memory remember')).toBe(true);
+    expect(log.contains('/memory rebuild')).toBe(false);
     expect(log.contains('/memory open')).toBe(true);
   });
 
@@ -265,7 +373,7 @@ describe('FEATURE_124 Phase D — /memory command', () => {
       restore();
     }
 
-    expect(log.contains('pending memory proposals')).toBe(true);
+    expect(log.contains('decisions that need you')).toBe(true);
     expect(log.contains('memory:p-memory-command')).toBe(true);
     expect(log.contains('approved and applied memory:p-memory-command')).toBe(true);
     const store = await readLearningProposalStore(resolveLearningProposalStore(cwd));
@@ -326,7 +434,7 @@ describe('FEATURE_124 Phase D — /memory command', () => {
     }
 
     expect(log.contains('was not applied')).toBe(true);
-    expect(log.contains('MEMORY.md changed after preview')).toBe(true);
+    expect(log.contains('changed after preview')).toBe(true);
     const store = await readLearningProposalStore(resolveLearningProposalStore(cwd));
     expect(store.proposals[0]?.status).toBe('pending');
   });
@@ -353,6 +461,7 @@ describe('FEATURE_124 Phase D — /memory command', () => {
 
     const { log, restore } = captureConsole();
     try {
+      await invoke(['show', 'memory:p-review-reject'], cwd, callbacks);
       await invoke(['reject', 'memory:p-review-reject', 'wrong', 'memory'], cwd, callbacks);
     } finally {
       restore();
@@ -364,36 +473,57 @@ describe('FEATURE_124 Phase D — /memory command', () => {
     expect(received?.userFeedback).toBe('wrong memory');
   });
 
-  it('manual acceptance path covers pending, show, reject, approve, and curate', async () => {
+  it('manual acceptance path covers pending, show, reject, and approve', async () => {
     await upsertLearningProposal(resolveLearningProposalStore(cwd), memoryProposal('p-accept-apply'));
     await upsertLearningProposal(resolveLearningProposalStore(cwd), memoryProposal('p-accept-reject'));
-    const memoryDir = resolveMemoryRoot(cwd);
-    fs.mkdirSync(memoryDir, { recursive: true });
-    const duplicateBody = '---\nname: Duplicate note\ndescription: Same content\ntype: project\n---\n\nSame body.\n';
-    fs.writeFileSync(path.join(memoryDir, 'duplicate_a.md'), duplicateBody, 'utf8');
-    fs.writeFileSync(path.join(memoryDir, 'duplicate_b.md'), duplicateBody, 'utf8');
 
     const { log, restore } = captureConsole();
     try {
       await invoke(['pending'], cwd);
       await invoke(['show', 'memory:p-accept-apply'], cwd);
+      await invoke(['show', 'memory:p-accept-reject'], cwd);
       await invoke(['reject', 'memory:p-accept-reject', 'not', 'useful'], cwd);
       await invoke(['approve', 'memory:p-accept-apply'], cwd);
-      await invoke(['curate'], cwd);
     } finally {
       restore();
     }
 
-    expect(log.contains('pending memory proposals')).toBe(true);
+    expect(log.contains('decisions that need you')).toBe(true);
     expect(log.contains('memory:p-accept-apply')).toBe(true);
     expect(log.contains('rejected memory:p-accept-reject')).toBe(true);
     expect(log.contains('approved and applied memory:p-accept-apply')).toBe(true);
-    expect(log.contains('governance report')).toBe(true);
-    expect(log.contains('duplicate')).toBe(true);
     const store = await readLearningProposalStore(resolveLearningProposalStore(cwd));
     const statuses = new Map(store.proposals.map((proposal) => [proposal.proposalId, proposal.status]));
     expect(statuses.get('p-accept-apply')).toBe('approved');
     expect(statuses.get('p-accept-reject')).toBe('rejected');
+  });
+
+  it('keeps accepted Memory and decision number namespaces unambiguous', async () => {
+    await invoke([
+      'remember',
+      '--kind',
+      'preference',
+      '--key',
+      'user.release-notes.length',
+      'Prefer',
+      'compact',
+      'release',
+      'notes.',
+    ], cwd);
+    await upsertLearningProposal(resolveLearningProposalStore(cwd), memoryProposal('p-number-space'));
+
+    const { log, restore } = captureConsole();
+    try {
+      await invoke(['show', '1'], cwd);
+      await invoke(['show', 'memory:1'], cwd);
+      await invoke(['show', 'decision:1'], cwd);
+    } finally {
+      restore();
+    }
+
+    expect(log.contains('Memory or decision not found: 1')).toBe(true);
+    expect(log.contains('Prefer compact release notes.')).toBe(true);
+    expect(log.contains('memory:p-number-space')).toBe(true);
   });
 });
 
@@ -974,9 +1104,9 @@ describe('FEATURE_289 §3.5 — /memory status', () => {
       restore();
     }
 
-    expect(log.contains('compatibility alias for /memory proposals')).toBe(true);
-    expect(log.contains('episode-review jobs: /memory reviews')).toBe(true);
-    expect(log.contains('proposed Memory mutations, not episode-review jobs')).toBe(true);
+    expect(log.contains('compatibility alias for /memory decisions')).toBe(true);
+    expect(log.contains('episode-review jobs: /memory reviews')).toBe(false);
+    expect(log.contains('decisions that need you')).toBe(true);
   });
 });
 

@@ -52,7 +52,8 @@ import {
   readRunnerRecoveryTranscript,
   registerActiveRootQueueRoute,
   type MemoryContextIdentity,
-  type MemoryController,
+  type MemoryManagementController,
+  type KodaXHandledMemoryOperation,
 } from '@kodax-ai/agent';
 import {
   createMemoryAgent,
@@ -76,7 +77,6 @@ import {
 import {
   deriveCodingMemoryIdentity,
   drainCodingMemoryReviewInbox,
-  maybeReviewMemoryFeedbackFromPrompt,
   maybeRunMemoryMaintenanceWindow,
   persistMemoryOutcomeToSession,
 } from '../memory-runtime.js';
@@ -91,8 +91,8 @@ import {
 } from '../tools/memory-recall.js';
 import {
   createMemoryIntentBinding,
+  extractPresentedMemoryTargetRefs,
   MEMORY_INTENT_TOOL_NAME,
-  type AcceptedMemoryIntent,
 } from '../tools/memory-intent.js';
 import type {
   KodaXHarnessProfile,
@@ -629,16 +629,18 @@ async function saveManagedRunBoundary(
 }
 
 interface RunnerMemoryRuntime {
-  readonly controller: MemoryController;
+  readonly controller: MemoryManagementController;
   readonly identity: MemoryContextIdentity;
   readonly session: MemorySession;
   currentUserTurn: {
     readonly text: string;
     readonly turnId: string;
   };
+  presentationMessages: readonly KodaXMessage[];
+  readonly preferredReviewJobRef: { current: string | undefined };
   reviewDrain: Promise<void>;
-  acceptedIntent?: AcceptedMemoryIntent;
   observationSequence: number;
+  readonly handledMemoryOperations: KodaXHandledMemoryOperation[];
   finished: boolean;
 }
 
@@ -674,6 +676,7 @@ async function startRunnerMemoryRuntime(
   }
   const identity = options.context?.memoryIdentity
     ?? deriveCodingMemoryIdentity(options, resolveExecutionCwd(options.context), sessionId);
+  const preferredReviewJobRef: { current: string | undefined } = { current: undefined };
   try {
     const controller = createMemoryControlPlane({
       cwd: resolveExecutionCwd(options.context),
@@ -715,7 +718,7 @@ async function startRunnerMemoryRuntime(
         if (digest.visibility === 'prompt_safe'
           && options.session?.storage !== undefined
           && branchEpoch !== undefined) {
-          await persistPendingEpisodeReview(identity, digest, {
+          const persisted = await persistPendingEpisodeReview(identity, digest, {
             expectedBranchEpoch: branchEpoch,
             persistOwner: async (entry) => persistMemoryOutcomeToSession(
               options,
@@ -724,6 +727,7 @@ async function startRunnerMemoryRuntime(
               { jobId: entry.jobId },
             ),
           });
+          preferredReviewJobRef.current = persisted.entry.jobId;
           return;
         }
         await persistMemoryOutcomeToSession(options, sessionId, digest);
@@ -779,8 +783,11 @@ async function startRunnerMemoryRuntime(
           text: options.context?.rawUserInput?.trim() || prompt,
           turnId: episodeId,
         },
+        presentationMessages: options.session?.initialMessages ?? [],
+        preferredReviewJobRef,
         reviewDrain,
         observationSequence: 0,
+        handledMemoryOperations: [],
         finished: false,
       },
       options: {
@@ -816,46 +823,31 @@ async function finishRunnerMemoryRuntime(
   const checks = collectVerifiedCheckFacts(outcome.artifactLedger ?? []);
   try {
     await runtime.session.complete({
-      status: outcome.status,
-      summary: outcome.summary,
-      evidence: [
-        ...(runtime.acceptedIntent === undefined
-          ? []
-          : [{
-              ref: runtime.acceptedIntent.evidenceRef,
-              requestedGrade: 'authoritative' as const,
-              source: 'user' as const,
-              observedAt: completedAt,
-            }]),
-        ...(outcome.status === 'cancelled'
-          ? []
-          : [
-            ...(checks.length > 0
-              ? checks.map((check) => ({
-                    ref: check.ref,
-                    requestedGrade: 'verified' as const,
-                    source: check.source,
-                    verdict: check.verdict,
-                    observedAt: check.observedAt,
-                  }))
-              : [{
-                  ref: `host:run-terminal:${sessionId}`,
-                  requestedGrade: 'observed' as const,
-                  source: 'host' as const,
-                  observedAt: completedAt,
-                }]),
-            ]),
-      ],
-      ...(runtime.acceptedIntent === undefined
-        ? {}
-        : {
-            memoryIntent: {
-              operation: runtime.acceptedIntent.operation,
-              evidenceRef: runtime.acceptedIntent.evidenceRef,
-              candidateStatement: runtime.acceptedIntent.candidateStatement,
-              userQuote: runtime.acceptedIntent.userQuote,
-            },
-          }),
+        status: outcome.status,
+        summary: outcome.summary,
+        evidence: [
+          ...(outcome.status === 'cancelled'
+            ? []
+            : [
+              ...(checks.length > 0
+                ? checks.map((check) => ({
+                      ref: check.ref,
+                      requestedGrade: 'verified' as const,
+                      source: check.source,
+                      verdict: check.verdict,
+                      observedAt: check.observedAt,
+                    }))
+                : [{
+                    ref: `host:run-terminal:${sessionId}`,
+                    requestedGrade: 'observed' as const,
+                    source: 'host' as const,
+                    observedAt: completedAt,
+                  }]),
+              ]),
+        ],
+        ...(runtime.handledMemoryOperations.length === 0
+          ? {}
+          : { handledMemoryOperations: [...runtime.handledMemoryOperations] }),
     });
     await runtime.session.close();
   } catch (error) {
@@ -873,6 +865,7 @@ async function finishRunnerMemoryRuntime(
       // FEATURE_289 §3.1: bound the decide phase so a shutdown-window drain
       // releases its claim via defer instead of fossilizing mid-judge.
       Date.now() + 15_000,
+      runtime.preferredReviewJobRef.current,
     ).then(() => undefined),
   ).catch((error: unknown) => {
     emitResilienceDebug('[memory:review-inbox:drain-error]', {
@@ -918,7 +911,6 @@ export async function runManagedTaskViaRunner(
   );
   try {
   await maybeRunMemoryMaintenanceWindow(effectiveOptions);
-  await maybeReviewMemoryFeedbackFromPrompt(effectiveOptions, prompt);
   // Fire onSessionStart early so REPL / CLI listeners bound to session
   // init trigger for AMA runs the same way they trigger for SA runs.
   // Ad-hoc askUser callers without a stable host session id get a run-local id:
@@ -1317,12 +1309,11 @@ async function runManagedTaskViaRunnerInner(
         throughSequence: memoryRuntime.observationSequence,
       }),
     );
-    substrateBaseCtx.memoryIntent = createMemoryIntentBinding({
+    substrateBaseCtx.memoryManagementIntent = createMemoryIntentBinding({
       getCurrentUserTurn: () => memoryRuntime.currentUserTurn,
-      sessionId: resolvedSessionId,
-      onAccepted: (intent) => {
-        memoryRuntime.acceptedIntent = intent;
-      },
+      controlPlane: memoryRuntime.controller,
+      getPresentedTargets: () => extractPresentedMemoryTargetRefs(memoryRuntime.presentationMessages),
+      onHandledOperation: (operation) => memoryRuntime.handledMemoryOperations.push(operation),
     });
   }
   // FEATURE_097 (v0.7.34) — todo store for the Scout-seeded plan list.
@@ -2062,6 +2053,7 @@ async function runManagedTaskViaRunnerInner(
     ...(canonicalManagedContext ? [canonicalManagedContext] : []),
     currentUserMessage,
   ];
+  if (memoryRuntime !== undefined) memoryRuntime.presentationMessages = runnerInput;
 
   // Load the compaction hook once per run. `intelligentCompact` runs
   // before every provider.stream call; the Runner-driven path routes
@@ -2379,6 +2371,7 @@ async function runManagedTaskViaRunnerInner(
     timestamp: string,
     transcript: readonly KodaXMessage[],
   ): Promise<KodaXMessage[]> => {
+    if (memoryRuntime !== undefined) memoryRuntime.presentationMessages = transcript;
     if (prompts.length > 0) await persistManagedBoundary(transcript);
     const preparedTurn = prompts.length > 0
       ? liveTurnController.prepareTurn({
@@ -2770,6 +2763,7 @@ async function runManagedTaskViaRunnerInner(
       preparedIdleTurn?.start();
       preparedIdleTurn = undefined;
       if (memoryRuntime !== undefined) {
+        memoryRuntime.presentationMessages = previousRunResult.messages;
         memoryRuntime.currentUserTurn = {
           text: contents.join('\n'),
           turnId: liveTurnController.currentTurnId(),

@@ -1,49 +1,42 @@
 /**
- * FEATURE_124 (v0.7.43) Phase D — `/memory` slash command.
+ * Natural-language-first Memory escape hatch.
  *
- * Per-project memory subsystem inspection + maintenance. Mirrors
- * claudecode `/memory` semantics (list / rebuild / open) over the
- * substrate in `@kodax-ai/agent` (Phase A) so the user has a stable
- * escape hatch when the LLM-managed index drifts or gets corrupted.
+ * The ordinary product surface is conversation. These commands expose accepted
+ * Memory, exceptional decisions, diagnostics, and external storage inspection.
  *
- * Subcommands:
- *   /memory status           - show capture/review pipeline health
- *   /memory reviews [limit]  - list persisted episode-review jobs
- *   /memory proposals        - list actionable Memory proposals
- *   /memory pending          - compatibility alias for `proposals`
- *   /memory                  — alias for `list`
- *   /memory list             — show MEMORY.md + file count + memory dir
- *   /memory rebuild          — regenerate MEMORY.md from topic frontmatter
- *                              (sorted by mtime descending — newest on top)
- *   /memory open             — print MEMORY.md path so the user can open
- *                              it in their editor (the REPL doesn't ship
- *                              an in-process editor — KodaX is CLI-first)
- *   /memory help             — show usage
+ * Compatibility-only diagnostics (`status`, `reviews`, `rebuild`) stay
+ * callable but are intentionally absent from normal help.
  *
  * Rebuild contract: ALWAYS preserves topic files; ONLY rewrites
  * `MEMORY.md`. Files whose frontmatter is missing or malformed get a
  * conservative `[<basename>](<file>) — <basename>` line and a stderr
  * warning so the user can spot and fix them rather than silently lose
  * them. `MEMORY.md` itself is excluded from the scan (it's not a topic
- * file). Files outside the configured memory dir are NEVER touched —
- * this is the only filesystem write the command performs.
+ * file). Files outside the configured memory dir are NEVER touched by
+ * the rebuild branch.
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { spawn } from 'node:child_process';
 
 import chalk from 'chalk';
 
 import {
   createMemoryControlPlane,
   listPendingEpisodeReviewSummaries,
+  memoryMutationHandle,
+  memoryProposalRevision,
   parseMemoryFile,
-  resolveMemoryEntrypoint,
   resolveMemoryRoot,
+  resolveScopedMemoryRoot,
   type MemoryActionProposal,
   type MemoryApplyResult,
-  type MemoryGovernanceReport,
+  type MemoryClaimKind,
+  type MemoryController,
+  type MemoryManagementController,
   type MemoryRejectResult,
+  type MemoryRememberResult,
   type MemoryType,
   type PendingEpisodeReviewSummary,
 } from '@kodax-ai/agent';
@@ -54,16 +47,31 @@ import {
   type KodaXOptions,
 } from '@kodax-ai/coding';
 
-import type { Command } from './types.js';
+import type { Command, CommandCallbacks } from './types.js';
 import type { InteractiveContext } from '../interactive/context.js';
 const PREVIEW_FINGERPRINT_TTL_MS = 15 * 60 * 1000;
 
 interface ProposalPreviewCacheEntry {
   readonly fingerprints: Readonly<Record<string, string>>;
+  readonly revision: string;
   readonly createdAtMs: number;
 }
 
 const proposalPreviewFingerprints = new Map<string, ProposalPreviewCacheEntry>();
+
+const PUBLIC_MEMORY_COMMANDS = [
+  ['/memory', 'Summarize accepted memories'],
+  ['/memory list', 'Same as `/memory`'],
+  ['/memory remember --key <key> [--kind <kind>] <text>', 'Store one explicit claim'],
+  ['/memory forget <ref>', 'Forget one exact memory ref'],
+  ['/memory decisions', 'Show mutations that need your decision'],
+  ['/memory show <ref>', 'Show one memory or decision'],
+  ['/memory approve <ref>', 'Approve one exact decision'],
+  ['/memory reject <ref>', 'Reject one exact decision'],
+  ['/memory doctor', 'Diagnose background learning'],
+  ['/memory open', 'Open Memory externally'],
+  ['/memory help', 'Show this help'],
+] as const;
 
 async function listCurrentProjectEpisodeReviews(
   options: KodaXOptions,
@@ -120,8 +128,8 @@ function readTopicFiles(memoryDir: string): TopicFile[] {
   try {
     entries = fs.readdirSync(memoryDir, { withFileTypes: true });
   } catch (err) {
-    // ENOENT = "memory dir not created yet" — expected when the LLM
-    // has never written a memory. Surface any other failure (EPERM,
+    // ENOENT is expected before the first accepted Memory. Surface any
+    // other failure (EPERM,
     // ENOTDIR, etc.) so the user notices filesystem problems instead
     // of seeing a silent "0 topic files" — per project rule "NEVER
     // silently swallow errors" (CLAUDE.md).
@@ -178,7 +186,75 @@ function buildIndexLines(files: TopicFile[]): string[] {
   return files.map((f) => `- [${f.title}](${f.filename}) — ${f.description}`);
 }
 
-async function listMemory(memoryDir: string, entrypointPath: string): Promise<void> {
+async function listAcceptedMemory(controller: MemoryController): Promise<void> {
+  const refs = await controller.listRefs({
+    kinds: ['memdir'],
+    lifecycles: ['active', 'trusted'],
+  });
+  console.log(chalk.cyan('\n[memory] accepted Memory'));
+  if (refs.length === 0) {
+    console.log(chalk.dim('  No accepted memories yet.'));
+  } else {
+    const visible = refs.slice(0, 50);
+    for (let index = 0; index < visible.length; index += 1) {
+      const ref = visible[index]!;
+      const snapshot = await controller.readRef(ref);
+      console.log(`  ${chalk.cyan(`[memory:${index + 1}]`)} ${ref.title ?? ref.id}`);
+      console.log(chalk.dim(`      ref: ${memoryMutationHandle(ref)}`));
+      console.log(`      ${parseMemoryFile(snapshot.body).body.trim().replace(/\s+/g, ' ').slice(0, 360)}`);
+    }
+    if (visible.length < refs.length) {
+      console.log(chalk.dim(`  Showing ${visible.length} of ${refs.length}.`));
+    }
+  }
+  const storageRoots = [...new Set(refs.flatMap((ref) => (
+    ref.storageUri === undefined ? [] : [path.dirname(ref.storageUri)]
+  )))];
+  console.log(chalk.dim(`\n  ${refs.length} accepted across ${storageRoots.length} storage scope${storageRoots.length === 1 ? '' : 's'}`));
+  for (const storageRoot of storageRoots) console.log(chalk.dim(`  storage: ${storageRoot}`));
+  console.log();
+}
+
+interface ParsedRememberCommand {
+  readonly statement: string;
+  readonly claimKind: MemoryClaimKind;
+  readonly claimKey?: string;
+  readonly error?: string;
+}
+
+function parseRememberCommand(args: readonly string[]): ParsedRememberCommand {
+  let claimKind: MemoryClaimKind = 'fact';
+  let claimKey: string | undefined;
+  const statementParts: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const part = args[index];
+    if (part === '--kind') {
+      const value = args[index + 1];
+      if (value !== 'fact' && value !== 'policy' && value !== 'preference' && value !== 'procedure') {
+        return { statement: '', claimKind, error: '--kind must be fact, preference, policy, or procedure' };
+      }
+      claimKind = value;
+      index += 1;
+      continue;
+    }
+    if (part === '--key') {
+      claimKey = args[index + 1]?.trim();
+      if (claimKey === undefined || claimKey.length === 0) {
+        return { statement: '', claimKind, error: '--key requires a stable semantic identifier' };
+      }
+      index += 1;
+      continue;
+    }
+    if (part !== undefined) statementParts.push(part);
+  }
+  return {
+    statement: statementParts.join(' ').trim(),
+    claimKind,
+    ...(claimKey === undefined ? {} : { claimKey }),
+  };
+}
+
+async function listStorageIndex(memoryDir: string, entrypointPath: string): Promise<void> {
   console.log(chalk.cyan('\n[memory] per-project memory directory'));
   console.log(chalk.dim(`  ${memoryDir}`));
 
@@ -201,11 +277,11 @@ async function listMemory(memoryDir: string, entrypointPath: string): Promise<vo
   }
 
   if (!indexExists) {
-    console.log(chalk.yellow('\n  MEMORY.md does not exist yet.'));
+    console.log(chalk.yellow('\n  Derived MEMORY.md index does not exist.'));
     if (files.length > 0) {
       console.log(chalk.dim('  Run `/memory rebuild` to seed it from existing topic files.'));
     } else {
-      console.log(chalk.dim('  The LLM will create it on first save — no action needed.'));
+      console.log(chalk.dim('  This is not evidence that accepted Memory is missing; use `/memory list`.'));
     }
     console.log();
     return;
@@ -235,7 +311,7 @@ async function statusMemory(
   cwd: string,
 ): Promise<void> {
   // Section 1: memory directory stats (reuses the existing list path).
-  await listMemory(memoryDir, entrypointPath);
+  await listStorageIndex(memoryDir, entrypointPath);
 
   // Section 2: this-session pipeline counts from the session lineage.
   // Receipts exist only for COMPLETED reviews, so pending counts must
@@ -476,7 +552,7 @@ async function rebuildMemory(memoryDir: string, entrypointPath: string): Promise
   if (!dirExists) {
     console.log(chalk.yellow('\n[memory] memory directory does not exist yet — nothing to rebuild.'));
     console.log(chalk.dim(`  ${memoryDir}`));
-    console.log(chalk.dim('  The LLM will create both the directory and MEMORY.md on first save.\n'));
+    console.log(chalk.dim('  This repairs a derived index only; use `/memory list` for accepted Memory.\n'));
     return;
   }
 
@@ -508,16 +584,68 @@ async function rebuildMemory(memoryDir: string, entrypointPath: string): Promise
   console.log();
 }
 
-function openMemory(memoryDir: string, entrypointPath: string): void {
-  console.log(chalk.cyan('\n[memory] open these paths in your editor:'));
-  console.log(chalk.dim('  index :'), entrypointPath);
-  console.log(chalk.dim('  dir   :'), memoryDir);
-  console.log(
-    chalk.dim(
-      '\n  (No in-REPL editor is provided — open the file in your usual editor.\n' +
-        '   Use `/memory rebuild` after manual edits if you renamed any topic file.)\n',
-    ),
-  );
+async function openMemory(
+  controller: MemoryController,
+  defaultMemoryRoot: string,
+  token: string | undefined,
+  openExternalPath?: (targetPath: string) => Promise<void>,
+): Promise<void> {
+  const refs = await controller.listRefs({ kinds: ['memdir'], lifecycles: ['active', 'trusted'] });
+  const selected = token === undefined ? undefined : await resolveAcceptedRef(controller, token, true);
+  if (token !== undefined && selected === undefined) {
+    console.log(chalk.yellow('\n[memory] choose one memory:<number> or exact ref from `/memory list`.\n'));
+    return;
+  }
+  const storagePaths = [...new Set((selected === undefined ? refs : [selected])
+    .flatMap((ref) => ref.storageUri === undefined ? [] : [ref.storageUri]))];
+  const storageRoots = [...new Set(storagePaths.map((storagePath) => path.dirname(storagePath)))];
+  if (selected === undefined && storageRoots.length > 1) {
+    console.log(chalk.yellow('\n[memory] accepted Memory spans multiple scopes; choose one item to open:'));
+    for (let index = 0; index < refs.length; index += 1) {
+      console.log(chalk.dim(`  /memory open memory:${index + 1}  ${refs[index]?.title ?? refs[index]?.id}`));
+    }
+    console.log();
+    return;
+  }
+  const targetPath = selected?.storageUri
+    ?? (storageRoots[0] === undefined
+      ? defaultMemoryRoot
+      : fs.existsSync(path.join(storageRoots[0], 'MEMORY.md'))
+        ? path.join(storageRoots[0], 'MEMORY.md')
+        : storageRoots[0]);
+  if (!fs.existsSync(targetPath) && targetPath === defaultMemoryRoot) {
+    fs.mkdirSync(targetPath, { recursive: true });
+  }
+  if (openExternalPath !== undefined) await openExternalPath(targetPath);
+  else await launchExternalPath(targetPath);
+  console.log(chalk.green('\n[memory] opened in your external editor/file browser.'));
+  console.log(chalk.dim(`  ${targetPath}\n`));
+}
+
+async function launchExternalPath(targetPath: string): Promise<void> {
+  const { executable, args } = externalOpenInvocation(process.platform, targetPath);
+  await new Promise<void>((resolveOpen, rejectOpen) => {
+    const child = spawn(executable, args, { detached: true, stdio: 'ignore', windowsHide: true });
+    child.once('error', rejectOpen);
+    child.once('close', (code) => {
+      if (code === 0) resolveOpen();
+      else rejectOpen(new Error(`external opener exited with code ${code ?? 'unknown'}`));
+    });
+    child.unref();
+  });
+}
+
+export function externalOpenInvocation(
+  platform: NodeJS.Platform,
+  targetPath: string,
+): { readonly executable: string; readonly args: readonly string[] } {
+  if (platform === 'win32') {
+    return {
+      executable: path.join(process.env.SystemRoot ?? 'C:\\Windows', 'explorer.exe'),
+      args: [targetPath],
+    };
+  }
+  return { executable: platform === 'darwin' ? 'open' : 'xdg-open', args: [targetPath] };
 }
 
 function proposalLabel(proposal: MemoryActionProposal): string {
@@ -526,16 +654,23 @@ function proposalLabel(proposal: MemoryActionProposal): string {
 }
 
 function printMemoryInbox(proposals: readonly MemoryActionProposal[]): void {
-  console.log(chalk.cyan('\n[memory] pending memory proposals'));
-  console.log(chalk.dim('  These are proposed Memory mutations, not episode-review jobs.'));
+  console.log(chalk.cyan('\n[memory] decisions that need you'));
   if (proposals.length === 0) {
     console.log(chalk.dim('  (none)\n'));
     return;
   }
-  for (const proposal of proposals) {
-    console.log(`  ${chalk.cyan(proposal.id)} ${chalk.dim(`[${proposal.action}]`)} ${proposalLabel(proposal)}`);
+  for (let index = 0; index < proposals.length; index += 1) {
+    const proposal = proposals[index]!;
+    console.log(`  ${chalk.cyan(`[decision:${index + 1}]`)} ${proposal.preview.summary}`);
+    console.log(chalk.dim(`      ${proposalLabel(proposal)}; risk=${proposal.risk}`));
+    console.log(chalk.dim(`      why: ${proposal.rationale}`));
+    if (proposal.preview.diff !== undefined) {
+      const candidate = parseMemoryFile(proposal.preview.diff).body.trim().replace(/\s+/g, ' ');
+      if (candidate.length > 0) console.log(`      proposed: ${candidate.slice(0, 360)}`);
+    }
+    console.log(chalk.dim(`      ref: ${proposal.id}`));
   }
-  console.log(chalk.dim('\n  Use /memory show <id>, /memory approve <id>, or /memory reject <id>.\n'));
+  console.log(chalk.dim('\n  Use /memory show decision:<number>, then approve or reject the exact decision ref shown.\n'));
 }
 
 function printMemoryProposal(proposal: MemoryActionProposal): void {
@@ -593,70 +728,235 @@ function printRejectResult(result: MemoryRejectResult): void {
   console.log();
 }
 
-function printGovernanceReport(report: MemoryGovernanceReport): void {
-  console.log(chalk.cyan(`\n[memory] governance report ${report.reportId}`));
-  for (const warning of report.warnings) {
-    console.log(chalk.yellow(`  warning: ${warning}`));
-  }
-  for (const finding of report.findings) {
-    console.log(`  ${chalk.dim(`[${finding.severity}]`)} ${finding.kind}: ${finding.summary}`);
-    if (finding.refIds.length > 0) {
-      console.log(chalk.dim(`    refs: ${finding.refIds.join(', ')}`));
-    }
+function printHelp(): void {
+  console.log(chalk.cyan('\n/memory - View and manage durable Memory'));
+  for (const [usage, summary] of PUBLIC_MEMORY_COMMANDS) {
+    console.log(chalk.dim(`  ${usage.padEnd(48)}${summary}`));
   }
   console.log();
 }
 
-function printHelp(): void {
-  console.log(chalk.cyan('\n/memory - Inspect or rebuild per-project memory'));
-  console.log(chalk.dim('  /memory                 List MEMORY.md + memory directory'));
-  console.log(chalk.dim('  /memory list            Same as `/memory`'));
-  console.log(chalk.dim('  /memory status          Show pipeline health: digests, receipts, backlog, reviewer'));
-  console.log(chalk.dim('  /memory reviews [limit] List pending episode-review jobs (default 20)'));
-  console.log(chalk.dim('  /memory proposals       List actionable memory proposals'));
-  console.log(chalk.dim('  /memory pending         Compatibility alias for `/memory proposals`'));
-  console.log(chalk.dim('  /memory show <id>       Preview a memory proposal'));
-  console.log(chalk.dim('  /memory approve <id>    Approve and apply a memory proposal'));
-  console.log(chalk.dim('  /memory reject <id>     Reject a memory proposal'));
-  console.log(chalk.dim('  /memory curate          Report duplicate/stale/quarantined refs'));
-  console.log(chalk.dim('  /memory rebuild         Regenerate MEMORY.md from topic frontmatter'));
-  console.log(chalk.dim('  /memory open            Print paths so you can open them in your editor'));
-  console.log(chalk.dim('  /memory help            Show this help'));
-  console.log();
+function printRememberResult(result: MemoryRememberResult): void {
+  if (result.status === 'remembered') {
+    console.log(chalk.green(`\n[memory] Memory remembered: ${result.changedRefIds.join(', ')}.\n`));
+    return;
+  }
+  if (result.status === 'updated') {
+    console.log(chalk.green(`\n[memory] Memory updated: ${result.changedRefIds.join(', ')}.\n`));
+    return;
+  }
+  if (result.status === 'already_known') {
+    console.log(chalk.dim(`\n[memory] Already remembered: ${result.changedRefIds.join(', ')}.\n`));
+    return;
+  }
+  if (result.status === 'needs_review' && result.proposalIds.length > 0) {
+    console.log(chalk.yellow(
+      `\n[memory] This claim conflicts with existing Memory and needs your decision: ${result.proposalIds.join(', ')}.\n`
+      + 'Use `/memory decisions` to inspect it, then approve or reject it.\n',
+    ));
+    return;
+  }
+  console.log(chalk.yellow(`\n[memory] Memory was not changed: ${result.reason ?? result.status}.\n`));
+}
+
+async function resolveAcceptedRef(
+  controller: MemoryController,
+  token: string | undefined,
+  allowOrdinal = false,
+) {
+  if (token === undefined) return undefined;
+  const refs = await controller.listRefs({
+    kinds: ['memdir'],
+    lifecycles: ['active', 'trusted'],
+  });
+  const numbered = /^memory:([1-9]\d*)$/.exec(token);
+  if (allowOrdinal && numbered !== null) return refs[Number(numbered[1]) - 1];
+  return refs.find((ref) => memoryMutationHandle(ref) === token || ref.id === token);
+}
+
+async function resolveProposal(
+  controller: MemoryController,
+  token: string | undefined,
+  allowOrdinal = false,
+): Promise<MemoryActionProposal | undefined> {
+  if (token === undefined) return undefined;
+  const numbered = /^decision:([1-9]\d*)$/.exec(token);
+  if (allowOrdinal && numbered !== null) return (await controller.listInbox())[Number(numbered[1]) - 1];
+  return controller.showProposal(token);
 }
 
 function printDetailedHelp(): void {
-  console.log(chalk.bold('\n/memory - Inspect or rebuild project memory\n'));
+  console.log(chalk.bold('\n/memory - View and manage durable Memory\n'));
   console.log('Usage:');
-  console.log(chalk.cyan('  /memory                 ') + chalk.dim('Show MEMORY.md + topic file count'));
-  console.log(chalk.cyan('  /memory list            ') + chalk.dim('Alias for `/memory`'));
-  console.log(chalk.cyan('  /memory status          ') + chalk.dim('Show pipeline health + review backlog diagnosis'));
-  console.log(chalk.cyan('  /memory reviews [limit] ') + chalk.dim('List pending episode-review jobs (default 20)'));
-  console.log(chalk.cyan('  /memory proposals       ') + chalk.dim('List actionable memory proposals'));
-  console.log(chalk.cyan('  /memory pending         ') + chalk.dim('Compatibility alias for `/memory proposals`'));
-  console.log(chalk.cyan('  /memory show <id>       ') + chalk.dim('Preview a memory proposal'));
-  console.log(chalk.cyan('  /memory approve <id>    ') + chalk.dim('Approve and apply a memory proposal'));
-  console.log(chalk.cyan('  /memory reject <id>     ') + chalk.dim('Reject a memory proposal'));
-  console.log(chalk.cyan('  /memory curate          ') + chalk.dim('Report duplicate/stale/quarantined refs'));
-  console.log(chalk.cyan('  /memory rebuild         ') + chalk.dim('Regenerate MEMORY.md (newest first by mtime)'));
-  console.log(chalk.cyan('  /memory open            ') + chalk.dim('Print the index + dir paths for editor use'));
-  console.log(chalk.cyan('  /memory help            ') + chalk.dim('Show this help\n'));
+  for (const [usage, summary] of PUBLIC_MEMORY_COMMANDS) {
+    console.log(chalk.cyan(`  ${usage.padEnd(48)}`) + chalk.dim(summary));
+  }
   console.log('Description:');
   console.log(
     chalk.dim(
-      '  Each project gets its own memory directory under your KodaX agent\n' +
-        '  home — `<agentConfigHome>/projects/<project-key>/memory/`. The LLM\n' +
-        '  owns reads/writes; this command is your escape hatch when the\n' +
-        '  MEMORY.md index drifts from the topic files on disk.\n',
+      '  Normal use is conversational: ask KodaX what it remembers, tell it\n' +
+        '  to remember something, or ask it to forget one item. Slash commands\n' +
+        '  are the explicit inspection and recovery escape hatch. MEMORY.md is\n' +
+        '  a derived storage index, not the user-visible source of truth.\n',
     ),
   );
   console.log('Notes:');
-  console.log(chalk.dim('  • Rebuild ONLY rewrites MEMORY.md. Topic files are never touched.'));
-  console.log(chalk.dim('  • Rebuild sorts entries by file mtime descending — the same'));
-  console.log(chalk.dim('    natural-LRU order the LLM produces by prepending new entries.'));
-  console.log(chalk.dim('  • Files missing or with malformed frontmatter still appear in'));
-  console.log(chalk.dim('    the rebuilt index using their filename as fallback; the command'));
-  console.log(chalk.dim('    prints a warning so you can fix the frontmatter.\n'));
+  console.log(chalk.dim('  - Ordinary explicit remember/forget operations apply immediately.'));
+  console.log(chalk.dim('  - Conflicts become readable decisions; broad requests ask for clarification.'));
+  console.log(chalk.dim('  - Restricted content is rejected, and background learning runs automatically.\n'));
+}
+
+interface MemoryCommandRuntime {
+  readonly cwd: string;
+  readonly memoryDir: string;
+  readonly entrypointPath: string;
+  readonly controller: MemoryManagementController;
+  readonly context: InteractiveContext;
+  readonly callbacks: CommandCallbacks;
+}
+
+function createMemoryCommandRuntime(
+  context: InteractiveContext,
+  callbacks: CommandCallbacks,
+): MemoryCommandRuntime {
+  const cwd = resolveCwd(context);
+  const options = callbacks.createKodaXOptions?.();
+  const identityCwd = options?.context?.executionCwd ?? context.runtimeInfo?.executionCwd ?? cwd;
+  const identity = options === undefined
+    ? undefined
+    : options.context?.memoryIdentity
+      ?? deriveCodingMemoryIdentity(options, identityCwd, context.sessionId ?? 'memory-command');
+  const memoryDir = identity?.projectId === undefined
+    ? resolveMemoryRoot(cwd)
+    : resolveScopedMemoryRoot(identity, 'project');
+  const memoryReviewer = options?.memoryReviewer;
+  return {
+    cwd,
+    memoryDir,
+    entrypointPath: path.join(memoryDir, 'MEMORY.md'),
+    controller: createMemoryControlPlane({
+      cwd: identityCwd,
+      ...(identity === undefined ? {} : { identity }),
+      ...(memoryReviewer === undefined ? {} : { memoryReviewer }),
+    }),
+    context,
+    callbacks,
+  };
+}
+
+async function runRememberCommand(
+  runtime: MemoryCommandRuntime,
+  args: readonly string[],
+): Promise<void> {
+  const parsed = parseRememberCommand(args);
+  if (parsed.error !== undefined || parsed.statement.length === 0) {
+    console.log(chalk.yellow(`\n[memory] ${parsed.error ?? 'missing text to remember'}.\n`));
+    return;
+  }
+  if (parsed.claimKey === undefined) {
+    console.log(chalk.yellow(
+      '\n[memory] `/memory remember` requires --key so future corrections and conflicts address the same claim.\n',
+    ));
+    return;
+  }
+  printRememberResult(await runtime.controller.remember({
+    statement: parsed.statement,
+    claimKind: parsed.claimKind,
+    claimKey: parsed.claimKey,
+    evidenceRef: `user-command:${runtime.context.sessionId ?? 'interactive'}`,
+  }));
+}
+
+async function runForgetCommand(runtime: MemoryCommandRuntime, token: string | undefined): Promise<void> {
+  const target = await resolveAcceptedRef(runtime.controller, token);
+  if (target === undefined || token === undefined) {
+    console.log(chalk.yellow('\n[memory] use the exact ref from `/memory list`; numbered aliases are read-only.\n'));
+    return;
+  }
+  const result = await runtime.controller.forgetRef(token, target.bodyFingerprint);
+  console.log(result.acknowledged
+    ? chalk.green(`\n[memory] Memory forgotten: ${target.title ?? target.id}.\n`)
+    : chalk.yellow(`\n[memory] Memory was not forgotten: ${result.warnings[0] ?? target.id}.\n`));
+}
+
+async function runShowCommand(runtime: MemoryCommandRuntime, token: string | undefined): Promise<void> {
+  if (token === undefined) {
+    console.log(chalk.yellow('\n[memory] choose memory:<number>, decision:<number>, or an exact ref.\n'));
+    return;
+  }
+  const accepted = await resolveAcceptedRef(runtime.controller, token, true);
+  if (accepted !== undefined) {
+    const snapshot = await runtime.controller.readRef(accepted);
+    console.log(chalk.cyan(`\n[memory] ${accepted.title ?? accepted.id}`));
+    console.log(chalk.dim(`  ref: ${memoryMutationHandle(accepted)}`));
+    console.log(`\n${parseMemoryFile(snapshot.body).body.trim()}\n`);
+    return;
+  }
+  const proposal = await resolveProposal(runtime.controller, token, true);
+  if (proposal === undefined) {
+    console.log(chalk.yellow(`\n[memory] Memory or decision not found: ${token}\n`));
+    return;
+  }
+  printMemoryProposal(proposal);
+  cacheProposalPreview(runtime.cwd, proposal);
+}
+
+async function runDecisionCommand(
+  runtime: MemoryCommandRuntime,
+  operation: 'approve' | 'reject',
+  token: string | undefined,
+  reason: string,
+): Promise<void> {
+  const proposal = await resolveProposal(runtime.controller, token);
+  if (proposal === undefined) {
+    console.log(chalk.yellow('\n[memory] use the exact decision ref from `/memory show`; numbered aliases are read-only.\n'));
+    return;
+  }
+  const cached = readCachedProposalPreview(runtime.cwd, proposal.id);
+  if (cached === undefined) {
+    console.log(chalk.yellow(`\n[memory] preview required before ${operation}: /memory show ${token ?? proposal.id}\n`));
+    return;
+  }
+  proposalPreviewFingerprints.delete(previewCacheKey(runtime.cwd, proposal.id));
+  if (operation === 'approve') {
+    printApplyResult(await runtime.controller.approveProposal(
+      proposal.id,
+      cached.fingerprints,
+      cached.revision,
+    ));
+    return;
+  }
+  printRejectResult(await runtime.controller.rejectProposal(proposal.id, reason, cached.revision));
+}
+
+async function runMemorySubcommand(
+  runtime: MemoryCommandRuntime,
+  sub: string,
+  args: readonly string[],
+): Promise<void> {
+  if (sub === 'help' || sub === '--help' || sub === '-h') return printHelp();
+  if (sub === 'list') return listAcceptedMemory(runtime.controller);
+  if (sub === 'remember') return runRememberCommand(runtime, args.slice(1));
+  if (sub === 'forget') return runForgetCommand(runtime, args[1]);
+  if (sub === 'doctor' || sub === 'status') {
+    return statusMemory(runtime.memoryDir, runtime.entrypointPath, runtime.context, runtime.callbacks, runtime.cwd);
+  }
+  if (sub === 'reviews') return listEpisodeReviews(runtime.context, runtime.callbacks, runtime.cwd, args[1]);
+  if (sub === 'pending' || sub === 'inbox') {
+    console.log(chalk.dim('[memory] `pending` is a compatibility alias for /memory decisions.'));
+    return printMemoryInbox(await runtime.controller.listInbox());
+  }
+  if (sub === 'decisions' || sub === 'proposals') return printMemoryInbox(await runtime.controller.listInbox());
+  if (sub === 'show') return runShowCommand(runtime, args[1]);
+  if (sub === 'approve' || sub === 'reject') {
+    return runDecisionCommand(runtime, sub, args[1], args.slice(2).join(' ').trim());
+  }
+  if (sub === 'rebuild') return rebuildMemory(runtime.memoryDir, runtime.entrypointPath);
+  if (sub === 'open') {
+    return openMemory(runtime.controller, runtime.memoryDir, args[1], runtime.callbacks.openExternalPath);
+  }
+  console.log(chalk.yellow(`\n[memory] unknown subcommand: ${sub}`));
+  printHelp();
 }
 
 /**
@@ -664,104 +964,15 @@ function printDetailedHelp(): void {
  */
 export const memoryCommand: Command = {
   name: 'memory',
-  description: 'Inspect, govern, or rebuild per-project memory',
-  usage: '/memory [list|status|reviews|proposals|pending|show|approve|reject|curate|rebuild|open|help]',
-  argumentHint: 'list | status | reviews [limit] | proposals | pending | show <id> | approve <id> | reject <id> [reason] | curate | rebuild | open | help',
+  description: 'View or manage durable Memory',
+  usage: '/memory [list|remember|forget|decisions|show|approve|reject|doctor|open|help]',
+  argumentHint: 'list | remember <text> | forget <ref> | decisions | show <ref> | approve <ref> | reject <ref> [reason] | doctor | open | help',
   handler: async (args, context, callbacks) => {
-    const cwd = resolveCwd(context);
-    const memoryDir = resolveMemoryRoot(cwd);
-    const entrypointPath = resolveMemoryEntrypoint(cwd);
-    const sub = (args[0] ?? 'list').toLowerCase();
-    const memoryReviewer = callbacks.createKodaXOptions?.().memoryReviewer;
-    const controller = createMemoryControlPlane({
-      cwd,
-      ...(memoryReviewer !== undefined ? { memoryReviewer } : {}),
-    });
-
-    if (sub === 'help' || sub === '--help' || sub === '-h') {
-      printHelp();
-      return;
-    }
-    if (sub === 'list') {
-      await listMemory(memoryDir, entrypointPath);
-      return;
-    }
-    if (sub === 'status') {
-      await statusMemory(memoryDir, entrypointPath, context, callbacks, cwd);
-      return;
-    }
-    if (sub === 'reviews') {
-      await listEpisodeReviews(context, callbacks, cwd, args[1]);
-      return;
-    }
-    if (sub === 'pending' || sub === 'inbox') {
-      console.log(chalk.dim(
-        '[memory] `pending` is a compatibility alias for /memory proposals; '
-        + 'episode-review jobs: /memory reviews.',
-      ));
-      printMemoryInbox(await controller.listInbox());
-      return;
-    }
-    if (sub === 'proposals') {
-      printMemoryInbox(await controller.listInbox());
-      return;
-    }
-    if (sub === 'show') {
-      const proposalId = args[1];
-      if (proposalId === undefined) {
-        console.log(chalk.yellow('\n[memory] missing proposal id for show.\n'));
-        return;
-      }
-      const proposal = await controller.showProposal(proposalId);
-      if (proposal === undefined) {
-        console.log(chalk.yellow(`\n[memory] proposal not found: ${proposalId}\n`));
-        return;
-      }
-      printMemoryProposal(proposal);
-      cachePreviewFingerprints(cwd, proposal.id, proposal.expectedFingerprints);
-      return;
-    }
-    if (sub === 'approve') {
-      const proposalId = args[1];
-      if (proposalId === undefined) {
-        console.log(chalk.yellow('\n[memory] missing proposal id for approve.\n'));
-        return;
-      }
-      const cachedFingerprints = readCachedPreviewFingerprints(cwd, proposalId);
-      if (cachedFingerprints === undefined) {
-        console.log(chalk.yellow(`\n[memory] preview required before approve: /memory show ${proposalId}\n`));
-        return;
-      }
-      const result = await controller.approveProposal(proposalId, cachedFingerprints);
-      proposalPreviewFingerprints.delete(previewCacheKey(cwd, proposalId));
-      printApplyResult(result);
-      return;
-    }
-    if (sub === 'reject') {
-      const proposalId = args[1];
-      if (proposalId === undefined) {
-        console.log(chalk.yellow('\n[memory] missing proposal id for reject.\n'));
-        return;
-      }
-      const result = await controller.rejectProposal(proposalId, args.slice(2).join(' ').trim());
-      proposalPreviewFingerprints.delete(previewCacheKey(cwd, proposalId));
-      printRejectResult(result);
-      return;
-    }
-    if (sub === 'curate') {
-      printGovernanceReport(await controller.runCurator());
-      return;
-    }
-    if (sub === 'rebuild') {
-      await rebuildMemory(memoryDir, entrypointPath);
-      return;
-    }
-    if (sub === 'open') {
-      openMemory(memoryDir, entrypointPath);
-      return;
-    }
-    console.log(chalk.yellow(`\n[memory] unknown subcommand: ${sub}`));
-    printHelp();
+    await runMemorySubcommand(
+      createMemoryCommandRuntime(context, callbacks),
+      (args[0] ?? 'list').toLowerCase(),
+      args,
+    );
   },
   detailedHelp: printDetailedHelp,
 };
@@ -770,22 +981,22 @@ function previewCacheKey(cwd: string, proposalId: string): string {
   return `${cwd}\0${proposalId}`;
 }
 
-function cachePreviewFingerprints(
+function cacheProposalPreview(
   cwd: string,
-  proposalId: string,
-  fingerprints: Readonly<Record<string, string>>,
+  proposal: MemoryActionProposal,
 ): void {
   pruneExpiredPreviewFingerprints(Date.now());
-  proposalPreviewFingerprints.set(previewCacheKey(cwd, proposalId), {
-    fingerprints,
+  proposalPreviewFingerprints.set(previewCacheKey(cwd, proposal.id), {
+    fingerprints: proposal.expectedFingerprints,
+    revision: memoryProposalRevision(proposal),
     createdAtMs: Date.now(),
   });
 }
 
-function readCachedPreviewFingerprints(
+function readCachedProposalPreview(
   cwd: string,
   proposalId: string,
-): Readonly<Record<string, string>> | undefined {
+): ProposalPreviewCacheEntry | undefined {
   const key = previewCacheKey(cwd, proposalId);
   const cached = proposalPreviewFingerprints.get(key);
   if (cached === undefined) return undefined;
@@ -793,7 +1004,7 @@ function readCachedPreviewFingerprints(
     proposalPreviewFingerprints.delete(key);
     return undefined;
   }
-  return cached.fingerprints;
+  return cached;
 }
 
 function pruneExpiredPreviewFingerprints(nowMs: number): void {

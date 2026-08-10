@@ -24,7 +24,6 @@ import {
   tryGitRemote,
   type MemoryContextIdentity,
   type KodaXMemoryOutcomeDigest,
-  type MemoryReviewTrigger,
   type EpisodeReviewDrainOptions,
   type EpisodeReviewDrainEligibility,
   type EpisodeReviewDrainResult,
@@ -46,23 +45,6 @@ import {
   LEARNING_REVIEW_PROMPT_SHA256,
   LEARNING_REVIEW_SCHEMA_SHA256,
 } from './learning-reviewer.js';
-
-const ENGLISH_FORGET_RE =
-  /\b(forget|do not remember|don't remember|remove (?:this )?from memory|delete .{0,40}memory)\b/i;
-const CHINESE_FORGET_RE =
-  /(?:\u522b\u8bb0|\u4e0d\u8981\u8bb0\u4f4f|\u5fd8\u8bb0|\u5220\u9664.{0,12}\u8bb0\u5fc6|\u4e0d\u8981\u518d\u8bb0)/u;
-const ENGLISH_REMEMBER_RE =
-  /\b(remember this|please remember|save this to memory|add this to memory)\b/i;
-const CHINESE_REMEMBER_RE =
-  /(?:\u8bb0\u4f4f|\u4fdd\u5b58.{0,12}\u8bb0\u5fc6|\u52a0\u5165\u8bb0\u5fc6)/u;
-const ENGLISH_MEMORY_ANCHOR_RE =
-  /\b(memory|remembered|remember|stored|previously saved|memo(?:ry)? note)\b/i;
-const ENGLISH_CORRECTION_MARKER_RE =
-  /\b(wrong|incorrect|outdated|actually|correction|correcting|not .{1,80} but|instead|should be)\b/i;
-const CHINESE_MEMORY_ANCHOR_RE =
-  /(?:\u8bb0\u5fc6|\u8bb0\u4f4f\u7684|\u4e4b\u524d\u8bb0\u7684)/u;
-const CHINESE_CORRECTION_MARKER_RE =
-  /(?:\u4e0d\u662f.{0,24}\u800c\u662f|\u7ea0\u6b63|\u66f4\u6b63|\u5176\u5b9e|\u5e94\u8be5\u662f|\u4e0d\u5bf9)/u;
 
 export async function maybeRunMemoryMaintenanceWindow(options: KodaXOptions): Promise<void> {
   if (isInternalAgentRun(options)) return;
@@ -92,58 +74,6 @@ export async function maybeRunMemoryMaintenanceWindow(options: KodaXOptions): Pr
       error: error instanceof Error ? error.message : String(error),
     });
   }
-}
-
-export async function maybeReviewMemoryFeedbackFromPrompt(
-  options: KodaXOptions,
-  prompt: string,
-): Promise<void> {
-  if (isInternalAgentRun(options)) return;
-
-  const reviewer = options.memoryReviewer;
-  if (reviewer === undefined) return;
-
-  const trigger = detectMemoryReviewTrigger(prompt);
-  if (trigger === undefined) return;
-
-  const cwd = resolveExecutionCwd(options.context);
-  const task = options.context?.rawUserInput?.trim();
-  try {
-    const plan = await createMemoryControlPlane({
-      cwd,
-      ...(options.context?.memoryIdentity !== undefined
-        ? { identity: options.context.memoryIdentity }
-        : {}),
-      projectDocs: [],
-      discoverSkills: false,
-      memoryReviewer: reviewer,
-    }).reviewMemoryFeedback({
-      trigger,
-      userFeedback: prompt,
-      ...(task !== undefined && task.length > 0 ? { task } : {}),
-    });
-    options.events?.onMemoryReview?.(plan);
-    emitResilienceDebug('[memory:review]', {
-      cwd,
-      trigger,
-      actions: plan.actions.length,
-      candidates: plan.candidateRefs.map((candidate) => candidate.ref.id),
-    });
-  } catch (error) {
-    emitResilienceDebug('[memory:review:error]', {
-      cwd,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
-}
-
-export function detectMemoryReviewTrigger(prompt: string): MemoryReviewTrigger | undefined {
-  const text = prompt.trim();
-  if (text.length === 0) return undefined;
-  if (ENGLISH_FORGET_RE.test(text) || CHINESE_FORGET_RE.test(text)) return 'explicit_forget';
-  if (ENGLISH_REMEMBER_RE.test(text) || CHINESE_REMEMBER_RE.test(text)) return 'explicit_remember';
-  if (isMemoryCorrection(text)) return 'user_correction';
-  return undefined;
 }
 
 export function deriveCodingMemoryIdentity(
@@ -344,6 +274,7 @@ export function drainCodingMemoryReviewInbox(
   controller: MemoryController,
   currentSessionId: string,
   drainDeadlineAtMs?: number,
+  preferredJobId?: string,
 ): Promise<EpisodeReviewDrainResult | undefined> {
   if (isInternalAgentRun(options)
     || (options.memoryReviewer === undefined && options.learningReviewer === undefined)
@@ -354,6 +285,7 @@ export function drainCodingMemoryReviewInbox(
     controller,
     currentSessionId,
     drainDeadlineAtMs,
+    preferredJobId,
   );
   latestMemoryReviewDrain = drain;
   return drain;
@@ -386,6 +318,7 @@ async function drainStartedCodingMemoryReviewInbox(
   controller: MemoryController,
   currentSessionId: string,
   drainDeadlineAtMs: number | undefined,
+  preferredJobId: string | undefined,
 ): Promise<EpisodeReviewDrainResult | undefined> {
   const drainOptions: Omit<EpisodeReviewDrainOptions, 'maxEntries'> = {
     ...(drainDeadlineAtMs === undefined ? {} : { deadlineAtMs: drainDeadlineAtMs }),
@@ -473,6 +406,25 @@ async function drainStartedCodingMemoryReviewInbox(
     failed: 0,
     failures: [] as Array<EpisodeReviewDrainResult['failures'][number]>,
   };
+  const merge = (partial: EpisodeReviewDrainResult) => {
+    result.reviewed += partial.reviewed;
+    result.discarded += partial.discarded;
+    result.deferred += partial.deferred;
+    result.failed += partial.failed;
+    result.failures.push(...partial.failures);
+  };
+  if (preferredJobId !== undefined) {
+    for (const ownerIdentity of deriveCodingMemoryReviewIdentities(options, identity)) {
+      const partial = await drainPendingEpisodeReviews(ownerIdentity, {
+        ...drainOptions,
+        maxEntries: 1,
+        preferredJobId,
+        onlyPreferred: true,
+      });
+      merge(partial);
+      if (partial.reviewed + partial.discarded + partial.failed > 0) break;
+    }
+  }
   for (const ownerIdentity of deriveCodingMemoryReviewIdentities(options, identity)) {
     const spent = result.reviewed + result.discarded + result.failed;
     if (spent >= 2) break;
@@ -480,42 +432,10 @@ async function drainStartedCodingMemoryReviewInbox(
       ...drainOptions,
       maxEntries: 2 - spent,
     });
-    result.reviewed += partial.reviewed;
-    result.discarded += partial.discarded;
-    result.deferred += partial.deferred;
-    result.failed += partial.failed;
-    result.failures.push(...partial.failures);
+    merge(partial);
   }
   if (result.reviewed > 0 || result.discarded > 0 || result.failed > 0) {
     emitResilienceDebug('[memory:review-inbox:drain]', { ...result });
-  }
-  // FEATURE_289 §3.6: surface drain failures and deadline-released claims on
-  // the visible session. Wording is explicitly about failure — the success
-  // path `Memory updated:` receipt semantics are not reused — and downstream
-  // dedup keeps keying on the episode identity. The own-session defer key
-  // (`currentSessionId`) is '' at turn-end drains by design; the REPL drops
-  // any notice whose sessionId is defined but mismatched, so fall back to
-  // undefined to render on the visible session.
-  const noticeSessionId = currentSessionId === '' ? undefined : currentSessionId;
-  for (const failure of result.failures) {
-    options.events?.onMemoryNotice?.({
-      sessionId: noticeSessionId,
-      episodeId: `memory-review-failure:${failure.reviewKey}`,
-      summaries: [`Memory review failed: ${failure.error.slice(0, 240)}`],
-      proposalIds: [],
-    });
-  }
-  if (drainDeadlineAtMs !== undefined
-    && result.deferred > 0
-    && Date.now() >= drainDeadlineAtMs) {
-    options.events?.onMemoryNotice?.({
-      sessionId: noticeSessionId,
-      episodeId: `memory-review-drain-deadline:${noticeSessionId ?? 'global'}`,
-      summaries: [
-        `Memory review drain stopped at the shutdown deadline; ${result.deferred} job(s) stay pending for the next run.`,
-      ],
-      proposalIds: [],
-    });
   }
   return result;
 }
@@ -979,11 +899,6 @@ async function reviewEpisodeWithTimeout(
   } finally {
     if (timeout !== undefined) clearTimeout(timeout);
   }
-}
-
-function isMemoryCorrection(text: string): boolean {
-  return (ENGLISH_MEMORY_ANCHOR_RE.test(text) && ENGLISH_CORRECTION_MARKER_RE.test(text))
-    || (CHINESE_MEMORY_ANCHOR_RE.test(text) && CHINESE_CORRECTION_MARKER_RE.test(text));
 }
 
 function isInternalAgentRun(options: KodaXOptions): boolean {

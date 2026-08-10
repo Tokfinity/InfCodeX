@@ -1,8 +1,18 @@
-import type { KodaXMemoryIntent, KodaXMemoryOutcomeDigest } from '../types.js';
+import type {
+  KodaXHandledMemoryOperation,
+  KodaXMemoryIntent,
+  KodaXMemoryOutcomeDigest,
+} from '../types.js';
 import type {
   MemoryContextIdentity,
   MemoryController,
+  MemoryItemRef,
+  MemoryManagementController,
+  MemoryLifecycleOperationResult,
   MemoryPack,
+  MemoryRefFilter,
+  MemoryRememberInput,
+  MemoryRememberResult,
   MemoryVisibility,
 } from '../memory-control/index.js';
 
@@ -157,6 +167,7 @@ export interface MemoryEpisodeOutcome {
   readonly summary: string;
   readonly evidence: readonly MemoryEvidenceRef[];
   readonly memoryIntent?: KodaXMemoryIntent;
+  readonly handledMemoryOperations?: readonly KodaXHandledMemoryOperation[];
 }
 
 export type PersistedOutcomeDigest = KodaXMemoryOutcomeDigest;
@@ -175,6 +186,28 @@ export interface MemoryAgent {
   startSession(input: MemorySessionInput): Promise<MemorySession>;
 }
 
+/** Additive durable-memory management facade implemented by createMemoryAgent. */
+export interface MemoryManagementAgent extends MemoryAgent {
+  /** Lists accepted durable Memory with bodies, suitable for user-facing summaries. */
+  list(filter?: MemoryListFilter): Promise<readonly AcceptedMemoryView[]>;
+  /** Applies an explicit prompt-safe Memory instruction through the governed control plane. */
+  remember(input: MemoryRememberInput): Promise<MemoryRememberResult>;
+  /** Forgets one exact ref; callers should disambiguate before invoking it. */
+  forget(refId: string, expectedStorageFingerprint?: string): Promise<MemoryLifecycleOperationResult>;
+}
+
+/** User-facing accepted Memory; storageFingerprint versions the governed source file. */
+export interface AcceptedMemoryView {
+  readonly ref: MemoryItemRef;
+  readonly handle: string;
+  readonly body: string;
+  readonly storageFingerprint: string;
+  readonly readAt: string;
+  readonly warnings: readonly string[];
+}
+
+export type MemoryListFilter = Pick<MemoryRefFilter, 'query' | 'scopes'>;
+
 export interface CreateMemoryAgentOptions {
   readonly controlPlane: MemoryController;
   readonly initialMemoryPack?: MemoryPack;
@@ -185,6 +218,10 @@ export interface CreateMemoryAgentOptions {
   readonly recallRunner?: MemoryRecallRunner;
   readonly onTrace?: (event: MemoryAgentTraceEvent) => void;
   readonly sourcePolicy?: MemorySourcePolicy;
+}
+
+export interface CreateMemoryManagementAgentOptions extends Omit<CreateMemoryAgentOptions, 'controlPlane'> {
+  readonly controlPlane: MemoryManagementController;
 }
 
 export interface MemorySessionState {

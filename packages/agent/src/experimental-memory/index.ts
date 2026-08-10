@@ -11,8 +11,12 @@ export {
 } from './reminder-envelope.js';
 
 export type {
+  AcceptedMemoryView,
   CreateMemoryAgentOptions,
+  CreateMemoryManagementAgentOptions,
   MemoryAgent,
+  MemoryListFilter,
+  MemoryManagementAgent,
   MemoryAgentTraceEvent,
   MemoryDecisionReceipt,
   MemoryEpisodeOutcome,
@@ -34,3 +38,11 @@ export type {
   MemorySessionInput,
   PersistedOutcomeDigest,
 } from './types.js';
+export type {
+  MemoryBodySnapshot,
+  MemoryLifecycleOperationResult,
+  MemoryRefFilter,
+  MemoryRememberInput,
+  MemoryRememberResult,
+} from '../memory-control/index.js';
+export type { KodaXHandledMemoryOperation } from '../types.js';

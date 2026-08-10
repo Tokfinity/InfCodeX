@@ -7,12 +7,12 @@
 
 ---
 
-## Test 1: `/memory status` on a fresh project (zero-state)
+## Test 1: `/memory doctor` on a fresh project (zero-state)
 
 **Steps:**
 
 1. Start a new KodaX session in an empty or fresh project directory.
-2. Run `/memory status` in the REPL.
+2. Run `/memory doctor` in the REPL.
 
 **Expected:**
 
@@ -27,7 +27,7 @@
 
 ---
 
-## Test 2: `/memory status` on a populated project
+## Test 2: `/memory doctor` on a populated project
 
 **Prerequisite:** at least one completed coding episode (a session that ran tools
 and ended normally, producing a `memory_outcome_digest`).
@@ -36,7 +36,7 @@ and ended normally, producing a `memory_outcome_digest`).
 
 1. Run a short coding session (e.g., `kodax -c "read README.md and summarize"`).
 2. Start a new session in the same project.
-3. Run `/memory status`.
+3. Run `/memory doctor`.
 
 **Expected:**
 
@@ -50,15 +50,16 @@ and ended normally, producing a `memory_outcome_digest`).
 
 ---
 
-## Test 2a: Inspect the actual episode-review backlog
+## Test 2a: Inspect the internal episode-review backlog (advanced diagnostics)
 
 **Prerequisite:** at least one pending review job from Test 2.
 
 **Steps:**
 
-1. Run `/memory reviews 20`.
-2. Compare its total with the `pending` count from `/memory status`.
-3. Run `/memory proposals`, then `/memory pending`.
+1. Run the hidden diagnostic `/memory reviews 20`.
+2. Compare its total with the `pending` count from `/memory doctor`.
+3. Run `/memory decisions`; use the compatibility aliases `/memory proposals`
+   and `/memory pending` only to verify migration behavior.
 4. Run `/learn ready`, then `/learn pending`.
 
 **Expected:**
@@ -66,14 +67,14 @@ and ended normally, producing a `memory_outcome_digest`).
 - `/memory reviews 20` shows up to 20 oldest jobs and includes status,
   review key, owner Session, age, attempt counts, provider/apply/completion
   retry timestamps, and last error when those fields exist. Its total matches
-  `/memory status`.
+  `/memory doctor`.
 - Both surfaces split the total into the automatic queue, jobs that need
   operator attention, and jobs with unknown persisted state. `review-drain`
   is suggested only when the automatic queue is non-empty; `attention` and
   `unknown` jobs are never presented as automatically drainable.
-- `/memory proposals` lists actionable Memory changes, not review jobs.
-  `/memory pending` produces the same list but labels itself as a compatibility
-  alias and points to `/memory reviews`.
+- `/memory decisions` lists actionable exceptional Memory changes, not internal
+  review jobs. `/memory proposals` and `/memory pending` identify themselves as
+  compatibility aliases.
 - `/learn ready` lists ready learned capabilities. `/learn pending` produces
   the same query and labels itself as a compatibility alias; it does not claim
   to show the episode-review inbox.
@@ -158,7 +159,7 @@ Get-ChildItem "$env:USERPROFILE\.kodax\memory-review-inbox" -Recurse -Filter "st
    ```
 
 2. Observe the output: `reviewed / discarded / failed / deferred` summary.
-3. Check `/memory status` (in a REPL session) or re-run `review-drain` to see
+3. Check `/memory doctor` (in a REPL session) or re-run `review-drain` to see
    pending count decrease.
 
 **Expected:**
@@ -201,7 +202,7 @@ provider API key, or use an invalid model).
 - A `[memory]` line appears in the REPL with failure wording:
   `Memory review failed: ...` (not `Memory updated:`).
 - The notice appears on the **current visible session** (not silently dropped).
-- `/memory status` shows `notices: ≥ 1` in the this-session section.
+- `/memory doctor` shows `notices: ≥ 1` in the this-session section.
 
 **Pass criterion:** the failure is visible to the user in the same session —
 not silent. This is the core observability fix of §3.6.

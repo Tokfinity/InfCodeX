@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   _resetMessageQueueForTests,
   actorQueueId,
+  createMemoryControlPlane,
   createSessionLineage,
   getMessageQueue,
   getSessionMessageEntryId,
@@ -27,6 +28,7 @@ import type {
 } from '@kodax-ai/llm';
 
 import { runKodaX } from '../agent.js';
+import { deriveCodingMemoryIdentity } from '../memory-runtime.js';
 import { CodingActorSession } from './actor-runtime.js';
 
 const PROVIDER_NAME = 'terminal-interrupt-provider';
@@ -353,15 +355,16 @@ describe('runKodaX Runtime terminal interrupt continuation', { timeout: 30_000 }
               name: 'memory_intent',
               input: {
                 operation: 'remember',
-                statement: 'Run focused tests before reporting success.',
+                statement: 'run focused tests before reporting success.',
                 userQuote: followUp,
+                claimKind: 'procedure',
+                claimKey: 'project.procedure.report-verification',
               },
             }],
             thinkingBlocks: [],
           };
         }
-        expect(JSON.stringify(messages.at(-1)?.content))
-          .toContain('captured for end-of-episode governed submission');
+        expect(JSON.stringify(messages.at(-1)?.content)).toContain('Memory remembered');
         return {
           textBlocks: [{ type: 'text', text: 'follow-up captured' }],
           toolBlocks: [],
@@ -406,20 +409,29 @@ describe('runKodaX Runtime terminal interrupt continuation', { timeout: 30_000 }
       }, 'Inspect the current implementation.');
 
       expect(result.success).toBe(true);
-      expect(outcome?.memoryIntent).toMatchObject({
+      expect(outcome).toBeDefined();
+      expect(outcome?.handledMemoryOperations).toMatchObject([{
         operation: 'remember',
-        candidateStatement: 'Run focused tests before reporting success.',
-        userQuote: followUp,
-      });
+        claimKey: 'project.procedure.report-verification',
+      }]);
+      const identity = deriveCodingMemoryIdentity({
+        provider: PROVIDER_NAME,
+        context: { configHome: home, executionCwd: home, gitRoot: home },
+      }, home, sessionId);
+      const controller = createMemoryControlPlane({ cwd: home, identity, discoverSkills: false });
+      const [remembered] = await controller.listRefs({ kinds: ['memdir'] });
+      if (remembered === undefined) throw new Error('expected durable explicit Memory');
+      expect((await controller.readRef(remembered)).body)
+        .toContain('run focused tests before reporting success.');
     } finally {
       await rm(home, { recursive: true, force: true });
     }
   });
 
-  it('submits a verified memory_intent after a later AbortError interrupts the episode', async () => {
+  it('keeps immediately applied Memory after a later AbortError interrupts the episode', async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), 'kodax-sa-memory-cancelled-'));
     const sessionId = 'ordinary-memory-cancelled';
-    const userRequest = 'Going forward, run focused tests before reporting success.';
+    const userRequest = 'Going forward, remember to run focused tests before reporting success.';
     let turn = 0;
     let outcome: KodaXMemoryOutcomeDigest | undefined;
     const reviewTriggers: string[] = [];
@@ -444,8 +456,10 @@ describe('runKodaX Runtime terminal interrupt continuation', { timeout: 30_000 }
               name: 'memory_intent',
               input: {
                 operation: 'remember',
-                statement: 'Run focused tests before reporting success.',
+                statement: 'run focused tests before reporting success.',
                 userQuote: userRequest,
+                claimKind: 'procedure',
+                claimKey: 'project.procedure.report-verification',
               },
             }],
             thinkingBlocks: [],
@@ -496,23 +510,14 @@ describe('runKodaX Runtime terminal interrupt continuation', { timeout: 30_000 }
       }, userRequest);
 
       expect(result).toMatchObject({ success: true, interrupted: true });
-      expect(outcome).toMatchObject({
-        outcome: 'cancelled',
-        objective: 'Run focused tests before reporting success.',
-        summary: 'Explicit memory intent captured before episode cancellation.',
-        evidenceRefs: [expect.stringMatching(/^user-intent:[a-f0-9]{24}$/)],
-        memoryIntent: {
-          operation: 'remember',
-          candidateStatement: 'Run focused tests before reporting success.',
-          userQuote: userRequest,
-        },
-      });
-      expect(outcome?.evidence).toHaveLength(1);
-      expect(outcome?.evidence?.[0]).toMatchObject({
-        grade: 'authoritative',
-        source: 'user',
-      });
-      await vi.waitFor(() => expect(reviewTriggers).toContain('explicit_remember'));
+      expect(outcome).toBeUndefined();
+      expect(reviewTriggers).not.toContain('episode_completed');
+      const identity = deriveCodingMemoryIdentity({
+        provider: PROVIDER_NAME,
+        context: { configHome: home, executionCwd: home, gitRoot: home },
+      }, home, sessionId);
+      const controller = createMemoryControlPlane({ cwd: home, identity, discoverSkills: false });
+      expect(await controller.listRefs({ kinds: ['memdir'] })).toHaveLength(1);
     } finally {
       await rm(home, { recursive: true, force: true });
     }

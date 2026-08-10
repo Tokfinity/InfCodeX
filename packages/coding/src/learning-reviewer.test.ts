@@ -96,14 +96,15 @@ describe('FEATURE_263 production unified learning reviewer', () => {
     expect(actions?.items?.allOf).toContainEqual({
       if: {
         properties: {
-          action: { enum: ['write_memdir', 'patch_memdir'] },
+          action: { enum: ['write_memdir', 'patch_memdir', 'conflict_report'] },
         },
       },
-      then: { required: ['proposedBody'] },
+      then: { required: ['proposedBody', 'claimKind', 'claimKey'] },
     });
   });
 
   it('makes the unified result shape and approval invariant explicit to the model', () => {
+    const memoryPlan = LEARNING_REVIEW_TOOL.input_schema.properties?.memoryPlan;
     const capability = LEARNING_REVIEW_TOOL.input_schema.properties?.capabilityDecision;
     const spec = capability?.properties?.spec;
 
@@ -120,6 +121,9 @@ describe('FEATURE_263 production unified learning reviewer', () => {
     expect(LEARNING_REVIEW_SYSTEM_PROMPT).toContain(
       'lowercase hyphenated slug',
     );
+    expect(memoryPlan?.required).toEqual(['actions', 'warnings']);
+    expect(memoryPlan?.properties?.trigger).toBeUndefined();
+    expect(memoryPlan?.properties?.sourceRefs).toBeUndefined();
     expect(spec?.properties?.name).toMatchObject({
       type: 'string',
       pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$',

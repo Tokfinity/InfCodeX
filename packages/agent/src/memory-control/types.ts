@@ -163,6 +163,33 @@ export interface MemoryLifecycleOperationResult {
   readonly warnings: readonly string[];
 }
 
+export interface MemoryRememberInput {
+  /** `correct` requires an exact managed Memory ref so the host never guesses a destructive target. */
+  readonly operation?: 'remember' | 'correct';
+  readonly statement: string;
+  readonly targetRefId?: string;
+  readonly claimKind?: MemoryClaimKind;
+  readonly claimKey?: string;
+  /** Stable evidence identity supplied by the user-facing host. */
+  readonly evidenceRef?: string;
+  /** Optional version guard for a target selected from a previously shown view. */
+  readonly expectedTargetFingerprint?: string;
+}
+
+export interface MemoryRememberResult {
+  readonly status:
+    | 'remembered'
+    | 'updated'
+    | 'already_known'
+    | 'needs_clarification'
+    | 'needs_review'
+    | 'rejected';
+  readonly changedRefIds: readonly string[];
+  readonly proposalIds: readonly string[];
+  readonly reason?: string;
+  readonly warnings: readonly string[];
+}
+
 export interface MemorySourceAdapter {
   readonly kind: MemoryRefKind;
   listRefs(filter?: MemoryRefFilter): Promise<readonly MemoryItemRef[]>;
@@ -311,6 +338,8 @@ export interface MemoryReviewDraftAction {
   readonly claimKey?: string;
   readonly actionSignature?: string;
   readonly preconditions?: string;
+  /** Host-bound version for an explicitly presented correction target. */
+  readonly authorizationTargetFingerprint?: string;
   readonly counterexamples?: readonly string[];
   readonly relationship?: 'same_claim' | 'condition_refinement' | 'conflict';
 }
@@ -358,8 +387,9 @@ export interface MemoryController {
   approveProposal(
     id: string,
     expectedFingerprints: Readonly<Record<string, string>>,
+    expectedRevision?: string,
   ): Promise<MemoryApplyResult>;
-  rejectProposal(id: string, reason?: string): Promise<MemoryRejectResult>;
+  rejectProposal(id: string, reason?: string, expectedRevision?: string): Promise<MemoryRejectResult>;
   listRefs(filter?: MemoryRefFilter): Promise<readonly MemoryItemRef[]>;
   readRef(ref: MemoryItemRef): Promise<MemoryBodySnapshot>;
   runCurator(input?: MemoryCuratorInput): Promise<MemoryGovernanceReport>;
@@ -387,8 +417,20 @@ export interface MemoryController {
     signal?: AbortSignal,
   ): Promise<MemoryEpisodeReviewResult>;
   archiveRef(id: string): Promise<MemoryLifecycleOperationResult>;
-  forgetRef(id: string): Promise<MemoryLifecycleOperationResult>;
+  forgetRef(id: string, expectedBodyFingerprint?: string): Promise<MemoryLifecycleOperationResult>;
   purgeRef(id: string): Promise<MemoryLifecycleOperationResult>;
+}
+
+/** Additive management capability implemented by KodaX's default control plane. */
+export interface MemoryManagementController extends MemoryController {
+  /** Applies an explicit, prompt-safe user/host instruction without a second approval ceremony. */
+  remember(input: MemoryRememberInput): Promise<MemoryRememberResult>;
+}
+
+export function isMemoryManagementController(
+  controller: MemoryController,
+): controller is MemoryManagementController {
+  return 'remember' in controller && typeof controller.remember === 'function';
 }
 
 export type MemoryEvent =

@@ -145,8 +145,8 @@ Expected result:
 Steps:
 
 1. Prepare memory refs with at least one duplicate fingerprint, one conflicting title, and one orphaned related ref.
-2. Run `/memory curate`.
-3. Inspect files and proposal statuses afterward.
+2. Invoke `MemoryControlPlane.maybeRunAutoCurator()` from a focused host/test harness.
+3. Inspect the returned read-only audit report, files, and proposal statuses afterward.
 
 Expected result:
 
@@ -154,6 +154,7 @@ Expected result:
 - [ ] Stale and quarantined refs are reported when present.
 - [ ] No memory file is changed by the curator.
 - [ ] No proposal status is changed by the curator.
+- [ ] `/memory curate` is not exposed; curation is maintenance, not an ordinary user command.
 
 ### TC-007: Retrieval Hints Are Deterministic And Bounded
 

@@ -62,6 +62,7 @@ export type {
   KodaXGoalStatus,
   KodaXMemoryIntent,
   KodaXMemoryOutcomeDigest,
+  KodaXHandledMemoryOperation,
   KodaXMemoryOutcomeEvidence,
   KodaXMemoryInfluenceRef,
   KodaXSessionArchiveMarkerEntry,

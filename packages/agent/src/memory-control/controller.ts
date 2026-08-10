@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { readdir, readFile, rename, rm, writeFile, mkdir } from 'node:fs/promises';
-import { basename, dirname, join, relative, resolve, sep } from 'node:path';
+import { readdir, readFile, realpath, rename, rm, writeFile, mkdir } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import {
   initializeSkillRegistry,
@@ -24,6 +24,8 @@ import {
   upsertLearningProposal,
 } from '../learning/store.js';
 import { withLearningFileLock } from '../learning/store-lock.js';
+import { memoryProposalRevision } from './proposal-revision.js';
+import { matchesMemoryMutationHandle } from './mutation-handle.js';
 import type {
   MemoryLearningHandoff,
   ReasoningLearningHandoff,
@@ -42,7 +44,7 @@ import type {
   MemoryAutoCuratorInput,
   MemoryAutoCuratorResult,
   MemoryBodySnapshot,
-  MemoryController,
+  MemoryManagementController,
   MemoryEpisodeReviewResult,
   MemoryCuratorInput,
   MemoryEvent,
@@ -54,6 +56,8 @@ import type {
   MemoryPackHint,
   MemoryPackInput,
   MemoryRefFilter,
+  MemoryRememberInput,
+  MemoryRememberResult,
   MemoryRejectResult,
   MemoryReviewCandidateRef,
   MemoryReviewDraftAction,
@@ -132,11 +136,34 @@ interface ReviewCandidateSelection {
   readonly warnings: readonly string[];
 }
 
-export function createMemoryControlPlane(options: CreateMemoryControlPlaneOptions): MemoryController {
+interface PreparedMemoryRememberInput {
+  readonly operation: NonNullable<MemoryRememberInput['operation']>;
+  readonly statement: string;
+  readonly normalizedStatement: string;
+}
+
+interface MemoryRememberInventory {
+  readonly allRefs: readonly MemoryItemRef[];
+  readonly refs: readonly MemoryItemRef[];
+  readonly target?: MemoryItemRef;
+}
+
+interface MemoryRememberClaim {
+  readonly claimKind: NonNullable<MemoryRememberInput['claimKind']>;
+  readonly claimKey: string;
+  readonly actionTarget?: MemoryItemRef;
+  readonly conflictNeedsDecision: boolean;
+}
+
+type MemoryRejectTransition =
+  | { readonly proposal: MemoryActionProposal }
+  | { readonly result: MemoryRejectResult };
+
+export function createMemoryControlPlane(options: CreateMemoryControlPlaneOptions): MemoryManagementController {
   return new MemoryControlPlane(options);
 }
 
-export class MemoryControlPlane implements MemoryController {
+export class MemoryControlPlane implements MemoryManagementController {
   private readonly cwd: string;
   private readonly learningStorePath: string;
   private readonly memoryRoot: string;
@@ -222,27 +249,46 @@ export class MemoryControlPlane implements MemoryController {
   async approveProposal(
     id: string,
     expectedFingerprints: Readonly<Record<string, string>>,
+    expectedRevision?: string,
   ): Promise<MemoryApplyResult> {
-    const proposal = await this.showProposal(id);
-    if (proposal === undefined) {
-      return skippedApply(id, 'memory proposal not found');
-    }
-    if (expectedFingerprints === undefined) {
-      return skippedApply(id, 'approval requires fingerprints from a shown proposal preview');
-    }
-    const approval: MemoryApproval = {
-      proposalId: proposal.id,
-      approvedBy: 'user',
-      approvedAt: this.now(),
-      expectedFingerprints,
-    };
-    const adapter = this.adapterForProposal(proposal);
-    const result = await adapter.applyProposal(proposal, approval);
-    if (result.applied) this.emit({ type: 'proposal.approved', proposalId: id });
-    return result;
+    return withLearningFileLock(this.explicitMemoryLockPath(), () => (
+      this.approveProposalWithLock(id, expectedFingerprints, expectedRevision)
+    ));
   }
 
-  async rejectProposal(id: string, reason?: string): Promise<MemoryRejectResult> {
+  private async approveProposalWithLock(
+    id: string,
+    expectedFingerprints: Readonly<Record<string, string>>,
+    expectedRevision?: string,
+  ): Promise<MemoryApplyResult> {
+    return withLearningFileLock(this.proposalDecisionLockPath(), async () => {
+      const proposal = (await this.listInbox()).find((candidate) => candidate.id === id);
+      if (proposal === undefined) return skippedApply(id, 'memory proposal is not pending');
+      if (expectedFingerprints === undefined) {
+        return skippedApply(id, 'approval requires fingerprints from a shown proposal preview');
+      }
+      if (expectedRevision !== undefined && memoryProposalRevision(proposal) !== expectedRevision) {
+        return skippedApply(id, 'memory proposal changed after preview');
+      }
+      const staleClaim = await this.staleProposalClaimReason(proposal);
+      if (staleClaim !== undefined) return skippedApply(id, staleClaim);
+      const approval: MemoryApproval = {
+        proposalId: proposal.id,
+        approvedBy: 'user',
+        approvedAt: this.now(),
+        expectedFingerprints,
+      };
+      const result = await this.adapterForProposal(proposal).applyProposal(proposal, approval);
+      if (result.applied) this.emit({ type: 'proposal.approved', proposalId: id });
+      return result;
+    });
+  }
+
+  async rejectProposal(
+    id: string,
+    reason?: string,
+    expectedRevision?: string,
+  ): Promise<MemoryRejectResult> {
     const proposalId = parseMemoryProposalId(id);
     if (proposalId === undefined) {
       return {
@@ -252,22 +298,42 @@ export class MemoryControlPlane implements MemoryController {
         warnings: [],
       };
     }
-    const proposal = await this.showProposal(id);
+    const transition = await withLearningFileLock(this.explicitMemoryLockPath(), () => (
+      withLearningFileLock(this.proposalDecisionLockPath(), () => (
+        this.rejectProposalWithLocks(id, proposalId, reason, expectedRevision)
+      ))
+    ));
+    return 'result' in transition
+      ? transition.result
+      : this.reviewRejectedProposal(id, transition.proposal, reason);
+  }
+
+  private async rejectProposalWithLocks(
+    id: string,
+    proposalId: string,
+    reason: string | undefined,
+    expectedRevision: string | undefined,
+  ): Promise<MemoryRejectTransition> {
+    const proposal = (await this.listInbox()).find((candidate) => candidate.id === id);
     if (proposal === undefined) {
-      return {
-        proposalId: id,
-        rejected: false,
-        skippedReason: 'memory proposal not found',
-        warnings: [],
-      };
+      return { result: skippedReject(id, 'memory proposal is not pending') };
     }
-    await updateLearningProposalStatus(
-      this.learningStorePath,
-      proposalId,
-      'rejected',
-      reason !== undefined && reason.trim().length > 0 ? { rejectedReason: reason } : {},
-    );
+    if (expectedRevision !== undefined && memoryProposalRevision(proposal) !== expectedRevision) {
+      return { result: skippedReject(id, 'memory proposal changed after preview') };
+    }
+    await updateLearningProposalStatus(this.learningStorePath, proposalId, 'rejected', {
+      expectedStatus: 'pending',
+      ...(reason !== undefined && reason.trim().length > 0 ? { rejectedReason: reason } : {}),
+    });
     this.emit({ type: 'proposal.rejected', proposalId: id });
+    return { proposal };
+  }
+
+  private async reviewRejectedProposal(
+    id: string,
+    proposal: MemoryActionProposal,
+    reason: string | undefined,
+  ): Promise<MemoryRejectResult> {
     const trimmedReason = reason?.trim();
     let review: MemoryReviewPlan | undefined;
     let warnings: readonly string[] = [];
@@ -293,6 +359,10 @@ export class MemoryControlPlane implements MemoryController {
       ...(review !== undefined ? { review } : {}),
       warnings,
     };
+  }
+
+  private proposalDecisionLockPath(): string {
+    return `${this.learningStorePath}.decision.lock`;
   }
 
   async listRefs(filter: MemoryRefFilter = {}): Promise<readonly MemoryItemRef[]> {
@@ -323,8 +393,219 @@ export class MemoryControlPlane implements MemoryController {
     return readStorageBackedRef(ref, this.now);
   }
 
+  async remember(input: MemoryRememberInput): Promise<MemoryRememberResult> {
+    return withLearningFileLock(this.explicitMemoryLockPath(), () => (
+      this.rememberWithLock(input)
+    ));
+  }
+
+  private explicitMemoryLockPath(): string {
+    const identity = this.identity;
+    if (this.scopedRoots.length === 0 || identity === undefined) {
+      return join(this.memoryRoot, '.explicit-memory.lock');
+    }
+    const agentRoot = resolveScopedMemoryRoot(identity, 'agent');
+    return join(dirname(dirname(agentRoot)), '.explicit-memory.lock');
+  }
+
+  private async rememberWithLock(input: MemoryRememberInput): Promise<MemoryRememberResult> {
+    const prepared = prepareMemoryRememberInput(input);
+    if ('status' in prepared) return prepared;
+    const inventory = await this.inspectMemoryRemember(input, prepared);
+    if ('status' in inventory) return inventory;
+    const claim = resolveMemoryRememberClaim(input, prepared, inventory);
+    if ('status' in claim) return claim;
+    const duplicate = await this.resolveRememberDuplicate(
+      prepared,
+      inventory,
+      claim,
+      input.expectedTargetFingerprint,
+    );
+    if (duplicate !== undefined) return duplicate;
+    return this.applyExplicitMemoryRemember(input, prepared, inventory, claim);
+  }
+
+  private async inspectMemoryRemember(
+    input: MemoryRememberInput,
+    prepared: PreparedMemoryRememberInput,
+  ): Promise<MemoryRememberInventory | MemoryRememberResult> {
+    const allRefs = await this.listRefs({ kinds: ['memdir'], includePrivate: true });
+    const refs = allRefs.filter((ref) => ref.lifecycle === 'active' || ref.lifecycle === 'trusted');
+    const targetMatches = input.targetRefId === undefined
+      ? []
+      : allRefs.filter((ref) => matchesMemoryMutationHandle(ref, input.targetRefId!));
+    if (targetMatches.length > 1) {
+      return memoryRememberResult(
+        'needs_clarification',
+        `Memory ref is ambiguous across scopes: ${input.targetRefId}`,
+      );
+    }
+    const target = targetMatches[0];
+    if (input.targetRefId !== undefined && target === undefined) {
+      return memoryRememberResult(
+        prepared.operation === 'correct' ? 'needs_clarification' : 'rejected',
+        `Memory ref not found: ${input.targetRefId}`,
+      );
+    }
+    if (input.expectedTargetFingerprint !== undefined
+      && target?.bodyFingerprint !== input.expectedTargetFingerprint) {
+      return memoryRememberResult(
+        'needs_clarification',
+        'That Memory changed after it was shown; list it again before correcting it',
+      );
+    }
+    return { allRefs, refs, ...(target === undefined ? {} : { target }) };
+  }
+
+  private async resolveRememberDuplicate(
+    prepared: PreparedMemoryRememberInput,
+    inventory: MemoryRememberInventory,
+    claim: MemoryRememberClaim,
+    expectedTargetFingerprint?: string,
+  ): Promise<MemoryRememberResult | undefined> {
+    const duplicate = await this.findRememberDuplicate(inventory.refs, prepared.normalizedStatement, claim);
+    if (duplicate !== undefined) {
+      if (prepared.operation === 'correct'
+        && inventory.target !== undefined
+        && duplicate.id !== inventory.target.id) {
+        const forgotten = await forgetManagedMemoryRef(
+          this.memoryRootForRef(inventory.target),
+          inventory.target,
+          this.now(),
+          expectedTargetFingerprint,
+        );
+        if (!forgotten) {
+          return memoryRememberResult(
+            'needs_clarification',
+            'That Memory changed after it was shown; list it again before correcting it',
+          );
+        }
+        return memoryRememberResult(
+          'updated',
+          undefined,
+          [duplicate.id],
+          ['The corrected value already existed in the same semantic slot; the superseded Memory was forgotten.'],
+        );
+      }
+      return memoryRememberResult('already_known', undefined, [duplicate.id]);
+    }
+    if (prepared.operation === 'remember') {
+      const archived = await this.findRememberDuplicate(
+        inventory.allRefs.filter((ref) => ref.lifecycle === 'archived'),
+        prepared.normalizedStatement,
+        claim,
+      );
+      if (archived !== undefined) {
+        await forgetManagedMemoryRef(this.memoryRootForRef(archived), archived, this.now());
+      }
+    }
+    return undefined;
+  }
+
+  private async findRememberDuplicate(
+    refs: readonly MemoryItemRef[],
+    normalizedStatement: string,
+    claim: MemoryRememberClaim,
+  ): Promise<MemoryItemRef | undefined> {
+    for (const ref of refs) {
+      if (canonicalClaimKey(ref.claimKey) !== canonicalClaimKey(claim.claimKey)
+        || (ref.claimKind !== undefined && ref.claimKind !== claim.claimKind)) continue;
+      if (normalizeClaimBody((await this.readRef(ref)).body) === normalizedStatement) return ref;
+    }
+    return undefined;
+  }
+
+  private async applyExplicitMemoryRemember(
+    input: MemoryRememberInput,
+    prepared: PreparedMemoryRememberInput,
+    inventory: MemoryRememberInventory,
+    claim: MemoryRememberClaim,
+  ): Promise<MemoryRememberResult> {
+    if (claim.conflictNeedsDecision) {
+      const existingDecision = (await readLearningProposalStore(this.learningStorePath)).proposals.find((entry) => (
+        entry.status === 'pending'
+        && entry.proposal.destination === 'memdir_handoff'
+        && canonicalClaimKey(entry.proposal.metadata.claimKey) === canonicalClaimKey(claim.claimKey)
+        && entry.proposal.metadata.targetRefId === claim.actionTarget?.id
+        && normalizeClaimBody(entry.proposal.body) === prepared.normalizedStatement
+      ));
+      if (existingDecision !== undefined) {
+        return memoryRememberResult(
+          'needs_review',
+          `This claim conflicts with accepted Memory for ${claim.claimKey}`,
+          [],
+          [],
+          [memoryProposalId(existingDecision.proposalId)],
+        );
+      }
+    }
+    const createdAt = this.now();
+    const evidenceRef = input.evidenceRef?.trim() || createExplicitMemoryEvidenceRef(prepared, createdAt);
+    const { digest, plan } = buildExplicitMemoryReview(
+      prepared,
+      claim,
+      evidenceRef,
+      createdAt,
+      this.identity?.sessionId ?? this.sessionId,
+      input.expectedTargetFingerprint,
+    );
+    const result = await this.applyReviewedEpisodeWithLock(plan, digest);
+    return this.mapExplicitMemoryResult(prepared, inventory, result);
+  }
+
+  private async mapExplicitMemoryResult(
+    prepared: PreparedMemoryRememberInput,
+    inventory: MemoryRememberInventory,
+    result: MemoryEpisodeReviewResult,
+  ): Promise<MemoryRememberResult> {
+    const proposalIds = result.proposalIds.map(memoryProposalId);
+    const decision = result.decisions[0];
+    if (decision?.kind === 'no_action' && decision.existingRefId !== undefined) {
+      return memoryRememberResult('already_known', undefined, [decision.existingRefId], result.warnings, proposalIds);
+    }
+    if (result.appliedProposalIds.length === 0) {
+      const status = decision?.kind === 'reject' || decision?.kind === 'quarantine'
+        ? 'rejected'
+        : 'needs_review';
+      return memoryRememberResult(
+        status,
+        decision?.reason ?? result.warnings[0] ?? 'Memory was not applied automatically',
+        [],
+        result.warnings,
+        proposalIds,
+      );
+    }
+    const changedRefIds = prepared.operation === 'correct' && inventory.target !== undefined
+      ? [inventory.target.id]
+      : await this.findRememberedRefIds(prepared.normalizedStatement);
+    return memoryRememberResult(
+      prepared.operation === 'correct' ? 'updated' : 'remembered',
+      undefined,
+      changedRefIds,
+      result.warnings,
+      proposalIds,
+    );
+  }
+
+  private async findRememberedRefIds(normalizedStatement: string): Promise<readonly string[]> {
+    const refs = await this.listRefs({ kinds: ['memdir'], includePrivate: true });
+    const snapshots = await Promise.all(refs.map(async (ref) => ({
+      ref,
+      body: (await this.readRef(ref)).body,
+    })));
+    return snapshots
+      .filter(({ body }) => normalizeClaimBody(body) === normalizedStatement)
+      .map(({ ref }) => ref.id);
+  }
+
   async archiveRef(id: string): Promise<MemoryLifecycleOperationResult> {
-    const ref = (await this.listRefs()).find((candidate) => candidate.id === id);
+    return withLearningFileLock(this.explicitMemoryLockPath(), () => this.archiveRefWithLock(id));
+  }
+
+  private async archiveRefWithLock(id: string): Promise<MemoryLifecycleOperationResult> {
+    const matches = (await this.listRefs()).filter((candidate) => matchesMemoryMutationHandle(candidate, id));
+    if (matches.length > 1) return lifecycleAmbiguous(id, 'archive');
+    const ref = matches[0];
     if (ref?.kind !== 'memdir') return lifecycleNotFound(id, 'archive');
     await archiveManagedMemoryRef(this.memoryRootForRef(ref), ref, this.now());
     return {
@@ -336,21 +617,43 @@ export class MemoryControlPlane implements MemoryController {
     };
   }
 
-  async forgetRef(id: string): Promise<MemoryLifecycleOperationResult> {
-    return this.removeManagedRef(id, 'forget');
+  async forgetRef(
+    id: string,
+    expectedBodyFingerprint?: string,
+  ): Promise<MemoryLifecycleOperationResult> {
+    return withLearningFileLock(this.explicitMemoryLockPath(), () => (
+      this.removeManagedRef(id, 'forget', expectedBodyFingerprint)
+    ));
   }
 
   async purgeRef(id: string): Promise<MemoryLifecycleOperationResult> {
-    return this.removeManagedRef(id, 'purge');
+    return withLearningFileLock(this.explicitMemoryLockPath(), () => this.removeManagedRef(id, 'purge'));
   }
 
   private async removeManagedRef(
     id: string,
     operation: 'forget' | 'purge',
+    expectedBodyFingerprint?: string,
   ): Promise<MemoryLifecycleOperationResult> {
-    const ref = (await this.listRefs()).find((candidate) => candidate.id === id);
+    const matches = (await this.listRefs()).filter((candidate) => matchesMemoryMutationHandle(candidate, id));
+    if (matches.length > 1) return lifecycleAmbiguous(id, operation);
+    const ref = matches[0];
     if (ref?.kind !== 'memdir') return lifecycleNotFound(id, operation);
-    await forgetManagedMemoryRef(this.memoryRootForRef(ref), ref, this.now());
+    const removed = await forgetManagedMemoryRef(
+      this.memoryRootForRef(ref),
+      ref,
+      this.now(),
+      expectedBodyFingerprint,
+    );
+    if (!removed) {
+      return {
+        refId: id,
+        operation,
+        acknowledged: false,
+        residualSourceRefs: ref.sourceRefs,
+        warnings: ['Memory changed after it was shown; list it again before mutating it'],
+      };
+    }
     return {
       refId: id,
       operation,
@@ -541,9 +844,9 @@ export class MemoryControlPlane implements MemoryController {
     const existingRefs = await this.listRefs({ includePrivate: true });
     const storedProposals = (await readLearningProposalStore(this.learningStorePath)).proposals;
     for (let actionIndex = 0; actionIndex < plan.actions.length; actionIndex += 1) {
-      const action = plan.actions[actionIndex]!;
+      const action = canonicalizeReviewAction(plan.actions[actionIndex]!);
       const consultation = await this.consultReviewAction(plan, action, actionIndex, existingRefs);
-      if (consultation.kind === 'conflict'
+      if ((consultation.kind === 'conflict' && consultation.existingRefId === undefined)
         || consultation.kind === 'no_action'
         || consultation.kind === 'reject'
         || consultation.kind === 'quarantine') {
@@ -580,7 +883,7 @@ export class MemoryControlPlane implements MemoryController {
         ...(existingRef?.sourceRefs ?? []),
         ...(digest?.evidenceRefs ?? plan.sourceRefs),
       ]);
-      const placement = this.resolveReviewMemoryPlacement(
+      const placement = await this.resolveReviewMemoryPlacement(
         plan,
         action,
         existingRef,
@@ -600,6 +903,8 @@ export class MemoryControlPlane implements MemoryController {
           sourceRefs,
           completedTurn: true,
           persistenceKind: consultation.kind,
+          reviewRationale: action.rationale.slice(0, 1_024),
+          reviewRisk: action.risk,
           ...(action.claimKind !== undefined ? { claimKind: action.claimKind } : {}),
           ...(action.claimKey !== undefined ? { claimKey: action.claimKey } : {}),
           ...(action.actionSignature !== undefined ? { actionSignature: action.actionSignature } : {}),
@@ -619,12 +924,18 @@ export class MemoryControlPlane implements MemoryController {
             targetRefId: existingRef.id,
             ...(existingRef.storageUri !== undefined ? { targetStorageUri: existingRef.storageUri } : {}),
           } : {}),
+          ...(action.authorizationTargetFingerprint === undefined
+            ? {}
+            : { authorizationTargetFingerprint: action.authorizationTargetFingerprint }),
         },
       };
       await upsertLearningProposal(this.learningStorePath, handoff, {
         now: this.now,
         ...(revalidateAuthority === undefined ? {} : { revalidateAuthority }),
       });
+      if (action.claimKind === 'procedure' && digest !== undefined && hasVerifiedDigestEvidence(digest)) {
+        await upsertLearningProposal(this.procedurePromotionStorePath(), handoff, { now: this.now });
+      }
       proposalIds.push(proposalId);
       decisions.push({ ...consultation, proposalId });
       this.emit({ type: 'proposal.created', proposalId: memoryProposalId(proposalId) });
@@ -632,11 +943,72 @@ export class MemoryControlPlane implements MemoryController {
     return { proposalIds, decisions };
   }
 
-  private resolveReviewMemoryPlacement(
+  private async resolveReviewMemoryPlacement(
     plan: MemoryReviewPlan,
     action: MemoryReviewDraftAction,
     existingRef: MemoryItemRef | undefined,
     proposals: readonly StoredLearningProposal[],
+  ): Promise<ReviewMemoryPlacement> {
+    if (this.scopedRoots.length === 0) {
+      return this.customRootPlacement(action, existingRef);
+    }
+    const promotionProposals = action.claimKind === 'procedure' && this.identity !== undefined
+      ? (await readLearningProposalStore(this.procedurePromotionStorePath())).proposals
+      : [];
+    const historyProposals = [...proposals, ...promotionProposals];
+    if (existingRef !== undefined) return this.existingRefPlacement(plan, action, existingRef, historyProposals);
+    return this.newClaimPlacement(plan, action, historyProposals);
+  }
+
+  private customRootPlacement(
+    action: MemoryReviewDraftAction,
+    existingRef: MemoryItemRef | undefined,
+  ): ReviewMemoryPlacement {
+    if (existingRef === undefined) return this.projectPlacement(action.claimKind);
+    return {
+      memoryKind: 'project',
+      ...(existingRef.applicability === undefined ? {} : { applicability: existingRef.applicability }),
+      requestedLifecycle: existingRef.lifecycle === 'provisional' ? 'provisional' : 'active',
+    };
+  }
+
+  private existingRefPlacement(
+    plan: MemoryReviewPlan,
+    action: MemoryReviewDraftAction,
+    existingRef: MemoryItemRef,
+    historyProposals: readonly StoredLearningProposal[],
+  ): ReviewMemoryPlacement {
+    if (action.claimKind === 'procedure' && action.claimKey !== undefined && existingRef.scope === 'agent') {
+      const digest = plan.episodeDigest;
+      const currentVerified = digest !== undefined && hasVerifiedDigestEvidence(digest);
+      const history = procedurePromotionHistory(
+        action.claimKey,
+        historyProposals,
+        currentVerified && digest?.outcome === 'succeeded' ? this.identity?.projectId : undefined,
+        currentVerified && digest?.outcome === 'failed',
+      );
+      const active = history.successes >= 3 && history.projects.size >= 2 && !history.hasCounterexample;
+      return {
+        memoryKind: 'semantic_memory',
+        ...(existingRef.applicability === undefined ? {} : { applicability: existingRef.applicability }),
+        requestedLifecycle: active ? 'active' : 'provisional',
+      };
+    }
+    return {
+      memoryKind: existingRef.scope === 'user'
+        ? 'user'
+        : existingRef.scope === 'agent'
+          ? 'semantic_memory'
+          : 'project',
+      ...(existingRef.applicability === undefined ? {} : { applicability: existingRef.applicability }),
+      requestedLifecycle: existingRef.lifecycle === 'provisional' ? 'provisional' : 'active',
+    };
+  }
+
+  private newClaimPlacement(
+    plan: MemoryReviewPlan,
+    action: MemoryReviewDraftAction,
+    historyProposals: readonly StoredLearningProposal[],
   ): ReviewMemoryPlacement {
     if (action.claimKind === 'preference'
       && (plan.trigger === 'explicit_remember' || plan.trigger === 'user_correction')
@@ -654,11 +1026,11 @@ export class MemoryControlPlane implements MemoryController {
     const currentVerified = digest !== undefined && hasVerifiedDigestEvidence(digest);
     const history = procedurePromotionHistory(
       action.claimKey,
-      proposals,
+      historyProposals,
       currentVerified && digest?.outcome === 'succeeded' ? this.identity.projectId : undefined,
       currentVerified && digest?.outcome === 'failed',
     );
-    const agentScoped = existingRef?.scope === 'agent' || history.projects.size >= 2;
+    const agentScoped = history.projects.size >= 2;
     if (!agentScoped) return this.projectPlacement('procedure');
     const active = history.successes >= 3 && history.projects.size >= 2 && !history.hasCounterexample;
     return {
@@ -666,6 +1038,13 @@ export class MemoryControlPlane implements MemoryController {
       applicability: { tenantId: this.identity.tenantId, agentId: this.identity.agentId },
       requestedLifecycle: active ? 'active' : 'provisional',
     };
+  }
+
+  private procedurePromotionStorePath(): string {
+    const root = this.identity === undefined
+      ? this.memoryRoot
+      : resolveScopedMemoryRoot(this.identity, 'agent');
+    return join(root, '.governance', 'procedure-evidence.json');
   }
 
   private projectPlacement(claimKind: MemoryReviewDraftAction['claimKind']): ReviewMemoryPlacement {
@@ -703,6 +1082,17 @@ export class MemoryControlPlane implements MemoryController {
     signal?: AbortSignal,
     revalidateAuthority?: () => Promise<void>,
   ): Promise<MemoryEpisodeReviewResult> {
+    return withLearningFileLock(this.explicitMemoryLockPath(), () => (
+      this.applyReviewedEpisodeWithLock(reviewedPlan, digest, signal, revalidateAuthority)
+    ));
+  }
+
+  private async applyReviewedEpisodeWithLock(
+    reviewedPlan: MemoryReviewPlan,
+    digest: import('../types.js').KodaXMemoryOutcomeDigest,
+    signal?: AbortSignal,
+    revalidateAuthority?: () => Promise<void>,
+  ): Promise<MemoryEpisodeReviewResult> {
     const plan = reviewedPlan.episodeDigest === digest
       ? reviewedPlan
       : { ...reviewedPlan, episodeDigest: digest };
@@ -718,6 +1108,7 @@ export class MemoryControlPlane implements MemoryController {
       }
       const proposalId = decision.proposalId;
       if (proposalId === undefined) continue;
+      if (decision.kind === 'conflict') continue;
       const action = plan.actions[decision.actionIndex];
       if (action === undefined || !isEligibleEpisodePromotion(action, digest)) continue;
       const result = await this.applyHostEligibleProposal(
@@ -738,18 +1129,58 @@ export class MemoryControlPlane implements MemoryController {
     actionIndex: number,
     existingRefs: readonly MemoryItemRef[],
   ): Promise<MemoryReviewPersistenceDecision> {
-    if (action.action === 'conflict_report' || action.relationship === 'conflict') {
-      return { actionIndex, kind: 'conflict', reason: 'review reported an unresolved contradiction' };
-    }
     if (action.action === 'quarantine' || isRestrictedMemoryBody(action.proposedBody ?? '')) {
       return { actionIndex, kind: 'quarantine', reason: 'memory content is restricted or explicitly quarantined' };
     }
-    if ((action.action !== 'write_memdir' && action.action !== 'patch_memdir')
+    if ((action.action !== 'write_memdir'
+        && action.action !== 'patch_memdir'
+        && action.action !== 'conflict_report')
       || action.proposedBody === undefined
       || action.proposedBody.trim().length === 0) {
       return { actionIndex, kind: 'reject', reason: 'review action is not a supported durable-memory mutation' };
     }
+    if (action.claimKind === undefined || !isStableMemoryClaimKey(action.claimKey)) {
+      return { actionIndex, kind: 'reject', reason: 'durable-memory mutation requires a stable claimKind and claimKey' };
+    }
+    const candidateIds = new Set(plan.candidateRefs.map((candidate) => candidate.ref.id));
+    if (action.targetRefIds.some((targetRefId) => !candidateIds.has(targetRefId))) {
+      return { actionIndex, kind: 'reject', reason: 'review action target was not in the frozen candidate set' };
+    }
+    const unboundClaim = existingRefs.find((ref) => (
+      !candidateIds.has(ref.id)
+      && canonicalClaimKey(ref.claimKey) === canonicalClaimKey(action.claimKey)
+    ));
+    if (action.targetRefIds.length === 0 && unboundClaim !== undefined) {
+      return { actionIndex, kind: 'reject', reason: 'matching claim was not in the frozen candidate set' };
+    }
     const existing = findCompatibleReviewRef(action, plan, existingRefs);
+    if (action.action === 'conflict_report' || action.relationship === 'conflict') {
+      return existing === undefined
+        ? { actionIndex, kind: 'reject', reason: 'review conflict has no frozen compatible target' }
+        : {
+            actionIndex,
+            kind: 'conflict',
+            existingRefId: existing.id,
+            reason: 'review reported an unresolved contradiction',
+          };
+    }
+    const handled = handledExplicitMemoryDisposition(plan, action, existing);
+    if (handled === 'same') {
+      return {
+        actionIndex,
+        kind: 'no_action',
+        ...(existing === undefined ? {} : { existingRefId: existing.id }),
+        reason: 'explicit Memory operation already handled this claim',
+      };
+    }
+    if (handled === 'conflict') {
+      return {
+        actionIndex,
+        kind: 'conflict',
+        ...(existing === undefined ? {} : { existingRefId: existing.id }),
+        reason: 'episode review conflicts with an explicit Memory operation from the same episode',
+      };
+    }
     if (existing === undefined) {
       return action.action === 'patch_memdir'
         ? { actionIndex, kind: 'reject', reason: 'patch target is missing or governance-incompatible' }
@@ -802,19 +1233,41 @@ export class MemoryControlPlane implements MemoryController {
     policyReason: string,
     revalidateAuthority?: () => Promise<void>,
   ): Promise<MemoryApplyResult> {
-    const proposal = await this.showProposal(id);
-    if (proposal === undefined) return skippedApply(id, 'memory proposal not found');
-    const result = await this.adapterForProposal(proposal).applyProposal(proposal, {
-      proposalId: proposal.id,
-      approvedBy: 'host',
-      approvedAt: this.now(),
-      expectedFingerprints: proposal.expectedFingerprints,
-      policyId,
-      policyReason,
-      ...(revalidateAuthority === undefined ? {} : { revalidateAuthority }),
+    return withLearningFileLock(this.proposalDecisionLockPath(), async () => {
+      const proposal = (await this.listInbox()).find((candidate) => candidate.id === id);
+      if (proposal === undefined) return skippedApply(id, 'memory proposal is not pending');
+      const staleClaim = await this.staleProposalClaimReason(proposal);
+      if (staleClaim !== undefined) return skippedApply(id, staleClaim);
+      const result = await this.adapterForProposal(proposal).applyProposal(proposal, {
+        proposalId: proposal.id,
+        approvedBy: 'host',
+        approvedAt: this.now(),
+        expectedFingerprints: proposal.expectedFingerprints,
+        policyId,
+        policyReason,
+        ...(revalidateAuthority === undefined ? {} : { revalidateAuthority }),
+      });
+      if (result.applied) this.emit({ type: 'proposal.approved', proposalId: id });
+      return result;
     });
-    if (result.applied) this.emit({ type: 'proposal.approved', proposalId: id });
-    return result;
+  }
+
+  private async staleProposalClaimReason(proposal: MemoryActionProposal): Promise<string | undefined> {
+    if (proposal.action !== 'write_memdir' && proposal.action !== 'patch_memdir') return undefined;
+    const target = proposal.targetRefs.find((ref) => ref.kind === 'memdir');
+    if (target?.claimKey === undefined) return undefined;
+    const refs = await this.listRefs({
+      kinds: ['memdir'],
+      lifecycles: ['active', 'trusted'],
+      includePrivate: true,
+    });
+    const competing = refs.find((ref) => (
+      canonicalClaimKey(ref.claimKey) === canonicalClaimKey(target.claimKey)
+      && !sameMemoryStorage(ref, target)
+    ));
+    return competing === undefined
+      ? undefined
+      : `memory semantic slot changed after proposal preview: ${target.claimKey}`;
   }
 
   private async projectLearningProposal(entry: StoredLearningProposal): Promise<MemoryActionProposal | undefined> {
@@ -830,20 +1283,28 @@ export class MemoryControlPlane implements MemoryController {
   private async projectMemdirHandoff(
     entry: StoredLearningProposal,
     handoff: MemoryLearningHandoff,
-  ): Promise<MemoryActionProposal> {
+  ): Promise<MemoryActionProposal | undefined> {
     const targetRoot = this.memoryRootForHandoff(handoff);
+    if (targetRoot === undefined) return undefined;
+    if (handoff.metadata.targetStorageUri !== undefined
+      && !await isContainedMemoryPath(targetRoot, handoff.metadata.targetStorageUri)) {
+      return undefined;
+    }
     const descriptor = this.scopedRoots.find((candidate) => candidate.root === targetRoot);
     const plan = buildMemdirWritePlan(targetRoot, handoff, entry.proposalId);
     const targetRef = await buildMemdirTargetRef(plan.targetPath, handoff, entry, descriptor);
     const indexRef = await buildEntrypointRef(plan.entrypointPath, descriptor);
     const sourceRef = learningRefFromEntry(entry);
     const beforeFingerprints = {
-      [targetRef.id]: targetRef.bodyFingerprint ?? MISSING_FINGERPRINT,
+      [targetRef.id]: handoff.metadata.authorizationTargetFingerprint
+        ?? targetRef.bodyFingerprint
+        ?? MISSING_FINGERPRINT,
       [indexRef.id]: indexRef.bodyFingerprint ?? MISSING_FINGERPRINT,
     };
     const preview: MemoryApplyPreview = {
       summary: `${handoff.metadata.persistenceKind === 'evidence_update'
-        || handoff.metadata.persistenceKind === 'condition_refinement' ? 'Update' : 'Write'} ${handoff.memoryKind} memory from learning proposal ${entry.proposalId}.`,
+        || handoff.metadata.persistenceKind === 'condition_refinement'
+        || handoff.metadata.persistenceKind === 'conflict' ? 'Update' : 'Write'} ${handoff.memoryKind} memory from learning proposal ${entry.proposalId}.`,
       changedRefs: [targetRef, indexRef],
       changedPaths: [plan.targetPath, plan.entrypointPath],
       beforeFingerprints,
@@ -857,13 +1318,15 @@ export class MemoryControlPlane implements MemoryController {
       id: memoryProposalId(entry.proposalId),
       action: handoff.metadata.persistenceKind === 'evidence_update'
         || handoff.metadata.persistenceKind === 'condition_refinement'
+        || handoff.metadata.persistenceKind === 'conflict'
         ? 'patch_memdir'
         : 'write_memdir',
       targetRefs: [targetRef, indexRef],
       sourceRefs: [sourceRef],
       expectedFingerprints: beforeFingerprints,
-      rationale: `F224 classified this as ${handoff.memoryKind} memory.`,
-      risk: 'medium',
+      rationale: handoff.metadata.reviewRationale
+        ?? `F224 classified this as ${handoff.memoryKind} memory.`,
+      risk: handoff.metadata.reviewRisk ?? 'medium',
       preview,
       requiresApproval: true,
       createdAt: entry.createdAt,
@@ -1093,7 +1556,8 @@ export class MemoryControlPlane implements MemoryController {
 
   private adapterForProposal(proposal: MemoryActionProposal): MemorySourceAdapter {
     if (proposal.action === 'write_memdir' || proposal.action === 'patch_memdir') {
-      return this.memdirAdapter();
+      const target = proposal.targetRefs.find((ref) => ref.kind === 'memdir' && ref.storageUri !== undefined);
+      return this.memdirAdapters().find((adapter) => adapter.owns(target)) ?? this.memdirAdapter();
     }
     return new LearningHandoffAdapter(this.learningStorePath, this.now);
   }
@@ -1122,7 +1586,19 @@ export class MemoryControlPlane implements MemoryController {
     ));
   }
 
-  private memoryRootForHandoff(handoff: MemoryLearningHandoff): string {
+  private memoryRootForHandoff(handoff: MemoryLearningHandoff): string | undefined {
+    if (handoff.metadata.targetStorageUri !== undefined) {
+      const targetStorage = resolve(handoff.metadata.targetStorageUri);
+      const existingRoot = [this.memoryRoot, ...this.scopedRoots.map((entry) => entry.root)]
+        .find((root) => {
+        const targetRelative = relative(root, targetStorage);
+        return targetRelative.length > 0
+          && targetRelative !== '..'
+          && !targetRelative.startsWith(`..${sep}`)
+          && !isAbsolute(targetRelative);
+      });
+      return existingRoot;
+    }
     const targetScope = handoff.memoryKind === 'user'
       ? 'user'
       : handoff.memoryKind === 'semantic_memory'
@@ -1201,6 +1677,7 @@ class LearningHandoffAdapter implements MemorySourceAdapter {
       proposalId,
       'approved',
       {
+        expectedStatus: 'pending',
         appliedChangedPaths: [],
         approvedBy: approval.approvedBy,
         approvedAt: approval.approvedAt,
@@ -1235,11 +1712,23 @@ class MemdirMemoryAdapter implements MemorySourceAdapter {
     private readonly scope: Extract<MemoryScope, 'project' | 'workspace' | 'agent' | 'user'> = 'project',
   ) {}
 
+  owns(ref: MemoryItemRef | undefined): boolean {
+    if (ref?.storageUri === undefined) return false;
+    const targetRelative = relative(this.memoryRoot, ref.storageUri);
+    return targetRelative.length > 0
+      && targetRelative !== '..'
+      && !targetRelative.startsWith(`..${sep}`)
+      && !isAbsolute(targetRelative);
+  }
+
   async listRefs(filter: MemoryRefFilter = {}): Promise<readonly MemoryItemRef[]> {
     const refs: MemoryItemRef[] = [];
-    const proposalStore = this.applicability === undefined
-      ? undefined
-      : await readLearningProposalStore(this.learningStorePath);
+    const proposalStore = await readLearningProposalStore(this.learningStorePath);
+    const receiptStorePath = sharedMemoryReceiptStore(this.memoryRoot);
+    const receiptStore = receiptStorePath === this.learningStorePath
+      ? proposalStore
+      : await readLearningProposalStore(receiptStorePath);
+    const receipts = [...proposalStore.proposals, ...receiptStore.proposals];
     let entries: readonly { readonly name: string; readonly isFile: () => boolean }[];
     try {
       entries = await readdir(this.memoryRoot, { withFileTypes: true });
@@ -1256,20 +1745,22 @@ class MemdirMemoryAdapter implements MemorySourceAdapter {
       const lifecycle = await resolveManagedLifecycle(this.memoryRoot, ref);
       if (lifecycle === 'forgotten') continue;
       const governedRef = lifecycle === ref.lifecycle ? ref : { ...ref, lifecycle };
-      if (this.applicability === undefined) {
-        refs.push(governedRef);
-        continue;
-      }
-      const scopedRef = decorateScopedRef(governedRef, this.scope, this.applicability);
-      const receipt = findApplyReceipt(proposalStore?.proposals ?? [], scopedRef, read.content);
+      const scopedRef = this.applicability === undefined
+        ? governedRef
+        : decorateScopedRef(governedRef, this.scope, this.applicability);
+      const receipt = findApplyReceipt(receipts, scopedRef, read.content);
       const receiptMetadata = receipt?.proposal.destination === 'memdir_handoff'
         ? receipt.proposal.metadata
         : undefined;
-      const governedScopedRef = receiptMetadata?.applicability === undefined
+      const governedScopedRef = this.applicability === undefined
+        ? governedRef
+        : receiptMetadata?.applicability === undefined
         ? scopedRef
         : decorateScopedRef(governedRef, this.scope, receiptMetadata.applicability);
       refs.push(receipt === undefined
-        ? { ...scopedRef, lifecycle: 'provisional', authority: 'proposal_only' }
+        ? (this.applicability === undefined
+          ? governedRef
+          : { ...scopedRef, lifecycle: 'provisional', authority: 'proposal_only' })
         : {
             ...governedScopedRef,
             lifecycle: governedScopedRef.lifecycle === 'archived'
@@ -1327,6 +1818,10 @@ class MemdirMemoryAdapter implements MemorySourceAdapter {
     if (target?.storageUri === undefined || indexRef?.storageUri === undefined) {
       return skippedApply(proposal.id, 'memory proposal has no memdir target');
     }
+    if (!await isContainedMemoryPath(this.memoryRoot, target.storageUri)
+      || !await isContainedMemoryPath(this.memoryRoot, indexRef.storageUri)) {
+      return skippedApply(proposal.id, 'memory proposal target is outside its governed root');
+    }
     const expectedTargetFingerprint = approval.expectedFingerprints[target.id];
     const expectedIndexFingerprint = approval.expectedFingerprints[indexRef.id];
     if (expectedTargetFingerprint === undefined || expectedIndexFingerprint === undefined) {
@@ -1356,6 +1851,15 @@ class MemdirMemoryAdapter implements MemorySourceAdapter {
     }
     const changedPaths: string[] = [];
     const warnings: string[] = [];
+    const receiptStorePath = sharedMemoryReceiptStore(this.memoryRoot);
+    if (receiptStorePath !== this.learningStorePath) {
+      const sourceStore = await readLearningProposalStore(this.learningStorePath);
+      const sourceEntry = sourceStore.proposals.find((entry) => entry.proposalId === proposalId);
+      if (sourceEntry === undefined || sourceEntry.proposal.destination !== 'memdir_handoff') {
+        return skippedApply(proposal.id, 'memory proposal receipt source is missing');
+      }
+      await upsertLearningProposal(receiptStorePath, sourceEntry.proposal, { now: this.now });
+    }
     if (!targetAlreadyApplied) {
       await approval.revalidateAuthority?.();
       await writeFileAtomic(target.storageUri, content);
@@ -1370,27 +1874,40 @@ class MemdirMemoryAdapter implements MemorySourceAdapter {
     } else {
       warnings.push('MEMORY.md already contained the proposal index line; completing approval');
     }
+    const approvalStatus = {
+      expectedStatus: 'pending',
+      appliedAt: this.now(),
+      appliedChangedPaths: [target.storageUri, indexRef.storageUri],
+      approvedBy: approval.approvedBy,
+      approvedAt: approval.approvedAt,
+      approvalPolicyId: approval.policyId,
+      approvalPolicyReason: approval.policyReason,
+      approvalExpectedFingerprints: approval.expectedFingerprints,
+      approvalResultingFingerprints: {
+        [target.id]: fingerprint(content),
+        [indexRef.id]: fingerprint(resultingIndexContent),
+      },
+      now: this.now,
+      ...(approval.revalidateAuthority === undefined
+        ? {}
+        : { revalidateAuthority: approval.revalidateAuthority }),
+    } as const;
+    if (receiptStorePath !== this.learningStorePath) {
+      const receipt = (await readLearningProposalStore(receiptStorePath)).proposals
+        .find((entry) => entry.proposalId === proposalId);
+      if (receipt?.status === 'pending') {
+        await updateLearningProposalStatus(receiptStorePath, proposalId, 'approved', approvalStatus);
+      } else if (receipt?.status !== 'approved'
+        || receipt.approvalResultingFingerprints?.[target.id] !== fingerprint(content)
+        || receipt.approvalResultingFingerprints?.[indexRef.id] !== fingerprint(resultingIndexContent)) {
+        return skippedApply(proposal.id, 'shared memory approval receipt is not recoverable');
+      }
+    }
     await updateLearningProposalStatus(
       this.learningStorePath,
       proposalId,
       'approved',
-      {
-        appliedAt: this.now(),
-        appliedChangedPaths: [target.storageUri, indexRef.storageUri],
-        approvedBy: approval.approvedBy,
-        approvedAt: approval.approvedAt,
-        approvalPolicyId: approval.policyId,
-        approvalPolicyReason: approval.policyReason,
-        approvalExpectedFingerprints: approval.expectedFingerprints,
-        approvalResultingFingerprints: {
-          [target.id]: fingerprint(content),
-          [indexRef.id]: fingerprint(resultingIndexContent),
-        },
-        now: this.now,
-        ...(approval.revalidateAuthority === undefined
-          ? {}
-          : { revalidateAuthority: approval.revalidateAuthority }),
-      },
+      approvalStatus,
     );
     return {
       proposalId: proposal.id,
@@ -1399,6 +1916,29 @@ class MemdirMemoryAdapter implements MemorySourceAdapter {
       changedPaths,
       warnings,
     };
+  }
+}
+
+async function isContainedMemoryPath(root: string, target: string): Promise<boolean> {
+  const lexical = relative(resolve(root), resolve(target));
+  if (lexical.length === 0 || lexical === '..' || lexical.startsWith(`..${sep}`) || isAbsolute(lexical)) {
+    return false;
+  }
+  try {
+    const canonicalRoot = await realpath(root);
+    let canonicalTarget: string;
+    try {
+      canonicalTarget = await realpath(target);
+    } catch {
+      canonicalTarget = join(await realpath(dirname(target)), basename(target));
+    }
+    const physical = relative(canonicalRoot, canonicalTarget);
+    return physical.length > 0
+      && physical !== '..'
+      && !physical.startsWith(`..${sep}`)
+      && !isAbsolute(physical);
+  } catch {
+    return false;
   }
 }
 
@@ -1730,6 +2270,10 @@ function findApplyReceipt(
     }
   }
   return undefined;
+}
+
+function sharedMemoryReceiptStore(memoryRoot: string): string {
+  return join(memoryRoot, '.governance', 'receipts.json');
 }
 
 function memoryTypeForHandoff(kind: MemoryLearningHandoff['memoryKind']): MemoryType {
@@ -2112,18 +2656,21 @@ function findCompatibleReviewRef(
   plan: MemoryReviewPlan,
   refs: readonly MemoryItemRef[],
 ): MemoryItemRef | undefined {
+  const candidateIds = new Set(plan.candidateRefs.map((candidate) => candidate.ref.id));
   const targetIds = new Set(action.targetRefIds);
-  const direct = refs.find((ref) => targetIds.has(ref.id));
+  const direct = refs.find((ref) => candidateIds.has(ref.id) && targetIds.has(ref.id));
   if (direct !== undefined) return isGovernanceCompatibleReviewRef(direct, action) ? direct : undefined;
   if (targetIds.size > 0) return undefined;
 
   if (action.claimKey !== undefined) {
     const byClaimKey = refs.find((ref) =>
-      ref.claimKey === action.claimKey && isGovernanceCompatibleReviewRef(ref, action));
+      candidateIds.has(ref.id)
+      &&
+      canonicalClaimKey(ref.claimKey) === canonicalClaimKey(action.claimKey)
+      && isGovernanceCompatibleReviewRef(ref, action));
     if (byClaimKey !== undefined) return byClaimKey;
   }
 
-  const candidateIds = new Set(plan.candidateRefs.map((candidate) => candidate.ref.id));
   return refs.find((ref) => candidateIds.has(ref.id) && isGovernanceCompatibleReviewRef(ref, action));
 }
 
@@ -2138,11 +2685,261 @@ function isGovernanceCompatibleReviewRef(
   return true;
 }
 
+function sameMemoryStorage(left: MemoryItemRef, right: MemoryItemRef): boolean {
+  if (left.storageUri === undefined || right.storageUri === undefined) return left.id === right.id;
+  const leftPath = resolve(left.storageUri);
+  const rightPath = resolve(right.storageUri);
+  return process.platform === 'win32'
+    ? leftPath.toLowerCase() === rightPath.toLowerCase()
+    : leftPath === rightPath;
+}
+
+function handledExplicitMemoryDisposition(
+  plan: MemoryReviewPlan,
+  action: MemoryReviewDraftAction,
+  existing: MemoryItemRef | undefined,
+): 'same' | 'conflict' | undefined {
+  const handledOperations = plan.episodeDigest?.handledMemoryOperations ?? [];
+  for (let index = handledOperations.length - 1; index >= 0; index -= 1) {
+    const handled = handledOperations[index]!;
+    const targetMatches = existing !== undefined && handled.targetRefIds.includes(existing.id)
+      || action.targetRefIds.some((id) => handled.targetRefIds.includes(id));
+    const claimKeyMatches = handled.claimKey !== undefined
+      && action.claimKey !== undefined
+      && canonicalClaimKey(handled.claimKey) === canonicalClaimKey(action.claimKey);
+    const bodyMatches = handled.statement !== undefined
+      && action.proposedBody !== undefined
+      && normalizeClaimBody(handled.statement) === normalizeClaimBody(action.proposedBody);
+    if (handled.disposition === 'blocked') {
+      const hasIdentity = handled.statement !== undefined
+        || handled.claimKey !== undefined
+        || handled.targetRefIds.length > 0;
+      if (hasIdentity && (targetMatches || claimKeyMatches || bodyMatches)) return 'conflict';
+      continue;
+    }
+    if (handled.disposition === 'decision') {
+      if (bodyMatches && (targetMatches || claimKeyMatches)) return 'same';
+      if (targetMatches || claimKeyMatches || bodyMatches) return 'conflict';
+      continue;
+    }
+    if (handled.operation === 'forget') {
+      if (targetMatches || bodyMatches) return 'same';
+      if (claimKeyMatches) return 'conflict';
+      continue;
+    }
+    if (handled.operation === 'correct' && targetMatches) {
+      return bodyMatches ? 'same' : 'conflict';
+    }
+    if (bodyMatches) return 'same';
+    if (claimKeyMatches) return 'conflict';
+  }
+  return undefined;
+}
+
+function canonicalizeReviewAction(action: MemoryReviewDraftAction): MemoryReviewDraftAction {
+  const claimKey = canonicalClaimKey(action.claimKey);
+  return claimKey === undefined || claimKey === action.claimKey
+    ? action
+    : { ...action, claimKey };
+}
+
+function prepareMemoryRememberInput(
+  input: MemoryRememberInput,
+): PreparedMemoryRememberInput | MemoryRememberResult {
+  const operation = input.operation ?? 'remember';
+  const rawStatement = input.statement.trim();
+  if (rawStatement.length === 0 || rawStatement.length > 1_024) {
+    return memoryRememberResult(
+      'needs_clarification',
+      rawStatement.length === 0
+        ? 'Memory must contain one non-empty claim'
+        : 'Memory is too broad; narrow it to one claim of at most 1024 characters',
+    );
+  }
+  const statement = sanitizePromptSafeMemoryClaim(rawStatement, 1_024);
+  if (statement === undefined) {
+    return memoryRememberResult(
+      'rejected',
+      'Memory contains restricted or sensitive content and was not stored automatically',
+    );
+  }
+  if (operation === 'correct' && input.targetRefId === undefined) {
+    return memoryRememberResult(
+      'needs_clarification',
+      'Correction requires one exact Memory ref; list memories and disambiguate the target first',
+    );
+  }
+  return { operation, statement, normalizedStatement: normalizeClaimBody(statement) };
+}
+
+function resolveMemoryRememberClaim(
+  input: MemoryRememberInput,
+  prepared: PreparedMemoryRememberInput,
+  inventory: MemoryRememberInventory,
+): MemoryRememberClaim | MemoryRememberResult {
+  const suppliedClaimKey = canonicalClaimKey(input.claimKey);
+  if (suppliedClaimKey !== undefined && !/^[a-z0-9._:-]{1,160}$/i.test(suppliedClaimKey)) {
+    return memoryRememberResult('needs_clarification', 'claimKey must be a stable semantic identifier');
+  }
+  if (prepared.operation === 'remember' && suppliedClaimKey === undefined) {
+    return memoryRememberResult(
+      'needs_clarification',
+      'New Memory requires a stable semantic claimKey so later corrections and conflicts target the same claim',
+    );
+  }
+  if (prepared.operation === 'correct'
+    && input.claimKind !== undefined
+    && inventory.target?.claimKind !== undefined
+    && input.claimKind !== inventory.target.claimKind) {
+    return memoryRememberResult(
+      'needs_clarification',
+      `Correction claimKind must remain ${inventory.target.claimKind} for the selected Memory`,
+    );
+  }
+  const claimKey = canonicalClaimKey(inventory.target?.claimKey)
+    ?? suppliedClaimKey
+    ?? `explicit:${fingerprint(prepared.normalizedStatement).slice(0, 24)}`;
+  const conflicting = inventory.refs.find((ref) => (
+    canonicalClaimKey(ref.claimKey) === canonicalClaimKey(claimKey)
+    && ref.id !== inventory.target?.id
+  ));
+  return {
+    claimKind: inventory.target?.claimKind ?? input.claimKind ?? 'fact',
+    claimKey,
+    actionTarget: inventory.target ?? conflicting,
+    conflictNeedsDecision: prepared.operation === 'remember' && conflicting !== undefined,
+  };
+}
+
+function canonicalClaimKey(value: string | undefined): string | undefined {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === undefined || normalized.length === 0 ? undefined : normalized;
+}
+
+function isStableMemoryClaimKey(value: string | undefined): boolean {
+  return value !== undefined && /^[a-z0-9._:-]{1,160}$/u.test(value);
+}
+
+function createExplicitMemoryEvidenceRef(
+  prepared: PreparedMemoryRememberInput,
+  createdAt: string,
+): string {
+  return `user-explicit:${fingerprint([
+    prepared.operation,
+    prepared.statement,
+    createdAt,
+  ].join('\0')).slice(0, 24)}`;
+}
+
+function buildExplicitMemoryReview(
+  prepared: PreparedMemoryRememberInput,
+  claim: MemoryRememberClaim,
+  evidenceRef: string,
+  createdAt: string,
+  sessionId: string,
+  authorizationTargetFingerprint?: string,
+): {
+  readonly digest: import('../types.js').KodaXMemoryOutcomeDigest;
+  readonly plan: MemoryReviewPlan;
+} {
+  const digest = buildExplicitMemoryDigest(prepared, evidenceRef, createdAt, sessionId);
+  const action = buildExplicitMemoryAction(prepared, claim, authorizationTargetFingerprint);
+  return {
+    digest,
+    plan: {
+      trigger: prepared.operation === 'correct' ? 'user_correction' : 'explicit_remember',
+      createdAt,
+      sourceRefs: [evidenceRef],
+      candidateRefs: claim.actionTarget === undefined ? [] : [{ ref: claim.actionTarget, warnings: [] }],
+      actions: [action],
+      warnings: [],
+      episodeDigest: digest,
+    },
+  };
+}
+
+function buildExplicitMemoryDigest(
+  prepared: PreparedMemoryRememberInput,
+  evidenceRef: string,
+  createdAt: string,
+  sessionId: string,
+): import('../types.js').KodaXMemoryOutcomeDigest {
+  const digest: import('../types.js').KodaXMemoryOutcomeDigest = {
+    id: `explicit-${fingerprint([prepared.operation, prepared.statement, evidenceRef].join('\0')).slice(0, 24)}`,
+    reviewKey: `explicit:${fingerprint([prepared.operation, prepared.statement, evidenceRef].join('\0')).slice(0, 24)}`,
+    sessionId,
+    branchId: 'explicit-memory',
+    sequence: 0,
+    objective: prepared.operation === 'correct' ? 'Correct durable Memory' : 'Remember durable information',
+    approach: 'Apply an explicit user-authorized Memory operation',
+    outcome: 'succeeded',
+    summary: prepared.statement,
+    evidenceRefs: [evidenceRef],
+    evidence: [{
+      ref: evidenceRef,
+      grade: 'authoritative',
+      source: 'user',
+      verdict: 'passed',
+      observedAt: createdAt,
+    }],
+    memoryIntent: {
+      operation: prepared.operation,
+      evidenceRef,
+      candidateStatement: prepared.statement,
+      userQuote: prepared.statement,
+    },
+    visibility: 'prompt_safe',
+    createdAt,
+  };
+  return digest;
+}
+
+function buildExplicitMemoryAction(
+  prepared: PreparedMemoryRememberInput,
+  claim: MemoryRememberClaim,
+  authorizationTargetFingerprint?: string,
+): MemoryReviewDraftAction {
+  return {
+    action: prepared.operation === 'correct' || claim.conflictNeedsDecision ? 'patch_memdir' : 'write_memdir',
+    targetRefIds: claim.actionTarget === undefined ? [] : [claim.actionTarget.id],
+    summary: prepared.statement.slice(0, 160),
+    rationale: claim.conflictNeedsDecision
+      ? `The explicit request conflicts with the existing Memory that owns claim key ${claim.claimKey}.`
+      : 'The user explicitly requested this prompt-safe Memory operation.',
+    confidence: 'high',
+    risk: claim.conflictNeedsDecision ? 'medium' : 'low',
+    requiresApproval: true,
+    proposedBody: prepared.statement,
+    claimKind: claim.claimKind,
+    claimKey: claim.claimKey,
+    ...(authorizationTargetFingerprint === undefined ? {} : { authorizationTargetFingerprint }),
+    ...(prepared.operation === 'correct' || claim.conflictNeedsDecision
+      ? { relationship: 'condition_refinement' as const }
+      : {}),
+  };
+}
+
 function normalizeClaimBody(body: string): string {
   return parseMemoryFile(body).body
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();
+}
+
+function memoryRememberResult(
+  status: MemoryRememberResult['status'],
+  reason?: string,
+  changedRefIds: readonly string[] = [],
+  warnings: readonly string[] = [],
+  proposalIds: readonly string[] = [],
+): MemoryRememberResult {
+  return {
+    status,
+    changedRefIds,
+    proposalIds,
+    ...(reason === undefined ? {} : { reason }),
+    warnings,
+  };
 }
 
 function procedurePromotionHistory(
@@ -2154,12 +2951,15 @@ function procedurePromotionHistory(
   let successes = currentProjectId === undefined ? 0 : 1;
   let hasCounterexample = currentCounterexample;
   const projects = new Set<string>();
+  const seenProposalIds = new Set<string>();
   if (currentProjectId !== undefined) projects.add(currentProjectId);
   for (const entry of proposals) {
+    if (seenProposalIds.has(entry.proposalId)) continue;
+    seenProposalIds.add(entry.proposalId);
     if (entry.status === 'rejected' || entry.proposal.destination !== 'memdir_handoff') continue;
     const metadata = entry.proposal.metadata;
     if (metadata.claimKind !== 'procedure'
-      || metadata.claimKey !== claimKey
+      || canonicalClaimKey(metadata.claimKey) !== canonicalClaimKey(claimKey)
       || metadata.verifiedEvidence !== true) continue;
     const projectId = metadata.evidenceProjectId ?? metadata.applicability?.projectId;
     if (metadata.episodeOutcome === 'succeeded') {
@@ -2371,6 +3171,28 @@ function lifecycleNotFound(
     acknowledged: false,
     residualSourceRefs: [],
     warnings: ['managed memory ref not found'],
+  };
+}
+
+function skippedReject(proposalId: string, skippedReason: string): MemoryRejectResult {
+  return {
+    proposalId,
+    rejected: false,
+    skippedReason,
+    warnings: [],
+  };
+}
+
+function lifecycleAmbiguous(
+  refId: string,
+  operation: MemoryLifecycleOperationResult['operation'],
+): MemoryLifecycleOperationResult {
+  return {
+    refId,
+    operation,
+    acknowledged: false,
+    residualSourceRefs: [],
+    warnings: ['managed memory ref is ambiguous across scopes'],
   };
 }
 

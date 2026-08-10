@@ -1,6 +1,6 @@
 # KodaX High-Level Design
 
-> Last updated: 2026-08-09
+> Last updated: 2026-08-10
 >
 > Current published baseline: `v0.7.84`
 > (`@kodax-ai/kodax@0.7.84`; the unreleased implementation targets `v0.7.85`,
@@ -589,15 +589,27 @@ and managed-path guards remain deterministic. Decision receipts separately
 record offered candidate IDs, selected candidate IDs, and exposed evidence refs;
 they are trace-only and never store hidden reasoning.
 
-The root Action LLM may bind explicit durable user intent through
-`memory_intent`. A later cancellation preserves only that exact authoritative
-intent evidence; observations and lessons from the cancelled task remain
-discarded. Foreground finalization waits for durable review enqueue but not
-semantic review. A chained same-process drain is best effort, and a later run
-recovers persisted jobs.
+The root Action LLM binds exact current-turn Memory requests through one hidden
+`memory_intent` tool. Mutation authority binds both the requested operation and
+its exact target, and every new claim carries a stable semantic key. Safe explicit
+remember, correction, and forget operations reuse the governed controller and
+apply immediately; the episode carries only a host-owned handled-operation marker
+for de-duplication, while normal episode and
+Skill learning still completes. Ambiguous/broad requests ask for clarification,
+conflicts become explained decisions, and secrets are rejected. Autonomous episode review remains a separate
+background path: verified low-risk changes may auto-apply, and exceptional cases
+remain reviewable. A later run recovers any persisted background jobs.
 
-The public opt-in entry is `@kodax-ai/kodax/experimental-memory`; it does not
-become an implicit dependency for consumers of the stable root or Runtime SDK.
+The user-facing surface is conversational first. `/memory` is an advanced
+escape hatch for accepted entries, exceptional decisions, and diagnostics.
+`MEMORY.md` is only a derived projection; external editors may open it, while a
+hidden repair command may rebuild it from authoritative state.
+
+The public opt-in entry is `@kodax-ai/kodax/experimental-memory`; its additive
+`MemoryManagementAgent` exposes list/remember/forget only when the supplied
+controller implements that capability. The base `MemoryAgent` return type remains
+source-compatible and does not become an implicit dependency for consumers of
+the stable root or Runtime SDK.
 
 ## 11. Workflow Runtime
 

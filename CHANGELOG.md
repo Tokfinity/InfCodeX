@@ -34,11 +34,27 @@ All notable changes to this project will be documented in this file.
   command channel instead of raw stdout. `/learn` reports an explicit empty
   state, `/learn ready` is the canonical ready-capability query, and the legacy
   `/learn pending` alias explains that it is unrelated to episode-review work.
-  `/memory reviews [limit]` now lists the persisted cross-session review jobs
-  behind shutdown-backlog notices, while `/memory proposals` names the separate
-  actionable proposal inbox and `/memory pending` remains a documented alias.
-  The `@kodax-ai/kodax/experimental-memory` SDK exposes the same review summary,
-  inspection, and drain APIs used by these surfaces.
+  Memory management is now conversation-first: explicit remember, correction,
+  forget, recall, and exceptional-decision requests use one governed hidden tool.
+  Safe explicit mutations apply immediately; stable semantic claim keys make
+  later contradictions address the same fact/preference/policy/procedure slot.
+  A host-owned handled-operation marker prevents the instruction from being duplicated
+  into the outcome review, while the rest of the episode still participates in
+  autonomous Memory/Skill learning. Ambiguity and broad input request
+  clarification, conflicts become readable decisions, secrets are rejected,
+  and inferred changes stay governed. `/memory` remains a compact advanced escape hatch for accepted
+  Memory, decisions, diagnostics, and external-editor opening. Raw review/status
+  and derived-index rebuild commands remain hidden diagnostics; `MEMORY.md` is a
+  projection rather than the source of truth. The
+  `@kodax-ai/kodax/experimental-memory` factory now returns an additive
+  `MemoryManagementAgent` only for a management-capable controller, exposing
+  list, remember, and forget without widening the existing
+  `MemoryAgent`/`MemoryController` structural contracts. Natural-language
+  decision handles carry their preview revision across turns and fail closed if stale.
+- Unified Memory review accepts a minimal model-owned action/warning plan and
+  binds trigger, timestamps, source/candidate references, and digest authority
+  on the host. This removes redundant schema work that caused GLM providers to
+  return invalid plans without weakening deterministic action validation.
 - Issue 282 follow-up: Actor progress is now batched once per controller tree,
   terminal persistence excludes known mutation-queue waits from its five-second
   ambiguity budget, and a permanently blocked predecessor remains bounded by a

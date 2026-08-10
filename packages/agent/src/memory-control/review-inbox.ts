@@ -185,6 +185,10 @@ export type EpisodeReviewDrainEligibility = 'eligible' | 'discard' | 'defer';
 
 export interface EpisodeReviewDrainOptions {
   readonly maxEntries?: number;
+  /** Process this just-persisted job before bounded backlog work. */
+  readonly preferredJobId?: string;
+  /** Skip unrelated backlog when searching across alternate project identities. */
+  readonly onlyPreferred?: boolean;
   /** Epoch-ms deadline: stop claiming new jobs once passed and release an
    * in-flight claim instead of committing a decision. */
   readonly deadlineAtMs?: number;
@@ -1263,11 +1267,19 @@ export async function drainPendingEpisodeReviews(
     tenantId: identity.tenantId,
     agentId: identity.agentId,
   } satisfies PendingEpisodeReviewFilter;
-  const owned = await listPendingEpisodeReviews({
+  const listed = await listPendingEpisodeReviews({
     ...ownerFilter,
     projectId: identity.projectId ?? null,
   });
-  const foreignProjectCount = identity.projectId === undefined
+  const preferred = options.preferredJobId === undefined
+    ? undefined
+    : listed.find((entry) => entry.version === 2 && entry.jobId === options.preferredJobId);
+  const owned = options.onlyPreferred === true
+    ? (preferred === undefined ? [] : [preferred])
+    : preferred === undefined
+      ? (listed.length < 2 ? listed : [listed[listed.length - 1]!, ...listed.slice(0, -1)])
+      : [preferred, ...listed.filter((entry) => entry !== preferred)];
+  const foreignProjectCount = identity.projectId === undefined && options.onlyPreferred !== true
     ? await countForeignProjectPendingReviews(ownerFilter)
     : 0;
   const maxEntries = Math.max(1, Math.min(8, options.maxEntries ?? 8));
@@ -2587,8 +2599,24 @@ function isOutcomeDigest(value: unknown): value is KodaXMemoryOutcomeDigest {
     && (value.outcome !== 'cancelled' || isIntentOnlyCancelledDigest(value))
     && (value.memoryInfluence === undefined
       || (Array.isArray(value.memoryInfluence) && value.memoryInfluence.every(isMemoryInfluence)))
+    && (value.handledMemoryOperations === undefined
+      || (Array.isArray(value.handledMemoryOperations)
+        && value.handledMemoryOperations.every(isHandledMemoryOperation)))
     && (value.visibility === 'prompt_safe' || value.visibility === 'private' || value.visibility === 'sensitive')
     && typeof value.createdAt === 'string';
+}
+
+function isHandledMemoryOperation(value: unknown): boolean {
+  return isRecord(value)
+    && (value.operation === 'remember' || value.operation === 'correct' || value.operation === 'forget')
+    && (value.disposition === undefined
+      || value.disposition === 'applied'
+      || value.disposition === 'decision'
+      || value.disposition === 'blocked')
+    && (value.statement === undefined || typeof value.statement === 'string')
+    && (value.claimKey === undefined || typeof value.claimKey === 'string')
+    && Array.isArray(value.targetRefIds)
+    && value.targetRefIds.every((ref) => typeof ref === 'string');
 }
 
 function isOutcomeEvidence(value: unknown): boolean {
@@ -2627,6 +2655,7 @@ function isIntentOnlyCancelledDigest(value: Record<string, unknown>): boolean {
     && value.actionSignature === undefined
     && value.preconditions === undefined
     && value.lesson === undefined
+    && value.handledMemoryOperations === undefined
     && value.memoryInfluence === undefined;
 }
 

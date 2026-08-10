@@ -88,6 +88,33 @@ describe('FEATURE_263 unified review normalization', () => {
     });
   });
 
+  it('accepts a provider Memory plan that omits authority fields already frozen by the host', () => {
+    const result = normalizeUnifiedLearningReview({
+      cacheDomain: 'learning-review',
+      memory: memoryInput,
+      evidence: evidence(),
+    }, {
+      memoryPlan: {
+        actions: [],
+        warnings: [],
+      },
+      capabilityDecision: {
+        disposition: 'discard',
+        reasonCodes: ['no_reusable_learning'],
+      },
+    });
+
+    expect(result.memoryPlan).toMatchObject({
+      trigger: memoryInput.trigger,
+      createdAt: digest.createdAt,
+      sourceRefs: memoryInput.sourceRefs,
+      candidateRefs: memoryInput.candidateRefs,
+      actions: [],
+      warnings: [],
+      episodeDigest: digest,
+    });
+  });
+
   it('rejects malformed optional Memory action fields before governed apply', () => {
     expect(() => normalizeUnifiedLearningReview({
         cacheDomain: 'learning-review',
@@ -139,6 +166,31 @@ describe('FEATURE_263 unified review normalization', () => {
       .toThrow(/invalid Memory plan/i);
   });
 
+  it.each([
+    { claimKind: 'fact' },
+    { claimKey: 'project.release-check' },
+    { claimKind: 'fact', claimKey: 'not a stable key' },
+  ])('rejects a mutating Memory action without a stable claim identity: %o', (claim) => {
+    expect(() => normalizeUnifiedLearningReview({
+      cacheDomain: 'learning-review', memory: memoryInput, evidence: evidence(),
+    }, {
+      memoryPlan: {
+        ...memoryPlan,
+        actions: [{
+          action: 'write_memdir',
+          targetRefIds: [],
+          summary: 'Remember the release method.',
+          rationale: 'It is reusable.',
+          confidence: 'high',
+          risk: 'low',
+          requiresApproval: true,
+          proposedBody: 'Run the release check.',
+          ...claim,
+        }],
+      },
+    })).toThrow(/invalid Memory plan/i);
+  });
+
   it('preserves a valid Memory plan when the Skill field fails structural gates', () => {
     const result = normalizeUnifiedLearningReview({
       cacheDomain: 'learning-review', memory: memoryInput, evidence: evidence(),
@@ -162,7 +214,10 @@ describe('FEATURE_263 unified review normalization', () => {
       },
     });
 
-    expect(result.memoryPlan).toEqual(memoryPlan);
+    expect(result.memoryPlan).toEqual({
+      ...memoryPlan,
+      createdAt: digest.createdAt,
+    });
     expect(result.capabilityDecision).toMatchObject({
       disposition: 'ready',
       reasonCodes: expect.arrayContaining(['unsafe_skill_spec']),
@@ -600,6 +655,32 @@ describe('FEATURE_263 unified review normalization', () => {
     expect(sanitized.evidence.outcomeDigest.objective).toContain('[omitted:');
   });
 
+  it('retains safe handled-operation identity when its statement is filtered', () => {
+    const sanitized = sanitizeUnifiedLearningReviewInput({
+      cacheDomain: 'learning-review',
+      memory: memoryInput,
+      evidence: evidence({
+        outcomeDigest: {
+          ...digest,
+          handledMemoryOperations: [{
+            operation: 'forget',
+            disposition: 'applied',
+            statement: 'password=do-not-copy',
+            claimKey: 'project.legacy.secret',
+            targetRefIds: ['memdir:legacy.md'],
+          }],
+        },
+      }),
+    });
+
+    expect(sanitized.evidence.outcomeDigest.handledMemoryOperations).toEqual([{
+      operation: 'forget',
+      disposition: 'applied',
+      claimKey: 'project.legacy.secret',
+      targetRefIds: ['memdir:legacy.md'],
+    }]);
+  });
+
   it('accepts the additive failedWithLesson qualification only as a boolean (FEATURE_290 §3.3)', () => {
     const input = {
       cacheDomain: 'learning-review' as const,
@@ -704,6 +785,8 @@ describe('FEATURE_263 unified review normalization', () => {
       confidence: 'high' as const,
       risk,
       requiresApproval: true as const,
+      claimKind: 'procedure' as const,
+      claimKey: 'project.failure-lesson',
       proposedBody: 'Inspect the failing verifier output before retrying.',
     });
     const failedDigest: KodaXMemoryOutcomeDigest = {

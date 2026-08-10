@@ -18,6 +18,7 @@ export type {
   MemoryContextIdentity,
   MemoryLifecycle,
   MemoryLifecycleOperationResult,
+  MemoryManagementController,
   MemoryPack,
   MemoryPackHint,
   MemoryPackInput,
@@ -25,6 +26,8 @@ export type {
   MemoryProposalAction,
   MemoryRefFilter,
   MemoryRefKind,
+  MemoryRememberInput,
+  MemoryRememberResult,
   MemoryRejectResult,
   MemoryReviewCandidateRef,
   MemoryReviewDraftAction,
@@ -40,6 +43,8 @@ export type {
   MemoryVisibility,
 } from './types.js';
 
+export { isMemoryManagementController } from './types.js';
+
 export type {
   CreateMemoryControlPlaneOptions,
 } from './controller.js';
@@ -52,6 +57,9 @@ export {
 export {
   sanitizePromptSafeMemoryClaim,
 } from './prompt-safety.js';
+
+export { memoryProposalRevision } from './proposal-revision.js';
+export { memoryMutationHandle } from './mutation-handle.js';
 
 export {
   claimEpisodeReview,

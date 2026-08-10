@@ -2444,10 +2444,9 @@ export interface KodaXToolExecutionContext {
     readonly evidenceRefs: readonly string[];
   } | undefined>;
   /**
-   * Root-session-only submission channel for explicit user Memory intent.
-   * The host validates an exact current-user quote and captures one intent for
-   * end-of-episode governed submission; this callback never creates a durable
-   * review job or writes Memory directly.
+   * @deprecated Legacy end-of-episode explicit Memory-intent capture callback.
+   * Hosts may keep providing this callback; the conversation-first management
+   * tool never sends its broader operation protocol through this seam.
    */
   memoryIntent?: (input: {
     readonly operation: 'remember' | 'correct';
@@ -2462,6 +2461,76 @@ export interface KodaXToolExecutionContext {
     | {
         readonly status: 'rejected';
         readonly reason: string;
+      }
+  >;
+  /** Root-session-only conversation-first Memory management channel. */
+  memoryManagementIntent?: (input: {
+    readonly operation:
+      | 'list'
+      | 'remember'
+      | 'correct'
+      | 'forget'
+      | 'decisions'
+      | 'show'
+      | 'approve'
+      | 'reject';
+    readonly statement?: string;
+    readonly targetRefId?: string;
+    readonly claimKind?: 'fact' | 'policy' | 'preference' | 'procedure';
+    readonly claimKey?: string;
+    readonly userQuote?: string;
+    readonly reason?: string;
+  }) => Promise<
+    | {
+        readonly status: 'listed';
+        readonly operation: 'list';
+        readonly total: number;
+        readonly memories: readonly {
+          readonly refId: string;
+          readonly title: string;
+          readonly body: string;
+          readonly bodyFingerprint: string;
+        }[];
+      }
+    | {
+        readonly status: 'decisions';
+        readonly operation: 'decisions';
+        readonly total: number;
+        readonly decisions: readonly {
+          readonly refId: string;
+          readonly summary: string;
+          readonly rationale: string;
+          readonly risk: 'low' | 'medium' | 'high';
+          readonly proposedBody?: string;
+        }[];
+      }
+    | {
+        readonly status: 'shown';
+        readonly operation: 'show';
+        readonly decision: {
+          readonly refId: string;
+          readonly summary: string;
+          readonly rationale: string;
+          readonly risk: 'low' | 'medium' | 'high';
+          readonly proposedBody?: string;
+        };
+      }
+    | {
+        readonly status:
+          | 'remembered'
+          | 'updated'
+          | 'already_known'
+          | 'forgotten'
+          | 'approved'
+          | 'decision_rejected';
+        readonly operation: 'remember' | 'correct' | 'forget' | 'approve' | 'reject';
+        readonly changedRefIds: readonly string[];
+      }
+    | {
+        readonly status: 'needs_clarification' | 'needs_review' | 'rejected';
+        readonly operation: 'remember' | 'correct' | 'forget' | 'show' | 'approve' | 'reject';
+        readonly reason: string;
+        readonly decisionRefIds?: readonly string[];
       }
   >;
   /** Exact persisted history loader for the current root or isolated worker Session. */

@@ -940,6 +940,50 @@ describe('learning proposal store', () => {
   });
 
   it.each([
+    ['reviewRationale', 42],
+    ['reviewRisk', 'critical'],
+  ])('rejects invalid persisted memory %s metadata', async (field, invalidValue) => {
+    const dir = await createTempDir(`kodax-learning-memory-${field}-`);
+    const storePath = join(dir, 'proposals.json');
+    const proposal = triageProceduralLearning({
+      proposalId: `p-memory-${field}`,
+      origin: 'background_learning',
+      completedTurn: true,
+      sourceRefs: ['turn:memory-validation'],
+      candidate: {
+        kind: 'memdir_handoff',
+        memoryKind: 'project',
+        body: 'Run focused tests before release.',
+        metadata: {
+          writeOrigin: 'background_learning',
+          executionContext: 'primary',
+          sessionId: 'session-memory-validation',
+          sourceRefs: ['turn:memory-validation'],
+          completedTurn: true,
+        },
+      },
+    });
+    if (proposal.destination !== 'memdir_handoff') throw new Error('expected memory handoff');
+    await upsertLearningProposal(storePath, proposal);
+    const document: unknown = JSON.parse(await readFile(storePath, 'utf8'));
+    if (!isMutableRecord(document) || !Array.isArray(document.proposals)
+      || !isMutableRecord(document.proposals[0])
+      || !isMutableRecord(document.proposals[0].proposal)
+      || !isMutableRecord(document.proposals[0].proposal.metadata)) {
+      throw new Error('expected stored memory proposal');
+    }
+    document.proposals[0].proposal.metadata[field] = invalidValue;
+    await writeFile(storePath, `${JSON.stringify(document, null, 2)}\n`, 'utf8');
+
+    const read = await readLearningProposalStore(storePath);
+
+    expect(read.proposals).toEqual([]);
+    expect(read.warnings).toEqual([
+      `proposal entry p-memory-${field} has invalid proposal payload`,
+    ]);
+  });
+
+  it.each([
     ['approvedAt', 123],
     ['approvalPolicyId', 123],
     ['approvalPolicyReason', 123],

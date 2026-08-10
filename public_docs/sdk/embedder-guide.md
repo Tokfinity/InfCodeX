@@ -3547,7 +3547,7 @@ workflow's structured findings, verification results, and quality gates.
 
 ---
 
-## 21. Experimental governed memory — `/experimental-memory` (FEATURE_260 + FEATURE_275, v0.7.68–v0.7.77)
+## 21. Experimental governed memory — `/experimental-memory` (FEATURE_260 + FEATURE_275 + FEATURE_292, v0.7.68–v0.7.85)
 
 KodaX has one durable memory plane: the F228 Memory Control Plane. FEATURE_260
 adds a thin, opt-in agent/session API over that plane; it does not add a second
@@ -3582,6 +3582,19 @@ const controlPlane = createMemoryControlPlane({
   discoverSkills: false,
 });
 const memory = createMemoryAgent({ controlPlane });
+// `memory` is a MemoryManagementAgent because this controller exposes the
+// additive management capability. A legacy MemoryController returns MemoryAgent.
+const remembered = await memory.remember({
+  operation: 'remember',
+  statement: 'Run npm run build before this project is released.',
+  claimKind: 'procedure',
+  claimKey: 'project.procedure.release-build',
+  evidenceRef: 'host:user-request:42',
+});
+const accepted = await memory.list();
+if (accepted[0] !== undefined) {
+  await memory.forget(accepted[0].handle, accepted[0].storageFingerprint);
+}
 const session = await memory.startSession({
   identity,
   objective: 'Review the runtime shutdown change',
@@ -3612,6 +3625,19 @@ await session.close();
 distinct query is admitted per decision epoch, and the result is bounded to at
 most three prompt-safe hints and 512 estimated tokens. `undefined` means there
 is no governed reminder to inject.
+
+`list()`, `remember()`, and `forget()` are the direct host equivalents of the
+conversation-first Memory surface added by FEATURE_292. `remember()` reuses the
+same preview/fingerprint/applicability/apply controller: a safe authoritative
+host request returns `remembered`, `updated`, or `already_known`. Ambiguous or
+broad input returns `needs_clarification`; claim-key conflicts return
+`needs_review` plus a durable proposal ID; restricted or secret input is
+`rejected` without persistence. The host must supply its own durable evidence
+reference and must not present inferred model text as user authority. The base
+`MemoryAgent` and `MemoryController` interfaces remain source-compatible. The
+overload returns `MemoryManagementAgent` only when the supplied controller
+implements `MemoryManagementController`; legacy custom controllers receive the
+base `MemoryAgent` type and never get methods that can only fail at runtime.
 
 ### Sparse foreground intervention (FEATURE_275, v0.7.77)
 
@@ -3670,8 +3696,9 @@ Session.
   trace-only and contain no hidden reasoning; exposure is not proof of
   causality.
 - Durable memory mutation remains owned by F228's
-  proposal/preview/fingerprint/apply flow. `/memory` is the CLI governance
-  surface; direct file/shell writes to managed memory roots are denied.
+  proposal/preview/fingerprint/apply flow. Conversation is the normal product
+  surface; `/memory` is the advanced CLI escape hatch. Direct file/shell writes
+  to managed memory roots are denied, and `MEMORY.md` is a derived projection.
 - Identity/applicability matching is exact and fail-closed. Hosts should supply
   stable tenant/workspace/user/agent/project/session identifiers and must not put
   credentials into those identifiers.

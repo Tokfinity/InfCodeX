@@ -1,5 +1,5 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdir, readdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -10,6 +10,7 @@ import { resolveScopedMemoryRoot } from '../memory/paths.js';
 import { resetSkillRegistry } from '../capabilities/skills/index.js';
 import {
   readLearningProposalStore,
+  updateLearningProposalStatus,
   upsertLearningProposal,
 } from '../learning/store.js';
 import type {
@@ -23,10 +24,12 @@ import type {
 } from '../types.js';
 import {
   createMemoryControlPlane,
+  memoryProposalRevision,
 } from './index.js';
 import { forgetManagedMemoryRef } from './lifecycle.js';
 import type {
   MemoryItemRef,
+  MemoryReviewPlan,
   MemoryReviewModelInput,
 } from './types.js';
 
@@ -72,6 +75,54 @@ describe('MemoryControlPlane', () => {
     });
   });
 
+  it('does not project a persisted proposal outside its governed Memory root', async () => {
+    const outsidePath = join(tempRoot, 'outside.md');
+    await writeFile(outsidePath, 'outside stays unchanged', 'utf8');
+    await upsertLearningProposal(learningStorePath, {
+      ...memoryProposal('p-outside'),
+      metadata: {
+        ...memoryProposal('p-outside').metadata,
+        targetRefId: 'memdir:outside.md',
+        targetStorageUri: outsidePath,
+      },
+    });
+    const controller = createMemoryControlPlane({
+      cwd,
+      learningStorePath,
+      memoryRoot,
+      discoverSkills: false,
+    });
+
+    await expect(controller.listInbox()).resolves.toEqual([]);
+    await expect(readFile(outsidePath, 'utf8')).resolves.toBe('outside stays unchanged');
+  });
+
+  it('does not follow a governed-root alias to an external proposal target', async () => {
+    const outsideRoot = join(tempRoot, 'outside-root');
+    const outsidePath = join(outsideRoot, 'aliased.md');
+    await mkdir(memoryRoot, { recursive: true });
+    await mkdir(outsideRoot, { recursive: true });
+    await writeFile(outsidePath, 'aliased file stays unchanged', 'utf8');
+    await symlink(outsideRoot, join(memoryRoot, 'alias'), process.platform === 'win32' ? 'junction' : 'dir');
+    await upsertLearningProposal(learningStorePath, {
+      ...memoryProposal('p-aliased'),
+      metadata: {
+        ...memoryProposal('p-aliased').metadata,
+        targetRefId: 'memdir:aliased.md',
+        targetStorageUri: join(memoryRoot, 'alias', 'aliased.md'),
+      },
+    });
+    const controller = createMemoryControlPlane({
+      cwd,
+      learningStorePath,
+      memoryRoot,
+      discoverSkills: false,
+    });
+
+    await expect(controller.listInbox()).resolves.toEqual([]);
+    await expect(readFile(outsidePath, 'utf8')).resolves.toBe('aliased file stays unchanged');
+  });
+
   it('approves a memdir handoff with atomic topic/index writes and store status update', async () => {
     await upsertLearningProposal(learningStorePath, memoryProposal('p-apply'));
     const events: string[] = [];
@@ -102,6 +153,98 @@ describe('MemoryControlPlane', () => {
     await expect(readFile(topicPath ?? '', 'utf8')).resolves.toContain('Repo uses npm workspaces.');
     await expect(readFile(join(memoryRoot, 'MEMORY.md'), 'utf8')).resolves.toContain('Repo uses npm workspaces.');
     expect(events).toContain('proposal.approved');
+  });
+
+  it('does not reverse a completed proposal decision', async () => {
+    await upsertLearningProposal(learningStorePath, memoryProposal('p-rejected-state'));
+    await upsertLearningProposal(learningStorePath, memoryProposal('p-approved-state'));
+    const controller = createMemoryControlPlane({
+      cwd,
+      learningStorePath,
+      memoryRoot,
+      discoverSkills: false,
+    });
+    const rejectedPreview = await controller.showProposal('memory:p-rejected-state');
+    const approvedPreview = await controller.showProposal('memory:p-approved-state');
+    if (rejectedPreview === undefined || approvedPreview === undefined) {
+      throw new Error('expected proposal previews');
+    }
+    await controller.rejectProposal(
+      rejectedPreview.id,
+      undefined,
+      memoryProposalRevision(rejectedPreview),
+    );
+    await controller.approveProposal(
+      approvedPreview.id,
+      approvedPreview.expectedFingerprints,
+      memoryProposalRevision(approvedPreview),
+    );
+
+    await expect(controller.approveProposal(
+      rejectedPreview.id,
+      rejectedPreview.expectedFingerprints,
+      memoryProposalRevision(rejectedPreview),
+    )).resolves.toMatchObject({ applied: false, skippedReason: 'memory proposal is not pending' });
+    await expect(controller.rejectProposal(
+      approvedPreview.id,
+      undefined,
+      memoryProposalRevision(approvedPreview),
+    )).resolves.toMatchObject({ rejected: false, skippedReason: 'memory proposal is not pending' });
+  });
+
+  it('binds approval to the shown proposal body, not only its target fingerprints', async () => {
+    await upsertLearningProposal(learningStorePath, memoryProposal('p-revision'));
+    const controller = createMemoryControlPlane({
+      cwd,
+      learningStorePath,
+      memoryRoot,
+      discoverSkills: false,
+    });
+    const shown = await controller.showProposal('memory:p-revision');
+    if (shown === undefined) throw new Error('expected shown proposal');
+    await upsertLearningProposal(learningStorePath, {
+      ...memoryProposal('p-revision'),
+      body: 'Repo uses pnpm workspaces.',
+    });
+
+    const result = await controller.approveProposal(
+      shown.id,
+      shown.expectedFingerprints,
+      memoryProposalRevision(shown),
+    );
+
+    expect(result).toMatchObject({ applied: false, skippedReason: 'memory proposal changed after preview' });
+  });
+
+  it('recovers source status after a shared approval receipt committed first', async () => {
+    await upsertLearningProposal(learningStorePath, memoryProposal('p-receipt-recovery'));
+    const controller = createMemoryControlPlane({
+      cwd,
+      learningStorePath,
+      memoryRoot,
+      discoverSkills: false,
+    });
+    const first = await controller.showProposal('memory:p-receipt-recovery');
+    if (first === undefined) throw new Error('expected memory proposal');
+    await controller.approveProposal(first.id, first.expectedFingerprints, memoryProposalRevision(first));
+    await updateLearningProposalStatus(learningStorePath, 'p-receipt-recovery', 'pending', {
+      expectedStatus: 'approved',
+    });
+    const restarted = createMemoryControlPlane({
+      cwd,
+      learningStorePath,
+      memoryRoot,
+      discoverSkills: false,
+    });
+    const recovery = await restarted.showProposal(first.id);
+    if (recovery === undefined) throw new Error('expected recoverable proposal');
+
+    await expect(restarted.approveProposal(
+      recovery.id,
+      recovery.expectedFingerprints,
+      memoryProposalRevision(recovery),
+    )).resolves.toMatchObject({ applied: true });
+    expect((await readLearningProposalStore(learningStorePath)).proposals[0]?.status).toBe('approved');
   });
 
   it('fails closed when approval fingerprints are older than the current preview', async () => {
@@ -325,6 +468,450 @@ describe('MemoryControlPlane', () => {
     const lifecycleRaw = await readFile(join(memoryRoot, '.governance', 'lifecycle.json'), 'utf8');
     expect(lifecycleRaw).not.toContain('project_stack.md');
     expect(lifecycleRaw).not.toContain('Repo uses npm workspaces');
+  });
+
+  it('applies an explicit safe remember request immediately without a second approval', async () => {
+    const controller = createMemoryControlPlane({
+      cwd,
+      learningStorePath,
+      memoryRoot,
+      discoverSkills: false,
+      now: () => '2026-08-10T00:00:00.000Z',
+    });
+
+    const result = await controller.remember({
+      statement: 'Use npm workspaces in this project.',
+      claimKind: 'policy',
+      claimKey: 'project.policy.package-manager',
+      evidenceRef: 'user:turn-1',
+    });
+
+    expect(result).toMatchObject({ status: 'remembered' });
+    expect(result.changedRefIds).toHaveLength(1);
+    expect(await controller.listInbox()).toEqual([]);
+    const [ref] = await controller.listRefs({ kinds: ['memdir'] });
+    if (ref === undefined) throw new Error('expected remembered ref');
+    await expect(controller.readRef(ref)).resolves.toMatchObject({
+      body: expect.stringContaining('Use npm workspaces in this project.'),
+    });
+  });
+
+  it('makes explicit remember idempotent and applies an exact correction immediately', async () => {
+    const controller = createMemoryControlPlane({
+      cwd,
+      learningStorePath,
+      memoryRoot,
+      discoverSkills: false,
+      now: () => '2026-08-10T00:00:00.000Z',
+    });
+    const first = await controller.remember({
+      statement: 'Run npm test before release.',
+      claimKind: 'procedure',
+      claimKey: 'project.procedure.release-test',
+      evidenceRef: 'user:turn-1',
+    });
+    const duplicate = await controller.remember({
+      statement: 'Run npm test before release.',
+      claimKind: 'procedure',
+      claimKey: 'project.procedure.release-test',
+      evidenceRef: 'user:turn-2',
+    });
+    const targetRefId = first.changedRefIds[0];
+    if (targetRefId === undefined) throw new Error('expected remembered ref');
+
+    const corrected = await controller.remember({
+      operation: 'correct',
+      statement: 'Run npm run test:unit before release.',
+      claimKind: 'procedure',
+      targetRefId,
+      evidenceRef: 'user:turn-3',
+    });
+
+    expect(duplicate).toMatchObject({ status: 'already_known', changedRefIds: [targetRefId] });
+    expect(corrected).toMatchObject({ status: 'updated', changedRefIds: [targetRefId] });
+    const [ref] = await controller.listRefs({ kinds: ['memdir'] });
+    if (ref === undefined) throw new Error('expected corrected ref');
+    expect((await controller.readRef(ref)).body).toContain('Run npm run test:unit before release.');
+  });
+
+  it('does not overwrite a Memory edited after correction inspection', async () => {
+    const initialController = createMemoryControlPlane({
+      cwd,
+      learningStorePath,
+      memoryRoot,
+      discoverSkills: false,
+    });
+    const remembered = await initialController.remember({
+      statement: 'Run npm test before release.',
+      claimKind: 'procedure',
+      claimKey: 'project.procedure.release-test',
+    });
+    const [target] = await initialController.listRefs({ kinds: ['memdir'] });
+    if (target?.storageUri === undefined) throw new Error('expected stored Memory target');
+    const shownFingerprint = target.bodyFingerprint;
+    const externalContent = 'Externally updated Memory; do not overwrite.';
+    const controller = createMemoryControlPlane({
+      cwd,
+      learningStorePath,
+      memoryRoot,
+      discoverSkills: false,
+      onEvent: (event) => {
+        if (event.type === 'proposal.created') writeFileSync(target.storageUri!, externalContent, 'utf8');
+      },
+    });
+
+    const corrected = await controller.remember({
+      operation: 'correct',
+      targetRefId: remembered.changedRefIds[0],
+      expectedTargetFingerprint: shownFingerprint,
+      statement: 'Run npm run test:unit before release.',
+      claimKind: 'procedure',
+    });
+
+    expect(corrected.status).toBe('needs_review');
+    await expect(readFile(target.storageUri, 'utf8')).resolves.toBe(externalContent);
+  });
+
+  it('serializes concurrent explicit remembers without creating spurious decisions', async () => {
+    const controller = createMemoryControlPlane({
+      cwd,
+      learningStorePath,
+      memoryRoot,
+      discoverSkills: false,
+    });
+
+    const [packageManager, testRunner] = await Promise.all([
+      controller.remember({
+        statement: 'This project uses npm.',
+        claimKind: 'fact',
+        claimKey: 'project.package-manager',
+      }),
+      controller.remember({
+        statement: 'This project uses Vitest.',
+        claimKind: 'fact',
+        claimKey: 'project.test-runner',
+      }),
+    ]);
+
+    expect(packageManager.status).toBe('remembered');
+    expect(testRunner.status).toBe('remembered');
+    expect(await controller.listInbox()).toEqual([]);
+    expect(await controller.listRefs({ kinds: ['memdir'] })).toHaveLength(2);
+  });
+
+  it('serializes background review with an explicit claim in the same semantic slot', async () => {
+    const controller = createMemoryControlPlane({
+      cwd,
+      learningStorePath,
+      memoryRoot,
+      discoverSkills: false,
+    });
+    let releaseAuthority!: () => void;
+    let enteredAuthority!: () => void;
+    const authorityEntered = new Promise<void>((resolve) => { enteredAuthority = resolve; });
+    const authorityRelease = new Promise<void>((resolve) => { releaseAuthority = resolve; });
+    const digest = memoryEpisode('session-background-race', ['artifact:package-json']);
+    const background = controller.applyReviewedEpisode(
+      packageManagerReviewPlan('This project uses pnpm.', 'low'),
+      digest,
+      undefined,
+      async () => {
+        enteredAuthority();
+        await authorityRelease;
+      },
+    );
+    await authorityEntered;
+    let explicitSettled = false;
+    const explicit = controller.remember({
+      statement: 'This project uses npm.',
+      claimKind: 'fact',
+      claimKey: 'project.package-manager',
+    }).finally(() => { explicitSettled = true; });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(explicitSettled).toBe(false);
+    releaseAuthority();
+
+    const [backgroundResult, explicitResult] = await Promise.all([background, explicit]);
+    expect(backgroundResult.appliedProposalIds).toHaveLength(1);
+    expect(explicitResult.status).toBe('needs_review');
+    const refs = await controller.listRefs({ kinds: ['memdir'] });
+    expect(refs).toHaveLength(1);
+    expect(refs[0]?.claimKey).toBe('project.package-manager');
+  });
+
+  it('rejects a stale create decision after its semantic slot is filled', async () => {
+    const controller = createMemoryControlPlane({
+      cwd,
+      learningStorePath,
+      memoryRoot,
+      discoverSkills: false,
+    });
+    const digest = memoryEpisode('session-stale-decision', ['artifact:package-json']);
+    const pending = await controller.applyReviewedEpisode(
+      packageManagerReviewPlan('This project uses pnpm.', 'medium'),
+      digest,
+    );
+    expect(pending.appliedProposalIds).toEqual([]);
+    await expect(controller.remember({
+      statement: 'This project uses npm.',
+      claimKind: 'fact',
+      claimKey: 'project.package-manager',
+    })).resolves.toMatchObject({ status: 'remembered' });
+    const [proposal] = await controller.listInbox();
+    if (proposal === undefined) throw new Error('expected pending review proposal');
+
+    const approved = await controller.approveProposal(
+      proposal.id,
+      proposal.expectedFingerprints,
+      memoryProposalRevision(proposal),
+    );
+
+    expect(approved).toMatchObject({
+      applied: false,
+      skippedReason: expect.stringContaining('semantic slot changed'),
+    });
+    expect(await controller.listRefs({ kinds: ['memdir'] })).toHaveLength(1);
+  });
+
+  it('keeps concurrent identical remembers idempotent', async () => {
+    const controller = createMemoryControlPlane({
+      cwd,
+      learningStorePath,
+      memoryRoot,
+      discoverSkills: false,
+    });
+    const input = {
+      statement: 'This project uses npm.',
+      claimKind: 'fact' as const,
+      claimKey: 'project.package-manager',
+    };
+
+    const results = await Promise.all([controller.remember(input), controller.remember(input)]);
+
+    expect(results.map((result) => result.status).sort()).toEqual(['already_known', 'remembered']);
+    expect(await controller.listInbox()).toEqual([]);
+    expect(await controller.listRefs({ kinds: ['memdir'] })).toHaveLength(1);
+  });
+
+  it('does not persist restricted explicit memory content or an ambiguous correction', async () => {
+    const controller = createMemoryControlPlane({
+      cwd,
+      learningStorePath,
+      memoryRoot,
+      discoverSkills: false,
+    });
+
+    await expect(controller.remember({
+      statement: 'api_key=do-not-store',
+      evidenceRef: 'user:turn-1',
+    })).resolves.toMatchObject({ status: 'rejected', changedRefIds: [] });
+    await expect(controller.remember({
+      operation: 'correct',
+      statement: 'Use pnpm instead.',
+      evidenceRef: 'user:turn-2',
+    })).resolves.toMatchObject({ status: 'needs_clarification', changedRefIds: [] });
+    expect(await controller.listRefs({ kinds: ['memdir'] })).toEqual([]);
+  });
+
+  it('persists a readable decision for a conflicting explicit claim', async () => {
+    const options = {
+      cwd,
+      learningStorePath,
+      memoryRoot,
+      discoverSkills: false,
+      now: () => '2026-08-10T00:00:00.000Z',
+    } as const;
+    const controller = createMemoryControlPlane(options);
+    await controller.remember({
+      statement: 'I prefer VSCode.',
+      claimKind: 'preference',
+      claimKey: 'user.preference.editor',
+      evidenceRef: 'user:turn-editor-1',
+    });
+
+    const conflict = await controller.remember({
+      statement: 'I prefer Vim.',
+      claimKind: 'preference',
+      claimKey: 'user.preference.editor',
+      evidenceRef: 'user:turn-editor-2',
+    });
+
+    expect(conflict).toMatchObject({
+      status: 'needs_review',
+      changedRefIds: [],
+      proposalIds: [expect.any(String)],
+    });
+    const repeated = await controller.remember({
+      statement: 'I prefer Vim.',
+      claimKind: 'preference',
+      claimKey: 'user.preference.editor',
+      evidenceRef: 'user:turn-editor-3',
+    });
+    expect(repeated).toMatchObject({
+      status: 'needs_review',
+      proposalIds: conflict.proposalIds,
+    });
+    const restarted = createMemoryControlPlane(options);
+    const inbox = await restarted.listInbox();
+    expect(inbox).toHaveLength(1);
+    const [decision] = inbox;
+    expect(decision).toMatchObject({
+      risk: 'medium',
+      rationale: expect.stringContaining('conflicts with the existing Memory'),
+      preview: { diff: expect.stringContaining('I prefer Vim.') },
+    });
+  });
+
+  it('treats an explicit custom Memory root as one project scope even with an identity', async () => {
+    const identity = {
+      configHome: join(tempRoot, 'external-config-home'),
+      tenantId: 'tenant-custom-root',
+      userId: 'user-custom-root',
+      agentId: 'agent-custom-root',
+      projectId: 'project-custom-root',
+      sessionId: 'session-custom-root',
+    };
+    const controller = createMemoryControlPlane({
+      cwd,
+      memoryRoot,
+      learningStorePath,
+      identity,
+      discoverSkills: false,
+    });
+
+    await expect(controller.remember({
+      statement: 'Prefer concise answers.',
+      claimKind: 'preference',
+      claimKey: 'user.preference.response-length',
+    })).resolves.toMatchObject({ status: 'remembered' });
+
+    const refs = await controller.listRefs({ kinds: ['memdir'] });
+    expect(refs).toMatchObject([{
+      scope: 'project',
+      applicability: { tenantId: identity.tenantId, projectId: identity.projectId },
+    }]);
+    await expect(controller.listRefs({ kinds: ['memdir'], scopes: ['user'] })).resolves.toEqual([]);
+    expect(existsSync(identity.configHome)).toBe(false);
+  });
+
+  it('requires a stable key for a new fact and turns a keyed fact conflict into a decision', async () => {
+    const controller = createMemoryControlPlane({
+      cwd,
+      learningStorePath,
+      memoryRoot,
+      discoverSkills: false,
+      now: () => '2026-08-10T00:00:00.000Z',
+    });
+
+    await expect(controller.remember({
+      statement: 'This project uses npm.',
+      claimKind: 'fact',
+    })).resolves.toMatchObject({ status: 'needs_clarification' });
+
+    await expect(controller.remember({
+      statement: 'This project uses npm.',
+      claimKind: 'fact',
+      claimKey: 'project.package-manager',
+    })).resolves.toMatchObject({ status: 'remembered' });
+
+    await expect(controller.remember({
+      statement: 'This project uses pnpm.',
+      claimKind: 'fact',
+      claimKey: 'project.package-manager',
+    })).resolves.toMatchObject({
+      status: 'needs_review',
+      changedRefIds: [],
+      proposalIds: [expect.any(String)],
+    });
+  });
+
+  it('canonicalizes semantic claim keys before conflict detection', async () => {
+    const controller = createMemoryControlPlane({
+      cwd,
+      learningStorePath,
+      memoryRoot,
+      discoverSkills: false,
+    });
+
+    await expect(controller.remember({
+      statement: 'This project uses npm.',
+      claimKind: 'fact',
+      claimKey: 'Project.Package-Manager',
+    })).resolves.toMatchObject({ status: 'remembered' });
+    await expect(controller.remember({
+      statement: 'This project uses pnpm.',
+      claimKind: 'fact',
+      claimKey: 'project.package-manager',
+    })).resolves.toMatchObject({ status: 'needs_review' });
+
+    const refs = await controller.listRefs({ kinds: ['memdir'] });
+    expect(refs).toHaveLength(1);
+    expect(refs[0]?.claimKey).toBe('project.package-manager');
+  });
+
+  it('preserves distinct semantic slots when a correction matches another claim body', async () => {
+    const controller = createMemoryControlPlane({
+      cwd,
+      learningStorePath,
+      memoryRoot,
+      discoverSkills: false,
+    });
+    const oldValue = await controller.remember({
+      statement: 'Editor is VSCode.',
+      claimKind: 'fact',
+      claimKey: 'project.editor.primary',
+    });
+    const newValue = await controller.remember({
+      statement: 'Editor is Vim.',
+      claimKind: 'fact',
+      claimKey: 'project.editor.secondary',
+    });
+    const oldRefId = oldValue.changedRefIds[0];
+    const newRefId = newValue.changedRefIds[0];
+    if (oldRefId === undefined || newRefId === undefined) throw new Error('expected two memories');
+
+    const corrected = await controller.remember({
+      operation: 'correct',
+      statement: 'Editor is Vim.',
+      targetRefId: oldRefId,
+    });
+
+    expect(corrected).toMatchObject({ status: 'updated', changedRefIds: expect.arrayContaining([oldRefId]) });
+    const refs = await controller.listRefs({ kinds: ['memdir'], lifecycles: ['active', 'trusted'] });
+    expect(refs).toHaveLength(2);
+    expect(refs.map((ref) => ref.claimKey).sort()).toEqual([
+      'project.editor.primary',
+      'project.editor.secondary',
+    ]);
+    for (const ref of refs) expect((await controller.readRef(ref)).body).toContain('Editor is Vim.');
+  });
+
+  it('does not hide a new claim because an identical archived Memory exists', async () => {
+    const controller = createMemoryControlPlane({
+      cwd,
+      learningStorePath,
+      memoryRoot,
+      discoverSkills: false,
+    });
+    const first = await controller.remember({
+      statement: 'Use focused tests.',
+      claimKind: 'fact',
+      claimKey: 'project.testing.focused',
+    });
+    const firstRefId = first.changedRefIds[0];
+    if (firstRefId === undefined) throw new Error('expected remembered ref');
+    await controller.archiveRef(firstRefId);
+
+    const rememberedAgain = await controller.remember({
+      statement: 'Use focused tests.',
+      claimKind: 'fact',
+      claimKey: 'project.testing.focused',
+      evidenceRef: 'user:remember-again',
+    });
+
+    expect(rememberedAgain.status).toBe('remembered');
+    expect(await controller.listRefs({ kinds: ['memdir'], lifecycles: ['active', 'trusted'] }))
+      .toHaveLength(1);
   });
 
   it('serializes concurrent lifecycle updates without losing tombstones', async () => {
@@ -807,6 +1394,8 @@ describe('MemoryControlPlane', () => {
           confidence: 'high',
           risk: 'low',
           requiresApproval: true,
+          claimKind: 'fact',
+          claimKey: 'project.package-manager',
           proposedBody: 'Repo uses npm workspaces.\n\nWhy: package.json and tests verified it.',
         }],
         warnings: [],
@@ -957,6 +1546,8 @@ describe('MemoryControlPlane', () => {
           confidence: 'high',
           risk: 'low',
           requiresApproval: true,
+          claimKind: 'procedure',
+          claimKey: 'project.model-only-procedure',
           proposedBody: 'Always use the model-only procedure.',
         }],
         warnings: [],
@@ -1230,6 +1821,436 @@ describe('MemoryControlPlane', () => {
     expect(body).not.toContain('configured as an npm workspace');
   });
 
+  it('discovers a governed user preference from another project with default proposal stores', async () => {
+    const firstIdentity = {
+      tenantId: 'tenant-a',
+      userId: 'user-a',
+      agentId: 'agent-a',
+      projectId: 'project-a',
+      sessionId: 'session-a',
+    } as const;
+    const secondIdentity = { ...firstIdentity, projectId: 'project-b', sessionId: 'session-b' };
+    const first = createMemoryControlPlane({
+      cwd: join(tempRoot, 'repo-a'),
+      identity: firstIdentity,
+      discoverSkills: false,
+    });
+    const remembered = await first.remember({
+      statement: 'I prefer concise answers.',
+      claimKind: 'preference',
+      claimKey: 'user.preference.response-length',
+      evidenceRef: 'user:concise-answers',
+    });
+    expect(remembered.status).toBe('remembered');
+
+    const second = createMemoryControlPlane({
+      cwd: join(tempRoot, 'repo-b'),
+      identity: secondIdentity,
+      discoverSkills: false,
+    });
+    const shared = (await second.listRefs({ kinds: ['memdir'] }))
+      .find((ref) => ref.claimKey === 'user.preference.response-length');
+
+    expect(shared).toMatchObject({
+      scope: 'user',
+      lifecycle: 'active',
+      authority: 'approved_write',
+      applicability: { tenantId: 'tenant-a', userId: 'user-a' },
+    });
+  });
+
+  it('keeps identical text when it belongs to a different claim and scope', async () => {
+    const identity = {
+      tenantId: 'tenant-a',
+      userId: 'user-a',
+      agentId: 'agent-a',
+      projectId: 'project-a',
+      sessionId: 'session-distinct-slots',
+    } as const;
+    const controller = createMemoryControlPlane({ cwd, identity, learningStorePath, discoverSkills: false });
+
+    await expect(controller.remember({
+      statement: 'Prefer concise output.',
+      claimKind: 'fact',
+      claimKey: 'project.output-style',
+    })).resolves.toMatchObject({ status: 'remembered' });
+    await expect(controller.remember({
+      statement: 'Prefer concise output.',
+      claimKind: 'preference',
+      claimKey: 'user.preference.output-style',
+    })).resolves.toMatchObject({ status: 'remembered' });
+
+    const refs = await controller.listRefs({ kinds: ['memdir'] });
+    expect(refs).toHaveLength(2);
+    expect(refs.map((ref) => ref.scope).sort()).toEqual(['project', 'user']);
+  });
+
+  it('serializes remember and forget against the same derived index', async () => {
+    const identity = {
+      tenantId: 'tenant-a',
+      agentId: 'agent-a',
+      projectId: 'project-a',
+      sessionId: 'session-index-mutation',
+    } as const;
+    const controller = createMemoryControlPlane({
+      cwd,
+      identity,
+      learningStorePath,
+      discoverSkills: false,
+      now: () => '2026-07-12T00:00:00.000Z',
+    });
+    const oldResult = await controller.remember({
+      statement: 'Run npm test before release.',
+      claimKind: 'procedure',
+      claimKey: 'project.release-test',
+      evidenceRef: 'user:old-release-test',
+    });
+    const oldRefId = oldResult.changedRefIds[0];
+    if (oldRefId === undefined) throw new Error('expected old memory ref');
+
+    await Promise.all([
+      controller.remember({
+        statement: 'Use npm workspaces in this project.',
+        claimKind: 'fact',
+        claimKey: 'project.package-manager',
+        evidenceRef: 'user:new-package-manager',
+      }),
+      controller.forgetRef(oldRefId),
+    ]);
+
+    const root = resolveScopedMemoryRoot(identity, 'project');
+    const index = await readFile(join(root, 'MEMORY.md'), 'utf8');
+    expect(index).not.toContain('Run npm test before release.');
+    expect(index).toContain('Use npm workspaces in this project.');
+    const refs = await controller.listRefs({ kinds: ['memdir'] });
+    expect(refs.map((ref) => ref.claimKey)).toEqual(['project.package-manager']);
+  });
+
+  it('does not capture an explicit claim a second time during completed episode review', async () => {
+    const identity = {
+      tenantId: 'tenant-a',
+      agentId: 'agent-a',
+      projectId: 'project-a',
+      sessionId: 'session-explicit-dedupe',
+    } as const;
+    const controller = createMemoryControlPlane({
+      cwd,
+      identity,
+      learningStorePath,
+      discoverSkills: false,
+      now: () => '2026-07-12T00:00:00.000Z',
+      memoryReviewer: async (input) => ({
+        trigger: input.trigger,
+        createdAt: '2026-07-12T00:00:00.000Z',
+        sourceRefs: input.sourceRefs,
+        candidateRefs: input.candidateRefs,
+        actions: [{
+          action: 'write_memdir',
+          targetRefIds: [],
+          summary: 'Remember package manager',
+          rationale: 'The user explicitly identified the package manager.',
+          confidence: 'high',
+          risk: 'low',
+          requiresApproval: true,
+          claimKind: 'fact',
+          claimKey: 'project.package-manager',
+          proposedBody: 'This project uses npm.',
+        }],
+        warnings: [],
+      }),
+    });
+    const remembered = await controller.remember({
+      statement: 'This project uses npm.',
+      claimKind: 'fact',
+      claimKey: 'project.package-manager',
+      evidenceRef: 'user:explicit-package-manager',
+    });
+    const targetRefId = remembered.changedRefIds[0];
+    if (targetRefId === undefined) throw new Error('expected remembered ref');
+
+    const result = await controller.reviewEpisode({
+      ...memoryEpisode(identity.sessionId, ['host:run-terminal']),
+      handledMemoryOperations: [{
+        operation: 'remember',
+        statement: 'This project uses npm.',
+        claimKey: 'project.package-manager',
+        targetRefIds: [targetRefId],
+      }],
+    });
+
+    expect(result).toMatchObject({
+      proposalIds: [],
+      appliedProposalIds: [],
+      decisions: [{
+        kind: 'no_action',
+        existingRefId: targetRefId,
+        reason: 'explicit Memory operation already handled this claim',
+      }],
+    });
+  });
+
+  it('does not duplicate an explicit conflict decision during completed episode review', async () => {
+    const identity = {
+      tenantId: 'tenant-a',
+      agentId: 'agent-a',
+      projectId: 'project-a',
+      sessionId: 'session-explicit-decision-dedupe',
+    } as const;
+    const controller = createMemoryControlPlane({
+      cwd,
+      identity,
+      learningStorePath,
+      discoverSkills: false,
+      memoryReviewer: async (input) => ({
+        trigger: input.trigger,
+        createdAt: '2026-07-12T00:00:00.000Z',
+        sourceRefs: input.sourceRefs,
+        candidateRefs: input.candidateRefs,
+        actions: [{
+          action: 'patch_memdir',
+          targetRefIds: [input.candidateRefs[0]!.ref.id],
+          summary: 'Use pnpm instead',
+          rationale: 'The explicit conflict already created this decision.',
+          confidence: 'high',
+          risk: 'low',
+          requiresApproval: true,
+          claimKind: 'fact',
+          claimKey: 'project.package-manager',
+          proposedBody: 'This project uses pnpm.',
+        }],
+        warnings: [],
+      }),
+    });
+    const remembered = await controller.remember({
+      statement: 'This project uses npm.',
+      claimKind: 'fact',
+      claimKey: 'project.package-manager',
+    });
+    const targetRefId = remembered.changedRefIds[0];
+    if (targetRefId === undefined) throw new Error('expected remembered ref');
+    await expect(controller.remember({
+      statement: 'This project uses pnpm.',
+      claimKind: 'fact',
+      claimKey: 'project.package-manager',
+    })).resolves.toMatchObject({ status: 'needs_review' });
+    expect(await controller.listInbox()).toHaveLength(1);
+
+    const result = await controller.reviewEpisode({
+      ...memoryEpisode(identity.sessionId, ['artifact:package-json']),
+      handledMemoryOperations: [{
+        operation: 'remember',
+        disposition: 'decision',
+        statement: 'This project uses pnpm.',
+        claimKey: 'project.package-manager',
+        targetRefIds: [targetRefId],
+      }],
+    });
+
+    expect(result).toMatchObject({
+      proposalIds: [],
+      appliedProposalIds: [],
+      decisions: [{ kind: 'no_action' }],
+    });
+    expect(await controller.listInbox()).toHaveLength(1);
+  });
+
+  it('uses the latest explicit operation for same-episode review de-duplication', async () => {
+    const identity = {
+      tenantId: 'tenant-a',
+      agentId: 'agent-a',
+      projectId: 'project-a',
+      sessionId: 'session-latest-explicit',
+    } as const;
+    const controller = createMemoryControlPlane({
+      cwd,
+      identity,
+      learningStorePath,
+      discoverSkills: false,
+      memoryReviewer: async (input) => ({
+        trigger: input.trigger,
+        createdAt: '2026-07-12T00:00:00.000Z',
+        sourceRefs: input.sourceRefs,
+        candidateRefs: input.candidateRefs,
+        actions: [{
+          action: 'patch_memdir',
+          targetRefIds: [input.candidateRefs[0]!.ref.id],
+          summary: 'Keep pnpm as the package manager',
+          rationale: 'The latest explicit correction already established pnpm.',
+          confidence: 'high',
+          risk: 'low',
+          requiresApproval: true,
+          claimKind: 'fact',
+          claimKey: 'project.package-manager',
+          proposedBody: 'This project uses pnpm.',
+        }],
+        warnings: [],
+      }),
+    });
+    const initial = await controller.remember({
+      statement: 'This project uses npm.',
+      claimKind: 'fact',
+      claimKey: 'project.package-manager',
+    });
+    const targetRefId = initial.changedRefIds[0];
+    if (targetRefId === undefined) throw new Error('expected package-manager ref');
+    await controller.remember({
+      operation: 'correct',
+      targetRefId,
+      statement: 'This project uses pnpm.',
+      claimKind: 'fact',
+    });
+
+    const result = await controller.reviewEpisode({
+      ...memoryEpisode(identity.sessionId, ['artifact:package-json']),
+      handledMemoryOperations: [{
+        operation: 'remember',
+        disposition: 'applied',
+        statement: 'This project uses npm.',
+        claimKey: 'project.package-manager',
+        targetRefIds: [targetRefId],
+      }, {
+        operation: 'correct',
+        disposition: 'applied',
+        statement: 'This project uses pnpm.',
+        claimKey: 'project.package-manager',
+        targetRefIds: [targetRefId],
+      }],
+    });
+
+    expect(result).toMatchObject({
+      proposalIds: [],
+      appliedProposalIds: [],
+      decisions: [{ kind: 'no_action', reason: 'explicit Memory operation already handled this claim' }],
+    });
+  });
+
+  it('persists a same-episode contradictory claim as a decision without overriding the user', async () => {
+    const identity = {
+      tenantId: 'tenant-a',
+      agentId: 'agent-a',
+      projectId: 'project-a',
+      sessionId: 'session-explicit-conflict',
+    } as const;
+    const controller = createMemoryControlPlane({
+      cwd,
+      identity,
+      learningStorePath,
+      discoverSkills: false,
+      now: () => '2026-07-12T00:00:00.000Z',
+      memoryReviewer: async (input) => ({
+        trigger: input.trigger,
+        createdAt: '2026-07-12T00:00:00.000Z',
+        sourceRefs: input.sourceRefs,
+        candidateRefs: input.candidateRefs,
+        actions: [{
+          action: 'write_memdir',
+          targetRefIds: [],
+          summary: 'Use pnpm instead',
+          rationale: 'Autonomous evidence disagreed with the explicit user claim.',
+          confidence: 'high',
+          risk: 'low',
+          requiresApproval: true,
+          claimKind: 'fact',
+          claimKey: 'project.package-manager',
+          proposedBody: 'This project uses pnpm.',
+        }],
+        warnings: [],
+      }),
+    });
+    const remembered = await controller.remember({
+      statement: 'This project uses npm.',
+      claimKind: 'fact',
+      claimKey: 'project.package-manager',
+      evidenceRef: 'user:explicit-npm',
+    });
+    const targetRefId = remembered.changedRefIds[0];
+    if (targetRefId === undefined) throw new Error('expected remembered ref');
+
+    const result = await controller.reviewEpisode({
+      ...memoryEpisode(identity.sessionId, ['artifact:package-json']),
+      handledMemoryOperations: [{
+        operation: 'remember',
+        statement: 'This project uses npm.',
+        claimKey: 'project.package-manager',
+        targetRefIds: [targetRefId],
+      }],
+    });
+
+    expect(result.proposalIds).toHaveLength(1);
+    expect(result.appliedProposalIds).toEqual([]);
+    expect(result.decisions).toEqual([expect.objectContaining({
+      kind: 'conflict',
+      existingRefId: targetRefId,
+      proposalId: result.proposalIds[0],
+    })]);
+    const inbox = await controller.listInbox();
+    expect(inbox).toHaveLength(1);
+    expect(inbox[0]).toMatchObject({ action: 'patch_memdir', risk: 'low' });
+    const accepted = (await controller.listRefs({ kinds: ['memdir'] }))
+      .find((ref) => ref.id === targetRefId);
+    if (accepted === undefined) throw new Error('expected accepted explicit ref');
+    expect((await controller.readRef(accepted)).body).toContain('This project uses npm.');
+  });
+
+  it('does not recreate a claim explicitly forgotten in the same episode', async () => {
+    const identity = {
+      tenantId: 'tenant-a',
+      agentId: 'agent-a',
+      projectId: 'project-a',
+      sessionId: 'session-explicit-forget',
+    } as const;
+    const controller = createMemoryControlPlane({
+      cwd,
+      identity,
+      learningStorePath,
+      discoverSkills: false,
+      now: () => '2026-07-12T00:00:00.000Z',
+      memoryReviewer: async (input) => ({
+        trigger: input.trigger,
+        createdAt: '2026-07-12T00:00:00.000Z',
+        sourceRefs: input.sourceRefs,
+        candidateRefs: input.candidateRefs,
+        actions: [{
+          action: 'write_memdir',
+          targetRefIds: [],
+          summary: 'Recreate release check',
+          rationale: 'The completed episode repeated it.',
+          confidence: 'high',
+          risk: 'low',
+          requiresApproval: true,
+          claimKind: 'procedure',
+          claimKey: 'project.release-check',
+          proposedBody: 'Run build before release.',
+        }],
+        warnings: [],
+      }),
+    });
+    const remembered = await controller.remember({
+      statement: 'Run build before release.',
+      claimKind: 'procedure',
+      claimKey: 'project.release-check',
+      evidenceRef: 'user:release-check',
+    });
+    const targetRefId = remembered.changedRefIds[0];
+    if (targetRefId === undefined) throw new Error('expected remembered ref');
+    await controller.forgetRef(targetRefId);
+
+    const result = await controller.reviewEpisode({
+      ...memoryEpisode(identity.sessionId, ['artifact:release']),
+      handledMemoryOperations: [{
+        operation: 'forget',
+        statement: 'Run build before release.',
+        claimKey: 'project.release-check',
+        targetRefIds: [targetRefId],
+      }],
+    });
+
+    expect(result.proposalIds).toEqual([]);
+    expect(result.appliedProposalIds).toEqual([]);
+    expect(result.decisions).toEqual([expect.objectContaining({ kind: 'no_action' })]);
+    expect(await controller.listRefs({ kinds: ['memdir'] })).toEqual([]);
+  });
+
   it('persists condition refinement on the existing body and rejects a missing patch target', async () => {
     const identity = {
       tenantId: 'tenant-a',
@@ -1329,7 +2350,12 @@ describe('MemoryControlPlane', () => {
       }],
       warnings: [],
     });
+    const cwdA = join(tempRoot, 'repo-a');
+    const cwdB = join(tempRoot, 'repo-b');
+    await mkdir(cwdA, { recursive: true });
+    await mkdir(cwdB, { recursive: true });
     const identityA = {
+      configHome: join(tempRoot, 'home'),
       tenantId: 'tenant-a',
       agentId: 'agent-a',
       projectId: 'project-a',
@@ -1337,9 +2363,8 @@ describe('MemoryControlPlane', () => {
     } as const;
     const identityB = { ...identityA, projectId: 'project-b', sessionId: 'session-b' };
     const first = createMemoryControlPlane({
-      cwd,
+      cwd: cwdA,
       identity: identityA,
-      learningStorePath,
       discoverSkills: false,
       memoryReviewer: reviewer,
     });
@@ -1351,9 +2376,8 @@ describe('MemoryControlPlane', () => {
     });
 
     const second = createMemoryControlPlane({
-      cwd,
+      cwd: cwdB,
       identity: identityB,
-      learningStorePath,
       discoverSkills: false,
       memoryReviewer: reviewer,
     });
@@ -1370,9 +2394,8 @@ describe('MemoryControlPlane', () => {
 
     const thirdIdentity = { ...identityB, sessionId: 'session-b-2' };
     const third = createMemoryControlPlane({
-      cwd,
+      cwd: cwdB,
       identity: thirdIdentity,
-      learningStorePath,
       discoverSkills: false,
       memoryReviewer: reviewer,
     });
@@ -1384,9 +2407,8 @@ describe('MemoryControlPlane', () => {
 
     const otherAgent = { ...thirdIdentity, agentId: 'agent-b', sessionId: 'session-other-agent' };
     const isolated = createMemoryControlPlane({
-      cwd,
+      cwd: cwdB,
       identity: otherAgent,
-      learningStorePath,
       discoverSkills: false,
     });
     expect((await isolated.buildMemoryPack({ task: 'stale lock', identity: otherAgent })).candidates)
@@ -1409,6 +2431,9 @@ describe('MemoryControlPlane', () => {
         confidence: 'high' as const,
         risk: 'medium' as const,
         requiresApproval: true as const,
+        proposedBody: 'The project may use pnpm instead.',
+        claimKind: 'fact' as const,
+        claimKey: 'project.package-manager',
       },
       {
         action: 'write_memdir' as const,
@@ -1439,7 +2464,7 @@ describe('MemoryControlPlane', () => {
     const result = await controller.reviewEpisode(memoryEpisode(identity.sessionId, ['artifact:test']));
 
     expect(result.proposalIds).toEqual([]);
-    expect(result.decisions.map((decision) => decision.kind)).toEqual(['conflict', 'quarantine']);
+    expect(result.decisions.map((decision) => decision.kind)).toEqual(['reject', 'quarantine']);
     expect((await readLearningProposalStore(learningStorePath)).proposals).toEqual([]);
   });
 
@@ -1632,6 +2657,31 @@ function memoryEpisode(
     })),
     visibility: 'prompt_safe',
     createdAt: '2026-07-12T00:00:00.000Z',
+  };
+}
+
+function packageManagerReviewPlan(
+  proposedBody: string,
+  risk: 'low' | 'medium',
+): MemoryReviewPlan {
+  return {
+    trigger: 'episode_completed',
+    createdAt: '2026-07-12T00:00:00.000Z',
+    sourceRefs: ['artifact:package-json'],
+    candidateRefs: [],
+    actions: [{
+      action: 'write_memdir',
+      targetRefIds: [],
+      summary: 'Remember the package manager',
+      rationale: 'Verified package metadata identifies the package manager.',
+      confidence: 'high',
+      risk,
+      requiresApproval: true,
+      claimKind: 'fact',
+      claimKey: 'project.package-manager',
+      proposedBody,
+    }],
+    warnings: [],
   };
 }
 

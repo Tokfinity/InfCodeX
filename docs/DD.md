@@ -1,6 +1,6 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-08-09
+> Last updated: 2026-08-10
 >
 > Current published baseline: `v0.7.84`
 > (`@kodax-ai/kodax@0.7.84`; the unreleased working tree targets `v0.7.85`,
@@ -877,11 +877,31 @@ evidence refs, event triggers, and policy facts in tracing, not hidden reasoning
 or a second event database.
 
 The root-only `memory_intent` tool binds an exact quote from the current user
-turn. If cancellation follows capture, MemorySession may enqueue an
-intent-only cancelled digest; it rejects any cancelled digest containing task
-observations, lessons, verifier facts, or inferred intent. Foreground close
-awaits durable inbox persistence, not semantic review. Same-process drains are
-serialized best effort, and restart recovery owns any persisted remainder.
+turn and implements `list`, `remember`, `correct`, `forget`, plus exceptional
+decision inspection and approval/rejection. The quote must identify the operation
+and exact target; revision-bearing decision handles survive turn/binding changes
+and stale revisions fail closed. Mutating operations reject any text
+whose stored statement is not itself an exact current-turn claim span. Safe
+explicit operations call `MemoryManagementController.remember()` or `forget()`
+immediately. Every new fact, preference, policy, or procedure has a stable semantic
+claim key. Foreground completion still emits the ordinary outcome plus a bounded
+host-owned handled-operation marker, so autonomous Memory and Skill learning are
+not skipped and cannot repeat the explicit mutation.
+Duplicates are idempotent; correction requires an exact target; deterministic
+safety, identity, scope, applicability, and fingerprint checks remain mandatory.
+Ambiguous/broad operations return clarification, conflicts persist a readable
+decision, and restricted/secret content is rejected without persistence.
+
+Autonomous outcome review is separate. The model returns only actions and
+warnings; the host binds trigger, time, source/candidate references, and digest
+authority before validation. Deterministic low-risk verified actions may
+auto-apply; other actions remain decisions. Same-process drains are serialized
+best effort, and restart recovery owns any persisted remainder.
+
+The normal REPL surface lists accepted Memory and exceptional decisions.
+`open` delegates to the host/default external application (never an embedded
+editor) and opens one exact storage scope/item. `MEMORY.md` remains
+a derived readable projection; hidden `rebuild` recreates only that projection.
 
 ## 15. Workflow Runtime
 

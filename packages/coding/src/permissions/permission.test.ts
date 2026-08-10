@@ -211,6 +211,18 @@ describe('plan mode — metadata-driven gating (v0.7.42 gap 2)', () => {
     ).toContain("Tool 'send_message'");
   });
 
+  it('blocks durable Memory mutations in plan mode', () => {
+    const projectRoot = createProjectRoot();
+    expect(getPlanModeBlockReason('memory_intent', {
+      operation: 'remember',
+      statement: 'This project uses npm.',
+    }, projectRoot)).toContain("Tool 'memory_intent'");
+    expect(getPlanModeBlockReason('memory_intent', {
+      operation: 'forget',
+      targetRefId: 'memdir:project:handle:package-manager.md',
+    }, projectRoot)).toContain("Tool 'memory_intent'");
+  });
+
   it('web_fetch / mcp_call block in plan mode through their explicit plan policy', () => {
     const projectRoot = createProjectRoot();
     expect(getPlanModeBlockReason('web_fetch', { url: 'https://x' }, projectRoot)).toContain(

@@ -23,8 +23,6 @@ import {
   type KodaXMemoryOutcomeDigest,
   type KodaXSessionData,
   type MemoryContextIdentity,
-  type MemoryReviewModelInput,
-  type MemoryReviewPlan,
   type PendingEpisodeReview,
 } from '@kodax-ai/agent';
 import { createMemoryAgent } from '@kodax-ai/agent/experimental-memory';
@@ -34,10 +32,8 @@ import {
   awaitLatestCodingMemoryReviewDrain,
   canonicalMemoryProjectId,
   appliedMemoryReviewSummaries,
-  detectMemoryReviewTrigger,
   deriveCodingMemoryIdentity,
   drainCodingMemoryReviewInbox,
-  maybeReviewMemoryFeedbackFromPrompt,
   maybeRunMemoryMaintenanceWindow,
   persistMemoryOutcomeToSession,
   persistMemoryReviewReceiptToSession,
@@ -69,22 +65,6 @@ describe('memory runtime hooks', () => {
     for (const dir of cleanupDirs.splice(0)) {
       await fs.rm(dir, { recursive: true, force: true });
     }
-  });
-
-  it('detects explicit memory feedback triggers in user prompts', () => {
-    expect(detectMemoryReviewTrigger('Please remember this repo uses pnpm.')).toBe('explicit_remember');
-    expect(detectMemoryReviewTrigger("Don't remember that temporary token.")).toBe('explicit_forget');
-    expect(detectMemoryReviewTrigger('The saved memory is wrong: the repo uses pnpm, not npm.')).toBe('user_correction');
-    expect(detectMemoryReviewTrigger('\u8bb0\u5fc6\u4e0d\u5bf9\uff0c\u5e94\u8be5\u662f pnpm')).toBe('user_correction');
-    expect(detectMemoryReviewTrigger('Please inspect the build.')).toBeUndefined();
-  });
-
-  it('does not treat ordinary coding corrections as memory feedback', () => {
-    expect(detectMemoryReviewTrigger('我记得昨天已经检查过代码。')).toBeUndefined();
-    expect(detectMemoryReviewTrigger('Use a Map instead of a plain object here.')).toBeUndefined();
-    expect(detectMemoryReviewTrigger('This helper should be async.')).toBeUndefined();
-    expect(detectMemoryReviewTrigger('\u5176\u5b9e\u5148\u5199\u6d4b\u8bd5\uff0c\u518d\u6539\u5b9e\u73b0\u3002')).toBeUndefined();
-    expect(detectMemoryReviewTrigger('Actually, inspect package.json before deciding.')).toBeUndefined();
   });
 
   it('derives stable scoped identity without exposing repository identity in paths', async () => {
@@ -205,132 +185,6 @@ describe('memory runtime hooks', () => {
 
     await expect(pathExists(path.join(memoryDir, '.governance', 'auto-curate-state.json')))
       .resolves.toBe(false);
-  });
-
-  it('runs the injected reviewer when prompt feedback corrects memory', async () => {
-    const cwd = await createTempDir('kodax-memory-runtime-review-');
-    const home = await createTempDir('kodax-memory-runtime-review-home-');
-    cleanupDirs.push(cwd, home);
-    setAgentConfigHome(home);
-    const memoryDir = resolveMemoryRoot(cwd);
-    await fs.mkdir(memoryDir, { recursive: true });
-    await fs.writeFile(
-      path.join(memoryDir, 'project_stack.md'),
-      [
-        '---',
-        'name: Project stack',
-        'description: Repo package manager preference',
-        'type: project',
-        '---',
-        '',
-        'Repo uses npm workspaces.',
-        '',
-      ].join('\n'),
-      'utf8',
-    );
-    let received: MemoryReviewModelInput | undefined;
-    let emitted: MemoryReviewPlan | undefined;
-    const options: KodaXOptions = {
-      provider: 'anthropic',
-      context: {
-        executionCwd: cwd,
-        rawUserInput: '\u8bb0\u5fc6\u4e0d\u5bf9\uff0c\u5e94\u8be5\u662f pnpm',
-      },
-      events: {
-        onMemoryReview: (plan) => {
-          emitted = plan;
-        },
-      },
-      memoryReviewer: async (input) => {
-        received = input;
-        return {
-          trigger: input.trigger,
-          createdAt: '2026-07-06T00:00:00.000Z',
-          sourceRefs: input.sourceRefs,
-          candidateRefs: input.candidateRefs,
-          actions: [],
-          warnings: input.warnings,
-        };
-      },
-    };
-
-    await maybeReviewMemoryFeedbackFromPrompt(options, '\u8bb0\u5fc6\u4e0d\u5bf9\uff0c\u5e94\u8be5\u662f pnpm');
-
-    expect(received?.trigger).toBe('user_correction');
-    expect(received?.candidateRefs.map((candidate) => candidate.ref.id)).toContain('memdir:project_stack.md');
-    expect(emitted?.trigger).toBe('user_correction');
-  });
-
-  it('does not run the injected reviewer for ordinary correction wording', async () => {
-    const cwd = await createTempDir('kodax-memory-runtime-no-review-');
-    const home = await createTempDir('kodax-memory-runtime-no-review-home-');
-    cleanupDirs.push(cwd, home);
-    setAgentConfigHome(home);
-    let reviewCalls = 0;
-    const options: KodaXOptions = {
-      provider: 'anthropic',
-      context: {
-        executionCwd: cwd,
-        rawUserInput: 'Use a Map instead of a plain object here.',
-      },
-      memoryReviewer: async (input) => {
-        reviewCalls++;
-        return {
-          trigger: input.trigger,
-          createdAt: '2026-07-06T00:00:00.000Z',
-          sourceRefs: input.sourceRefs,
-          candidateRefs: input.candidateRefs,
-          actions: [],
-          warnings: input.warnings,
-        };
-      },
-    };
-
-    await maybeReviewMemoryFeedbackFromPrompt(options, 'Use a Map instead of a plain object here.');
-
-    expect(reviewCalls).toBe(0);
-  });
-
-  it('does not run the injected reviewer for internal child agent runs', async () => {
-    const cwd = await createTempDir('kodax-memory-runtime-child-review-');
-    const home = await createTempDir('kodax-memory-runtime-child-review-home-');
-    cleanupDirs.push(cwd, home);
-    setAgentConfigHome(home);
-    let reviewCalls = 0;
-    let emitted = false;
-    const options: KodaXOptions = {
-      provider: 'anthropic',
-      context: {
-        executionCwd: cwd,
-        currentAgentId: 'child-1',
-        parentAgentId: 'worker',
-        rawUserInput: 'The saved memory is wrong: the repo uses pnpm, not npm.',
-      },
-      events: {
-        onMemoryReview: () => {
-          emitted = true;
-        },
-      },
-      memoryReviewer: async (input) => {
-        reviewCalls++;
-        return {
-          trigger: input.trigger,
-          createdAt: '2026-07-06T00:00:00.000Z',
-          sourceRefs: input.sourceRefs,
-          candidateRefs: input.candidateRefs,
-          actions: [],
-          warnings: input.warnings,
-        };
-      },
-    };
-
-    await maybeReviewMemoryFeedbackFromPrompt(
-      options,
-      'The saved memory is wrong: the repo uses pnpm, not npm.',
-    );
-
-    expect(reviewCalls).toBe(0);
-    expect(emitted).toBe(false);
   });
 
   it('persists outcome digest and review receipt as context-silent lineage entries', async () => {
@@ -690,6 +544,8 @@ describe('memory runtime hooks', () => {
             risk: 'low',
             requiresApproval: true,
             proposedBody: 'Applied body.',
+            claimKind: 'fact',
+            claimKey: 'project.applied-summary',
           },
           {
             action: 'write_memdir',
@@ -700,6 +556,8 @@ describe('memory runtime hooks', () => {
             risk: 'high',
             requiresApproval: true,
             proposedBody: 'Pending body.',
+            claimKind: 'fact',
+            claimKey: 'project.pending-summary',
           },
         ],
         warnings: [],
@@ -954,6 +812,8 @@ describe('memory runtime hooks', () => {
               risk: 'low',
               requiresApproval: true,
               proposedBody: 'Run the complete release checks before publishing.',
+              claimKind: 'procedure',
+              claimKey: 'project.release-checks',
             }, {
               action: 'write_memdir',
               targetRefIds: [],
@@ -963,6 +823,8 @@ describe('memory runtime hooks', () => {
               risk: 'high',
               requiresApproval: true,
               proposedBody: 'Assume every release check is interchangeable.',
+              claimKind: 'policy',
+              claimKey: 'project.release-check-interchangeability',
             }],
             warnings: [],
           },
@@ -1005,6 +867,7 @@ describe('memory runtime hooks', () => {
       '',
     );
 
+    expect(result?.failures).toEqual([]);
     expect(result).toMatchObject({ reviewed: 1, failed: 0 });
     expect({ fullSaves, lineageMutations }).toEqual({ fullSaves: 0, lineageMutations: 1 });
     expect(reviewedInput?.evidence.qualification).toMatchObject({
@@ -1278,6 +1141,8 @@ describe('memory runtime hooks', () => {
             risk: 'low',
             requiresApproval: true,
             proposedBody: 'Use the asserted procedure only after independent approval.',
+            claimKind: 'procedure',
+            claimKey: 'project.asserted-procedure',
           }],
           warnings: [],
         },
@@ -1515,6 +1380,8 @@ describe('memory runtime hooks', () => {
           risk: 'low',
           requiresApproval: true,
           proposedBody: 'Inspect the failing verifier output before retrying.',
+          claimKind: 'procedure',
+          claimKey: 'project.verifier-failure-recovery',
         }],
         warnings: [],
       },
@@ -1536,7 +1403,7 @@ describe('memory runtime hooks', () => {
     expect(store.proposals).toMatchObject([{ status: 'pending' }]);
   });
 
-  it('emits an explicit failure notice on the visible session when episode review fails (FEATURE_289 §3.6)', async () => {
+  it('keeps background review failures out of the ordinary conversation', async () => {
     const fixture = await failedLessonDrainFixture(async () => {
       throw new Error('reviewer unavailable');
     });
@@ -1549,15 +1416,10 @@ describe('memory runtime hooks', () => {
     );
 
     expect(result).toMatchObject({ reviewed: 0, failed: 1 });
-    expect(fixture.notices).toEqual([{
-      sessionId: 'session-visible',
-      episodeId: `memory-review-failure:${fixture.digest.reviewKey}`,
-      summaries: [expect.stringMatching(/^Memory review failed: .*reviewer unavailable/)],
-      proposalIds: [],
-    }]);
+    expect(fixture.notices).toEqual([]);
   });
 
-  it('routes failure notices to the visible session when the drain defer key is empty (FEATURE_289 §3.6)', async () => {
+  it('keeps turn-end review failures out of the ordinary conversation', async () => {
     const fixture = await failedLessonDrainFixture(async () => {
       throw new Error('reviewer unavailable');
     });
@@ -1570,15 +1432,7 @@ describe('memory runtime hooks', () => {
     );
 
     expect(result).toMatchObject({ reviewed: 0, failed: 1 });
-    // Turn-end drains pass '' as the own-session defer key; the REPL drops
-    // notices whose sessionId is defined but mismatched, so the notice must
-    // carry sessionId undefined to render on the visible session.
-    expect(fixture.notices).toEqual([{
-      sessionId: undefined,
-      episodeId: `memory-review-failure:${fixture.digest.reviewKey}`,
-      summaries: [expect.stringMatching(/^Memory review failed: .*reviewer unavailable/)],
-      proposalIds: [],
-    }]);
+    expect(fixture.notices).toEqual([]);
   });
   it('passes the drain deadline through and reports deadline-released claims', async () => {
     let reviewCalls = 0;
@@ -1609,12 +1463,7 @@ describe('memory runtime hooks', () => {
     expect(result).toMatchObject({ reviewed: 0, failed: 0 });
     expect(result?.deferred).toBeGreaterThanOrEqual(1);
     expect(reviewCalls).toBe(0);
-    expect(fixture.notices).toEqual([{
-      sessionId: 'session-visible',
-      episodeId: 'memory-review-drain-deadline:session-visible',
-      summaries: [expect.stringContaining('shutdown deadline')],
-      proposalIds: [],
-    }]);
+    expect(fixture.notices).toEqual([]);
     await expect(listPendingEpisodeReviews({
       configHome: fixture.identity.configHome!,
       tenantId: fixture.identity.tenantId,

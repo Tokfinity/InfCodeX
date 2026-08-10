@@ -121,12 +121,17 @@ function isMemoryMetadata(value: unknown): boolean {
     && (value.claimKind === undefined || isMemoryClaimKind(value.claimKind))
     && (value.claimKey === undefined || typeof value.claimKey === 'string')
     && (value.actionSignature === undefined || typeof value.actionSignature === 'string')
+    && (value.reviewRationale === undefined || typeof value.reviewRationale === 'string')
+    && (value.reviewRisk === undefined || isLearningRisk(value.reviewRisk))
     && (value.persistenceKind === undefined
       || value.persistenceKind === 'create'
       || value.persistenceKind === 'evidence_update'
-      || value.persistenceKind === 'condition_refinement')
+      || value.persistenceKind === 'condition_refinement'
+      || value.persistenceKind === 'conflict')
     && (value.targetRefId === undefined || typeof value.targetRefId === 'string')
     && (value.targetStorageUri === undefined || typeof value.targetStorageUri === 'string')
+    && (value.authorizationTargetFingerprint === undefined
+      || typeof value.authorizationTargetFingerprint === 'string')
     && (value.preconditions === undefined || typeof value.preconditions === 'string')
     && (value.applicability === undefined || isMemoryApplicability(value.applicability))
     && (value.requestedLifecycle === undefined
@@ -466,6 +471,7 @@ export async function updateLearningProposalStatus(
   proposalId: string,
   status: LearningProposalReviewStatus,
   options: {
+    readonly expectedStatus?: LearningProposalReviewStatus;
     readonly rejectedReason?: string;
     readonly appliedAt?: string;
     readonly appliedChangedPaths?: readonly string[];
@@ -489,6 +495,11 @@ export async function updateLearningProposalStatus(
 
     const existing = read.proposals.find((entry) => entry.proposalId === proposalId);
     if (!existing) throw new Error(`learning proposal not found: ${proposalId}`);
+    if (options.expectedStatus !== undefined && existing.status !== options.expectedStatus) {
+      throw new Error(
+        `learning proposal ${proposalId} is ${existing.status}; expected ${options.expectedStatus}`,
+      );
+    }
 
     const now = options.now ?? (() => new Date().toISOString());
     const next: StoredLearningProposal = {

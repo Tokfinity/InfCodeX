@@ -551,8 +551,9 @@ ordinary external reads into an allowlist. See the
 The release closure also preserves intent across adjacent surfaces: static
 Skill instructions load in Edit/Plan without granting later side effects,
 dynamic Skill commands require an explicit host-controlled executor, root AMA
-uses the governed `memory_intent` lifecycle (including explicit intent captured
-before a later cancellation), Workflow Actor waits remain
+handles explicit remember/correct/forget requests immediately through the
+governed `memory_intent` control plane while exceptional or inferred changes
+remain reviewable, Workflow Actor waits remain
 unbounded unless the workflow sets a deadline, and Runtime Auto capability v4
 advertises `fallbackPersistsEngine:false` across embedded, Worker, and daemon
 hosts. Actor ownership additionally uses Runtime identity rather than PID alone,
@@ -814,7 +815,7 @@ KodaX has two layers that consumers should understand separately:
 | `packages/agent`  | `@kodax-ai/kodax/skills`  | **Narrow subset** | Skills system only — `SkillRegistry` / `loadFullSkill` / `expandSkillForLLM` / ... (26 exports = pre-v0.7.43 `@kodax-ai/skills` complete API) | Skill loaders, IDE plugins |
 | `packages/agent`  | `@kodax-ai/kodax/mcp`     | **Narrow subset** | MCP only — `McpCapabilityProvider` / `createMcpTransport` / `searchMcpCatalog` / ... (23 exports) | MCP server hosts |
 | `packages/agent`  | `@kodax-ai/kodax/media`   | **Narrow subset** | Structured image/file/video input-artifact helpers (22 exports) | Desktop hosts and multimodal clients |
-| `packages/agent`  | `@kodax-ai/kodax/experimental-memory` | **Experimental subset** | Thin F228-backed `MemoryAgent` / `MemorySession` contracts for scoped recall, deliberate query, observations, and outcomes | SDK hosts explicitly evaluating FEATURE_260 |
+| `packages/agent`  | `@kodax-ai/kodax/experimental-memory` | **Experimental subset** | Thin F228-backed `MemoryAgent` / `MemorySession` lifecycle plus additive `MemoryManagementAgent` list/remember/forget | SDK hosts explicitly evaluating FEATURE_260 / FEATURE_292 |
 | `packages/coding` | `@kodax-ai/kodax/coding`  | Full package | Coding agent + 50+ tools + repo-intelligence (505 exports) | Build a Claude Code-shape product |
 | `packages/repl`   | `@kodax-ai/kodax/repl`    | Full package | Ink TUI + permission modes + commands (217 exports) | Terminal-UI consumers |
 | `packages/repl`   | `@kodax-ai/kodax/session` | **Narrow subset** | Session management only — `listSessions` / `loadFullTranscript` / `appendClientNotice` / `forkSession` / `compactSession` / `watchSessions` / ... (17 exports) | IDE plugins and desktop hosts reading session history |
@@ -850,7 +851,7 @@ KodaX has two layers that consumers should understand separately:
 
 **Paged Session Listing (FEATURE_261, v0.7.67)**: both `/session` `listSessions()` and `runtime.sessions.list()` accept an exact `surface` filter and opaque continuation `cursor`; each returned summary carries the cursor for the next page. Filtering happens before the page limit, so a host does not need to over-fetch mixed surfaces. See the [pagination recipes](public_docs/sdk/embedder-guide.md#19-session-surface-filtering-and-cursor-pagination-feature_261-v0767).
 
-**Experimental Memory Agent SDK (FEATURE_260, v0.7.68)**: `/experimental-memory` exposes the thin agent-layer `MemoryAgent` and scoped `MemorySession` lifecycle over the existing governed F228 plane. Passive recall is zero-wait; `query()` is read-only and deliberate; durable changes still require the proposal/preview/fingerprint/apply path. The Action LLM remains the final decision maker, recalled content stays low-authority, and safety/scope gates remain deterministic. See the [direct session and boundary guide](public_docs/sdk/embedder-guide.md#21-experimental-governed-memory--experimental-memory-feature_260-v0768).
+**Experimental Memory Agent SDK (FEATURE_260 + FEATURE_292)**: `/experimental-memory` exposes the source-compatible `MemoryAgent`/`MemorySession` lifecycle plus the additive `MemoryManagementAgent` facade when `createMemoryAgent()` receives a `MemoryManagementController`. That facade provides governed `list()`, `remember()`, and `forget()` through the same plane used by the conversation-first product surface. Passive recall is zero-wait; `query()` is read-only and deliberate; recalled content stays low-authority, and safety/scope gates remain deterministic. See the [direct session and boundary guide](public_docs/sdk/embedder-guide.md#21-experimental-governed-memory--experimental-memory-feature_260--feature_275--feature_292-v0768v0785).
 
 **Bidirectional A2A 1.0 (FEATURE_267, v0.7.69)**: `/a2a` discovers allowed Agent Cards and installs a JSON-RPC/SSE executor through the existing F258 plane. Configured outbound Agents are also registered automatically as `external:<name>` in embedded CLI and user-daemon Runtimes, so the main Agent can orchestrate them without host code. One `a2a.json` may hold many outbound registrations and at most one inbound server, which publishes either the Runtime default or one validated `~/.kodax/agents/*.md` Agent behind an authenticated Runtime facade. The built-in listener is loopback-only and will not return a port blocked by Fetch-compatible clients; public deployment uses `handle()` behind host-owned TLS and authorization. A2A 0.3, gRPC, HTTP+JSON, push notifications, and automatic public exposure are not advertised. See the [client/server recipes and security boundaries](public_docs/sdk/embedder-guide.md#22-bidirectional-a2a-10--a2a-feature_267-v0769).
 
@@ -1585,7 +1586,7 @@ await runInkInteractiveMode({ provider: 'zhipu-coding', effort: 'auto' });
 | Coding tasks | `@kodax-ai/kodax/coding` | Complete coding agent + tools |
 | Terminal app | `@kodax-ai/kodax/repl` | Full interactive experience |
 | Runtime host / daemon client | `@kodax-ai/kodax/runtime` | Sessions, runs, events, permissions, catalog, MCP, artifacts, diagnostics |
-| Experimental governed memory | `@kodax-ai/kodax/experimental-memory` | Scoped `MemoryAgent` / `MemorySession` recall and outcome contracts |
+| Experimental governed memory | `@kodax-ai/kodax/experimental-memory` | Governed `MemoryAgent` list/remember/forget and scoped `MemorySession` recall/outcome contracts |
 
 ---
 

@@ -366,7 +366,7 @@ describe('ArgumentCompleter', () => {
           ['/agent-mode ', ['ama', 'sa', 'toggle']],
           ['/verifier-log ', ['on', 'off']],
           ['/stall-log ', ['on', 'off']],
-          ['/memory ', ['list', 'status', 'reviews', 'proposals', 'pending', 'show', 'approve', 'reject', 'curate', 'rebuild', 'open', 'help']],
+          ['/memory ', ['list', 'remember', 'forget', 'decisions', 'show', 'approve', 'reject', 'doctor', 'open', 'help']],
           ['/goal ', ['status', 'pause', 'resume', 'clear', 'help']],
           ['/paste ', ['show', 'list']],
           ['/review ', ['--lean', '--workflow', 'base', 'sha', 'help']],

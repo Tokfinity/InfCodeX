@@ -1,16 +1,23 @@
 import { createHash, randomUUID } from 'node:crypto';
 
 import {
+  isMemoryManagementController,
+  memoryMutationHandle,
+  type MemoryRememberInput,
   type MemoryPackHint,
 } from '../memory-control/index.js';
 import { emitKodaXDiagnostic } from '../diagnostics.js';
+import { parseMemoryFile } from '../memory/index.js';
 import {
   isRestrictedMemoryContent,
   sanitizePromptSafeMemoryClaim,
 } from '../memory-control/prompt-safety.js';
 import type {
   CreateMemoryAgentOptions,
+  CreateMemoryManagementAgentOptions,
   MemoryAgent,
+  MemoryListFilter,
+  MemoryManagementAgent,
   MemoryDecisionReceipt,
   MemoryEpisodeOutcome,
   MemoryInterventionInput,
@@ -31,8 +38,35 @@ import { renderMemoryEvidenceEnvelope } from './reminder-envelope.js';
 const CANCELLED_MEMORY_INTENT_SUMMARY =
   'Explicit memory intent captured before episode cancellation.';
 
+export function createMemoryAgent(options: CreateMemoryManagementAgentOptions): MemoryManagementAgent;
+export function createMemoryAgent(options: CreateMemoryAgentOptions): MemoryAgent;
 export function createMemoryAgent(options: CreateMemoryAgentOptions): MemoryAgent {
-  return new DefaultMemoryAgent(options);
+  const agent = new DefaultMemoryAgent(options);
+  if (!isMemoryManagementController(options.controlPlane)) return agent;
+  const controller = options.controlPlane;
+  return Object.assign(agent, {
+    async list(filter: MemoryListFilter = {}) {
+      const refs = await controller.listRefs({
+        kinds: ['memdir'] as const,
+        lifecycles: ['active', 'trusted'],
+        ...(filter.query === undefined ? {} : { query: filter.query }),
+        ...(filter.scopes === undefined ? {} : { scopes: filter.scopes }),
+      });
+      const snapshots = await Promise.all(refs.map((ref) => controller.readRef(ref)));
+      return snapshots.map((snapshot) => ({
+        ref: snapshot.ref,
+        handle: memoryMutationHandle(snapshot.ref),
+        body: parseMemoryFile(snapshot.body).body,
+        storageFingerprint: snapshot.bodyFingerprint,
+        readAt: snapshot.readAt,
+        warnings: snapshot.warnings,
+      }));
+    },
+    remember: (input: MemoryRememberInput) => controller.remember(input),
+    forget: (refId: string, expectedStorageFingerprint?: string) => (
+      controller.forgetRef(refId, expectedStorageFingerprint)
+    ),
+  });
 }
 
 class DefaultMemoryAgent implements MemoryAgent {
@@ -312,6 +346,9 @@ class DefaultMemorySession implements MemorySession {
           userQuote,
         }
       : undefined;
+    const handledMemoryOperations = sanitizeHandledMemoryOperations(
+      outcome.handledMemoryOperations ?? [],
+    );
     const intentOnlyCancellation = outcome.status === 'cancelled';
     if (intentOnlyCancellation && memoryIntent === undefined) return;
     const objectiveSource = intentOnlyCancellation
@@ -342,6 +379,7 @@ class DefaultMemorySession implements MemorySession {
         summary,
         evidence,
         ...(memoryIntent === undefined ? {} : { memoryIntent }),
+        ...(handledMemoryOperations.length === 0 ? {} : { handledMemoryOperations }),
       },
       this.options.now?.() ?? new Date().toISOString(),
       this.injectedReceiptIds,
@@ -810,6 +848,9 @@ function buildOutcomeDigest(
       observedAt: evidence.observedAt,
     })),
     ...(outcome.memoryIntent === undefined ? {} : { memoryIntent: outcome.memoryIntent }),
+    ...(outcome.handledMemoryOperations === undefined
+      ? {}
+      : { handledMemoryOperations: outcome.handledMemoryOperations }),
     ...(outcome.status !== 'cancelled' && injectedReceiptIds.length > 0 ? {
       memoryInfluence: unique(injectedReceiptIds).map((decisionReceiptRef) => ({
         decisionReceiptRef,
@@ -819,6 +860,31 @@ function buildOutcomeDigest(
     visibility: latestOutcome?.visibility ?? 'prompt_safe',
     createdAt,
   };
+}
+
+function sanitizeHandledMemoryOperations(
+  operations: NonNullable<MemoryEpisodeOutcome['handledMemoryOperations']>,
+): NonNullable<MemoryEpisodeOutcome['handledMemoryOperations']> {
+  return operations.slice(-20).flatMap((operation) => {
+    const statement = operation.statement === undefined
+      ? undefined
+      : sanitizePromptSafeMemoryClaim(operation.statement, 1_024);
+    const claimKey = operation.claimKey?.trim();
+    const targetRefIds = unique(operation.targetRefIds)
+      .map((ref) => sanitizePromptSafeMemoryClaim(ref, 256))
+      .filter((ref): ref is string => ref !== undefined);
+    const safeClaimKey = claimKey !== undefined && /^[a-z0-9._:-]{1,160}$/i.test(claimKey)
+      ? claimKey
+      : undefined;
+    if (statement === undefined && safeClaimKey === undefined && targetRefIds.length === 0) return [];
+    return [{
+      operation: operation.operation,
+      ...(operation.disposition === undefined ? {} : { disposition: operation.disposition }),
+      ...(statement === undefined ? {} : { statement }),
+      ...(safeClaimKey === undefined ? {} : { claimKey: safeClaimKey }),
+      targetRefIds,
+    }];
+  });
 }
 
 function normalizeQueryNeed(value: string): string | undefined {

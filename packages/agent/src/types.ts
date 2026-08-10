@@ -189,9 +189,19 @@ export interface KodaXMemoryOutcomeDigest {
    * governed reviewer, never proof that Memory was queued or applied.
    */
   readonly memoryIntent?: KodaXMemoryIntent;
+  /** Explicit Memory operations already completed during this episode. */
+  readonly handledMemoryOperations?: readonly KodaXHandledMemoryOperation[];
   readonly memoryInfluence?: readonly KodaXMemoryInfluenceRef[];
   readonly visibility: 'prompt_safe' | 'private' | 'sensitive';
   readonly createdAt: string;
+}
+
+export interface KodaXHandledMemoryOperation {
+  readonly operation: 'remember' | 'correct' | 'forget';
+  readonly disposition?: 'applied' | 'decision' | 'blocked';
+  readonly statement?: string;
+  readonly claimKey?: string;
+  readonly targetRefIds: readonly string[];
 }
 
 export interface KodaXMemoryIntent {
