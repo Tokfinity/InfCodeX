@@ -286,7 +286,7 @@ describe('toolWorktreeCreate', () => {
 
 describe('toolWorktreeRemove', () => {
   it('hard-denies removing an ancestor that contains the Agent Home root', async () => {
-    const ancestor = path.resolve('/test/outer-worktree');
+    const ancestor = path.join(os.tmpdir(), `kodax-worktree-outer-${process.pid}`);
     setAgentConfigHome(path.join(ancestor, 'agent-home'));
 
     await expect(toolWorktreeRemove({

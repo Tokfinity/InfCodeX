@@ -57,7 +57,7 @@ describe('Tier 0 — rm_rf_root', () => {
     ['rm -rf /tmp/foo/bar'],
     ['rm -rf ./build'],
     ['rm file.txt'], // no -rf
-    ['rm -r /tmp'], // only -r, no -f
+    ['rm -r /tmp/kodax-tier0-ordinary'], // only -r, no -f
     ['rm -f /tmp/foo'], // only -f, no -r
     ['echo "rm -rf /"'], // quoted as part of echo, not actually deleting
   ])('ALLOWS %s', (cmd) => {
