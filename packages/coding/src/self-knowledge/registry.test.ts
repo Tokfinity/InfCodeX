@@ -170,6 +170,20 @@ describe('FEATURE_218 manual registry', () => {
     expect(sdk).toContain('same-owner Stop');
   });
 
+  it('documents the v0.7.85 journal, startup, Worker, and Memory boundaries', () => {
+    const sdk = resolveKodaXManual({ topic: 'sdk' }).content;
+    const memory = resolveKodaXManual({ topic: 'memory' }).content;
+
+    expect(sdk).toContain('Session journal');
+    expect(sdk).toContain('journalEpoch');
+    expect(sdk).toContain('sessionEventJournal:1');
+    expect(sdk).toContain('without replaying its complete event journal');
+    expect(sdk).toContain('retires after its idle warm-cache window');
+    expect(memory).toContain('conversation-first');
+    expect(sdk).toContain('F289/F290');
+    expect(sdk).toContain('MemoryManagementAgent');
+  });
+
   it('documents the v0.7.78 evidence-gated background Skill learning boundary', () => {
     const content = resolveKodaXManual({ topic: 'skills' }).content;
 
