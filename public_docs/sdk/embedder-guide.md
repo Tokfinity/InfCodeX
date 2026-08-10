@@ -2683,7 +2683,7 @@ relaunch it before requiring the capability. The CLI's `kodax daemon stop
 --json` follows the same daemon-plus-supervisor boundary.
 
 The daemon-owned slice does not close the Worker-owned child lifetime gap in
-Issue 256; that owner-lease work remains scheduled for v0.7.85. Worker and
+Issue 256; that owner-lease work remains open and is scheduled for v0.7.86. Worker and
 executor cleanup still use identity-checked evidence and fail closed when a
 descendant cannot be proven gone.
 
@@ -2703,6 +2703,25 @@ unknown-owner proof; foreign owners, missing snapshots, legacy records, and
 unresolved stores fail closed. After repair, Promise terminal facts win over
 fallback callbacks, so a stale callback cannot rewind a terminal Run or emit a
 duplicate outcome. A no-op quiesce does not rewrite the Session.
+
+### v0.7.85 Runtime and Memory release boundaries
+
+The v0.7.85 SDK adds Session-scoped Runtime Event Journals. Persist the full
+`{ sessionId, journalEpoch, seq }` cursor and always replay with `sessionId` or
+`runId`; numeric Runtime-global sequences are not resumable cursors. A2A binds
+one Runtime Session to each Task, and daemon clients require
+`sessionEventJournal:1`. Corrupt journal indexes, cursor scope mismatches, and
+ambiguous retention evidence fail closed.
+
+Memory management is conversation-first for explicit remember, correction,
+forget, recall, and exceptional-decision requests. Safe explicit mutations are
+host-governed and immediate; ambiguous or inferred changes remain reviewable.
+F289/F290 bound review draining and lesson/verdict admission, and the
+experimental Memory SDK exposes the additive management facade only when the
+supplied controller supports it. Terminal Runs with authoritative status and
+no queued interrupt input are restored at startup without replaying complete
+event journals. The semantic repo-intelligence Worker retires after its idle
+warm-cache window, while later cache misses start a fresh Worker.
 
 `homeDir` and `KODAX_HOME` deliberately name different levels. Runtime SDK and
 CLI daemon `--home` accept the **base directory that contains `.kodax`**;

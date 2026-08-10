@@ -1,10 +1,9 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-08-10
+> Last updated: 2026-08-11
 >
-> Current published baseline: `v0.7.84`
-> (`@kodax-ai/kodax@0.7.84`; the unreleased working tree targets `v0.7.85`,
-> and npm publication remains manual)
+> Current published baseline: `v0.7.85`
+> (`@kodax-ai/kodax@0.7.85`; npm publication remains manual)
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -21,8 +20,7 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The published package remains `@kodax-ai/kodax@0.7.84`; the working tree
-targets `v0.7.85`. This non-Feature runtime hardening patch establishes
+The published package is `@kodax-ai/kodax@0.7.85`. This release establishes
 controller-wide bounded Actor progress
 persistence, queue-aware terminal deadlines, root fail-closed fencing, and
 automatic same-owner settlement recovery after an unknown durability boundary.
@@ -43,7 +41,16 @@ durable cleanup outcome, while the `daemonShutdownVerification:1` capability
 lets hosts require it. Legacy daemons are deliberately not upgraded in place
 for this contract. The patch retains v0.7.82's causality and input-admission
 contracts; FEATURE_287 remains planned for v0.7.93 and the Worker owner-lease
-portion of Issue 256 remains scheduled for v0.7.85.
+portion of Issue 256 remains scheduled for v0.7.86.
+
+The same release implements Session-scoped event journals and cursor-bound
+replay, the F289/F290 Memory review and lesson pipelines, and F292's
+conversation-first Memory management. Terminal startup restores terminal Runs
+from authoritative status records without replaying their complete event
+journals unless queued interrupt input requires reconciliation. The semantic
+repo-intelligence Worker retires after its warm cache becomes idle, while
+Agent Home, learned-root, and Windows sandbox enforcement remain host-owned and
+fail closed.
 
 `package.json` exposes:
 

@@ -2,6 +2,11 @@
 
 Public documentation for KodaX users and SDK integrators.
 
+The current release is `v0.7.85`. Its SDK guidance covers Session-scoped
+Runtime Event Journals, the `sessionEventJournal:1` daemon contract,
+conversation-first Memory management, the additive experimental Memory
+management facade, and the v0.7.85 startup/Worker lifecycle boundaries.
+
 ## Getting Started
 
 - [Overview](./getting-started/overview.md) — What KodaX is and how it compares

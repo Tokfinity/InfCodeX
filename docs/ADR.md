@@ -1,6 +1,19 @@
 # KodaX Architecture Decision Records
 
-> Last updated: 2026-08-09
+> Last updated: 2026-08-11
+>
+> **v0.7.85 release addendum:** the Runtime event authority is now one
+> journal per Session, with `{ sessionId, journalEpoch, seq }` cursors and
+> replay bound to `sessionId` or `runId`; A2A Tasks persist their Session
+> cursor and daemon hosts negotiate `sessionEventJournal:1`. Journal indexes,
+> failure latches, and retention watermarks fail closed on ambiguity. F289 and
+> F290 keep Memory review draining and lesson/verdict production bounded,
+> observable, and host-governed. F292 makes explicit Memory management
+> conversation-first and exposes only an additive management facade through
+> the experimental SDK. Terminal startup trusts authoritative terminal status
+> without replaying complete journals unless queued input needs reconciliation;
+> idle semantic Workers retire after their warm-cache window. Issue 256 remains
+> open and its Worker owner-lease portion is scheduled for v0.7.86.
 >
 > **v0.7.85 Issue 282 convergence addendum:** progress batching is owned by one
 > Actor controller tree, and terminal persistence receives its own ambiguity

@@ -81,6 +81,74 @@ version smoke is:
 dist/binary/linux-x64/kodax --version
 ```
 
+## v0.7.85 release preparation
+
+Release state: the root package, all four workspace packages, and every
+`package-lock.json` workspace entry are version `0.7.85`. This release is
+prepared for the `v0.7.85` tag and GitHub Release; npm publication remains a
+separate manual operator step. The release includes all commits after
+`v0.7.84`, including the following Feature and system-code scope:
+
+- `FEATURE_289`: bounded Memory review draining, pipeline observability,
+  startup/turn-end recovery, and the `memory doctor` surface;
+- `FEATURE_290`: governed lesson/verdict production, `failedWithLesson`
+  admission, and review safety boundaries;
+- `FEATURE_291`: Session-scoped Runtime Event Journals, scoped replay cursors,
+  A2A Session binding, and `sessionEventJournal:1` daemon negotiation;
+- `FEATURE_292`: conversation-first Memory management, governed explicit
+  remember/forget/recall/correction/decision handling, and the additive
+  `MemoryManagementAgent` SDK facade;
+- system-code fixes for Actor settlement convergence (Issue 282), Agent Home
+  and learned-root guardrails (Issues 285/286), terminal Run startup replay
+  avoidance (Issue 287), idle repo-intelligence Worker retirement (Issue 288),
+  Windows sandbox/ACL containment, custom-provider completion, and their tests.
+
+These are intentional runtime, agent, coding, REPL, SDK, and sandbox changes;
+they are not test-only or release-process changes. Issue 256 remains Open: the
+Worker owner-lease portion needed to prove descendant closure after an
+intermediate parent exits is not included in this release and is explicitly
+scheduled for `v0.7.86`.
+
+Before tagging, all of the following must be true:
+
+1. version metadata, changelog, README/README_CN, PRD/HLD/DD/ADR, feature
+   tracker, known-issue record, this checklist, public SDK/package guides,
+   `docs/features`, and `kodax_manual` agree on the v0.7.85 contract;
+2. no incomplete Feature or known High release blocker is presented as
+   shipped; Issue 256 remains explicitly Open and outside this release scope;
+3. both the root repository and `docs/features` submodule are clean, and the
+   parent points to a submodule commit reachable from its remote;
+4. the exact release commit passes the deterministic gate:
+
+   ```bash
+   npm ci
+   npm run config:templates:check
+   npm run build:packages
+   npm run build:bundle
+   npm run build:dts
+   npm run test:full
+   npm run test:electron-daemon:built
+   node scripts/release.mjs --pack-only
+   ```
+
+5. focused checks pass for F289/F290/F291/F292, Issues 282/287/288, the
+   `kodax_manual` registry, Runtime session events, memory SDK, Agent Home
+   guardrails, and repo-intelligence worker lifecycle;
+6. the exact `kodax-ai-kodax-0.7.85.tgz` is hashed, inspected, and installed
+   into an empty consumer that imports the root plus all 12 SDK subpaths.
+   Runtime, semantic, sandbox, constructed-handler sidecars, provider
+   capabilities, and built-in Skills must be present;
+7. any benchmark/evaluation evidence follows
+   `benchmark/EVAL_GUIDELINES.md` and remains supporting evidence rather than
+   replacing correctness gates;
+8. GitHub `CI` is green for the exact commit on Node 20/22, Unix Runtime
+   socket, Windows Shell Contract, and packaged Electron jobs;
+9. a manual `release.yml` `workflow_dispatch` with `target=all` is green
+   before tagging, proving all five binary targets without creating a release;
+10. only then is that exact commit tagged `v0.7.85`. The tag-triggered
+    workflow must finish green and the GitHub Release must contain all five
+    archives plus `SHA256SUMS`. npm publication is left to the maintainer.
+
 ## v0.7.84 release preparation
 
 Release state: the root package, all four workspace packages, and every

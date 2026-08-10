@@ -102,7 +102,8 @@ code runs; `waitForRuntimeDaemonShutdown()` proves the durable cleanup result
 and both daemon and supervisor exit, while `daemonShutdownVerification:1`
 allows hosts to require the contract. Legacy daemons are not silently upgraded
 in place. `kodax_manual` carries the same shutdown and migration rules; the
-Worker owner-lease portion of Issue 256 remains scheduled for v0.7.85.
+remaining Worker owner-lease portion of Issue 256 stays open and is scheduled
+for v0.7.86.
 
 The v0.7.84 release carries the Issue 282 Actor settlement-recovery hardening:
 progress persistence is bounded to one in-flight write plus one latest
@@ -110,6 +111,15 @@ replacement, same-owner Stop can reconcile and retry an unknown settlement,
 and terminal Promise facts remain authoritative over fallback callbacks. The
 boundary is fail-closed for foreign owners, missing snapshots, and persistent
 stores; `kodax_manual` documents the same contract.
+
+The v0.7.85 release adds Session-scoped Runtime Event Journals and the
+`sessionEventJournal:1` daemon contract, conversation-first Memory management,
+F289/F290 review and lesson pipeline hardening, and the additive experimental
+Memory management SDK facade. Terminal Run startup restores terminal status
+without replaying complete event journals unless queued input requires it; the
+semantic repo-intelligence Worker retires after its idle warm-cache window.
+These are intentional coding/Runtime system-code changes covered by the
+release regression guides.
 
 ## 安装 / 导入
 

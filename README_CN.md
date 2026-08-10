@@ -243,6 +243,8 @@ v0.7.93。详见 [v0.7.83 发布清单](docs/release.md#v0783-release-preparatio
 
 **v0.7.84 Actor settlement recovery 发布**：Agent progress 持久化现在限制为一个进行中的写入加一个最新替换，terminal settlement 不会再被无限 progress backlog 阻塞。同 owner 的 Stop 可以在 durability timeout 后协调迟到的 Actor snapshot，持久化 quiesce 剩余子任务，并在后续 Stop 中重试修复。修复后 Promise 的 success/failure fact 优先于 fallback callback；过时的 durable unknown 状态不能回退本地已终态 Run，也不会重复取消效果。没有可处理 turn 的 quiesce 现在是真正 no-op，不再无意义地重写 Session。详见 [v0.7.84 发布清单](docs/release.md#v0784-release-preparation)。
 
+**v0.7.85 发布**：本版本包含 F289/F290 的 Memory review drain 与 lesson/verdict 生产管线、F291 的 Session-scoped Runtime Event Journals，以及 F292 的 conversation-first Memory 管理和实验性 SDK 管理 facade。同时包含 Actor settlement convergence、Agent Home/learned-root guardrail、terminal Run 启动时避免重放完整 event journal、repo-intelligence Worker 空闲退役、Windows sandbox/ACL 加固及对应回归指南。这些包含明确的 Runtime/system code 改动。Issue 256 剩余的 Worker owner lease 仍未完成，已改期到 v0.7.86，本版本不将其表述为已交付。详见 [v0.7.85 发布清单](docs/release.md#v0785-release-preparation)。
+
 v0.7.77 还增加了由宿主显式配置的 Shell Execution Contract。Runtime Session
 设置或单次 Run 可以选择 `pwsh`、Windows PowerShell、`cmd`、`bash`、`zsh`
 或 Git Bash 的绝对路径；KodaX 会在实际项目 cwd 中解析 shell 环境，再通过同一

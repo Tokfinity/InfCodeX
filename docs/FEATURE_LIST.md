@@ -11,13 +11,13 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.84` (Git tag / GitHub Release) |
-| Current package version | `@kodax-ai/kodax@0.7.84` release (npm publication remains manual) |
+| Current released version | `v0.7.85` (Git tag / GitHub Release) |
+| Current package version | `@kodax-ai/kodax@0.7.85` release (npm publication remains manual) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `76` |
 | InProgress | `1` |
-| Planned | `18` |
-| Completed | `51` |
+| Planned | `16` |
+| Completed | `53` |
 | Reviewed out of active roadmap | `6` (`108, 231, 232, 235, 238, 244`) |
 | Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 279, 280, 281, 282, 283, 284, 285, 286, 287, 288, 289, 290, 291, 292` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
@@ -26,9 +26,9 @@
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 51 | `292, 291, 286, 284, 281, 277, 276, 263, 275, 274, 273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `292` and `291` are implemented for the v0.7.85 candidate; `286`, `284`, and `281` shipped in v0.7.79. v0.7.84 is the current Git/GitHub release; npm publication remains manual. |
+| Completed | 53 | `292, 291, 290, 289, 286, 284, 281, 277, 276, 263, 275, 274, 273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `292`, `291`, `290`, and `289` shipped in v0.7.85; `286`, `284`, and `281` shipped in v0.7.79. npm publication remains manual. |
 | InProgress | 1 | `225` | `225` remains the bounded v0.8.15 cleanup (moved from v0.7.105 on 2026-08-08). |
-| Planned, near-term | 2 | `290, 289` | `v0.7.85` (F289 stays in 0.7.x; all v0.7.89+ features slid to 0.8.x on 2026-08-08). |
+| Planned, near-term | 0 | `-` | `v0.7.85` release scope is complete; remaining open work is tracked as issues or later roadmap features. |
 | Planned, 0.8.x | 10 | `278, 279, 282, 283, 285, 280, 287, 288, 265, 105` | `v0.8.0` -> `v0.8.1` -> `v0.8.3` -> `v0.8.4` -> `v0.8.5` -> `v0.8.10` -> `v0.8.15` |
 | Planned, 0.9.x | 6 | `007, 030, 093, 113, 139, 262` | `v0.9.0` -> `v0.9.5` -> `v0.9.7` -> `v0.9.25` |
 | Reviewed out, 2026-07-12 | 6 | `244, 231, 235, 238, 232, 108` | Shelved, deferred, absorbed, or cancelled after the post-v0.7.70 roadmap review; F105 was restored by the 2026-07-29 MoA redesign. |
@@ -68,7 +68,7 @@
 | `v0.7.82` | `0` |
 | `v0.7.83` | `0` |
 | `v0.7.84` | `0` |
-| `v0.7.85` | `2` |
+| `v0.7.85` | `0` |
 | `v0.7.86` | `0` |
 | `v0.7.88` | `0` |
 | `v0.7.89` | `0` |
@@ -540,6 +540,26 @@ The completed F281 human verification is
 [FEATURE_281_v0.7.79_TEST_GUIDE](test-guides/FEATURE_281_v0.7.79_TEST_GUIDE.md).
 The completed F284 Qwen Token Plan verification is
 [FEATURE_284_v0.7.79_TEST_GUIDE](test-guides/FEATURE_284_v0.7.79_TEST_GUIDE.md).
+
+---
+
+## v0.7.85 Release Record
+
+`v0.7.85` is the combined memory, Runtime journal, containment, and startup
+reliability release. It ships `FEATURE_289` review-drain reliability and
+pipeline observability, `FEATURE_290` lesson/verdict production,
+`FEATURE_291` Session-scoped Runtime Event Journals, and `FEATURE_292`
+conversation-first Memory management. It also includes the non-Feature fixes
+for Actor settlement convergence (Issue 282), learned-root and Agent Home
+guardrails (Issues 285/286), terminal startup replay (Issue 287), idle
+repo-intelligence Worker retirement (Issue 288), Windows sandbox/ACL safety,
+custom-provider completion, and the related cross-layer regression coverage.
+
+This release does not claim the remaining Worker owner-lease portion of Issue
+256. That issue remains Open and is scheduled for `v0.7.86`; the release
+records the boundary explicitly rather than treating daemon/per-effect Job
+containment as proof of descendant closure for every Worker-owned child.
+The release checklist is [docs/release.md](release.md#v0785-release-preparation).
 
 ---
 
@@ -1216,8 +1236,10 @@ fixed GitHub binary archive sidecar omission before tagging.
 
 | ID | Title | Version | Design | Notes |
 |---|---|---|---|---|
-| `292` | Natural-Language-First Memory Management | `v0.7.85` candidate | [v0.7.85](features/v0.7.85.md#feature_292-natural-language-first-memory-management) | Makes ordinary remember, recall, correction, and forgetting conversational and immediate; reserves decisions for exceptional cases, keeps slash commands as an advanced escape hatch, and exposes the same governed operations through the experimental SDK. |
-| `291` | Session-Scoped Runtime Event Journals | `v0.7.85` candidate | [v0.7.85](features/v0.7.85.md#feature_291-session-scoped-runtime-event-journals) | Replaces the Runtime-global event sequence lock with independent Session journals/cursors, scopes the breaking SDK replay API, negotiates the daemon contract, and binds each A2A Task to one Runtime Session. |
+| `292` | Natural-Language-First Memory Management | `v0.7.85` | [v0.7.85](features/v0.7.85.md#feature_292-natural-language-first-memory-management) | Makes ordinary remember, recall, correction, and forgetting conversational and immediate; reserves decisions for exceptional cases, keeps slash commands as an advanced escape hatch, and exposes the same governed operations through the experimental SDK. |
+| `291` | Session-Scoped Runtime Event Journals | `v0.7.85` | [v0.7.85](features/v0.7.85.md#feature_291-session-scoped-runtime-event-journals) | Replaces the Runtime-global event sequence lock with independent Session journals/cursors, scopes the breaking SDK replay API, negotiates the daemon contract, and binds each A2A Task to one Runtime Session. |
+| `290` | Memory Lesson and Verdict Production + failedWithLesson Admission | `v0.7.85` | [v0.7.85](features/v0.7.85.md#feature_290-memory-lesson-and-verdict-production--failedwithlesson-admission) | Ships the governed lesson/verdict production path, bounded review admission, and failedWithLesson safety gates with the accompanying human regression guide. |
+| `289` | Memory Review Drain Reliability + Pipeline Observability | `v0.7.85` | [v0.7.85](features/v0.7.85.md#feature_289-memory-review-drain-reliability--pipeline-observability) | Ships bounded startup/turn-end review draining, observable pipeline health, backlog recovery, and the accompanying human regression guide. |
 | `286` | Explicit Shell Environment Passthrough | `v0.7.79` candidate | [v0.7.79](features/v0.7.79.md#feature_286-explicit-shell-environment-passthrough) | Adds user-config and Run-scoped SDK `sandbox.envPass` exact-name passthrough for final command targets while retaining default credential filtering and immutable execution-control denies. |
 | `284` | Qwen 3.8 Max Token Plan Model Refresh | `v0.7.79` candidate | [v0.7.79](features/v0.7.79.md#feature_284-qwen-38-max-token-plan-model-refresh) | Makes `qwen3.8-max` the default production ID, retains Preview selection, and aligns Qwen 3.8 context/output/reasoning/image metadata. |
 | `281` | Explicit A2A Network Authorization | `v0.7.79` candidate | [v0.7.79](features/v0.7.79.md#feature_281-explicit-a2a-network-authorization) | Adds independent persisted private-address and non-loopback plaintext-HTTP permissions across config, CLI discovery/call, Runtime reconciliation, registration fingerprints, and execution. Exact loopback HTTP remains implicit; all broader authority remains default deny. |

@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-08-10_
+_Last Updated: 2026-08-11_
 
 ---
 
@@ -14,15 +14,15 @@ _Last Updated: 2026-08-10_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
-| 290 | Medium | Resolved | Mixed-case custom provider aliases lose model autocomplete | custom provider model completion | v0.7.85 development | 2026-08-10 | 2026-08-10 |
-| 289 | High | Resolved | Windows workspace sandbox recursively stamped broad home and temp ACLs in the shell timeout | v0.7.85 Agent Home shell hardening | v0.7.85 development | 2026-08-10 | 2026-08-10 |
-| 288 | Medium | Resolved | Repo-intelligence warm Worker retained its peak memory after cache construction | v0.7.41 startup prewarm | v0.7.85 development | 2026-08-10 | 2026-08-10 |
-| 287 | High | Resolved | Terminal Run recovery replayed complete event histories and blocked CLI startup | v0.7.79 Runtime lifecycle recovery | v0.7.85 development | 2026-08-10 | 2026-08-10 |
-| 286 | High | Resolved | Learned Skill fallback scope was searched in the wrong physical project root | v0.7.85 development multi-scope repair | v0.7.85 development | 2026-08-09 | 2026-08-09 |
-| 285 | High | Resolved | Auto mode left agent-home roots and Runtime control paths mutable | v0.7.74 deterministic read fast paths | v0.7.85 development | 2026-08-09 | 2026-08-09 |
-| 284 | High | Resolved | Managed-task compaction no-ops can permanently trip the summary circuit breaker | v0.7.80 managed-run-context stripping | v0.7.85 development | 2026-08-07 | 2026-08-08 |
+| 290 | Medium | Resolved | Mixed-case custom provider aliases lose model autocomplete | custom provider model completion | v0.7.85 release | 2026-08-10 | 2026-08-10 |
+| 289 | High | Resolved | Windows workspace sandbox recursively stamped broad home and temp ACLs in the shell timeout | v0.7.85 Agent Home shell hardening | v0.7.85 release | 2026-08-10 | 2026-08-10 |
+| 288 | Medium | Resolved | Repo-intelligence warm Worker retained its peak memory after cache construction | v0.7.41 startup prewarm | v0.7.85 release | 2026-08-10 | 2026-08-10 |
+| 287 | High | Resolved | Terminal Run recovery replayed complete event histories and blocked CLI startup | v0.7.79 Runtime lifecycle recovery | v0.7.85 release | 2026-08-10 | 2026-08-10 |
+| 286 | High | Resolved | Learned Skill fallback scope was searched in the wrong physical project root | v0.7.85 development multi-scope repair | v0.7.85 release | 2026-08-09 | 2026-08-09 |
+| 285 | High | Resolved | Auto mode left agent-home roots and Runtime control paths mutable | v0.7.74 deterministic read fast paths | v0.7.85 release | 2026-08-09 | 2026-08-09 |
+| 284 | High | Resolved | Managed-task compaction no-ops can permanently trip the summary circuit breaker | v0.7.80 managed-run-context stripping | v0.7.85 release | 2026-08-07 | 2026-08-08 |
 | 283 | Medium | Resolved | REPL hides the canonical sidecar item and appends duplicated verifier evidence after Worker retry | v0.7.43 first-class sidecar messages | v0.7.84 development | 2026-08-07 | 2026-08-07 |
-| 282 | High | Release blocked | Agent progress persistence backlog can self-fence its live owner and make an unknown Run reject Stop | v0.7.79 bounded Actor settlement | v0.7.85 target | 2026-08-06 | — |
+| 282 | High | Resolved | Agent progress persistence backlog can self-fence its live owner and make an unknown Run reject Stop | v0.7.79 bounded Actor settlement | v0.7.85 release | 2026-08-06 | 2026-08-11 |
 | 281 | High | Resolved | Runtime input submission reads mutable canonical Session before resolving its authoritative Run target | v0.7.69 Runtime input submission | v0.7.82 release | 2026-08-05 | 2026-08-05 |
 | 280 | High | Resolved | Daemon managed Run Stop does not fence cooperative work or preserve Abort causality through credential redaction | v0.7.69 daemon managed Runs | v0.7.82 release | 2026-08-05 | 2026-08-05 |
 | 279 | Medium | Resolved | Daemon Host Tool merge drops MCP capability snapshots and leaks host tools into server-filtered search | v0.7.70 progressive MCP discovery | v0.7.82 release | 2026-08-05 | 2026-08-05 |
@@ -48,7 +48,7 @@ _Last Updated: 2026-08-10_
 | 259 | Medium | Resolved | REPL startup persists zero-message sessions before the first prompt | v0.7.72 Runtime REPL bridge | v0.7.79 development | 2026-08-02 | 2026-08-02 |
 | 258 | Medium | Resolved | TodoList content and labels can ignore the query and UI locale | v0.7.79 development | v0.7.79 development | 2026-08-01 | 2026-08-01 |
 | 257 | High | Resolved | Legacy compaction copies cannot be safely folded by hosts | legacy compaction/resume persistence | v0.7.79 development | 2026-08-01 | 2026-08-01 |
-| 256 | High | Open | Windows child containment cannot prove descendant closure after an intermediate parent exits | Windows LLM, MCP, daemon-startup, and Worker-owned child processes | v0.7.85 (scheduled) | 2026-08-01 | - |
+| 256 | High | Open | Windows child containment cannot prove descendant closure after an intermediate parent exits | Windows LLM, MCP, daemon-startup, and Worker-owned child processes | v0.7.86 (scheduled) | 2026-08-01 | - |
 | 255 | High | Resolved | Runtime teardown and cancellation could report completion across indeterminate lifecycle boundaries | Runtime SDK lifecycle and daemon protocol | v0.7.79 development | 2026-08-01 | 2026-08-01 |
 | 254 | High | Resolved | First v0.7.78 Session reconciliation replays historical messages as new lineage entries | v0.7.78 lineage reconciliation | v0.7.79 development | 2026-07-31 | 2026-07-31 |
 | 253 | Medium | Resolved | Parallel quality-strategy admissions conflict on unrelated Actor progress | v0.7.77 quality-strategy admission | v0.7.79 development | 2026-07-31 | 2026-07-31 |
@@ -199,7 +199,7 @@ _Last Updated: 2026-08-10_
 - Priority: Medium
 - Status: Resolved
 - Introduced: custom provider model completion
-- Fixed: v0.7.85 development
+- Fixed: v0.7.85 release
 - Created: 2026-08-10
 - Resolved: 2026-08-10
 
@@ -237,7 +237,7 @@ gap only surfaces for mixed-case custom aliases.
 - Priority: High
 - Status: Resolved
 - Introduced: v0.7.85 Agent Home shell hardening
-- Fixed: v0.7.85 development
+- Fixed: v0.7.85 release
 - Created: 2026-08-10
 - Resolved: 2026-08-10
 
@@ -306,7 +306,7 @@ parallel model calls accumulated that cost into the 60/117/177-second staircase.
 - Priority: Medium
 - Status: Resolved
 - Introduced: v0.7.41 startup prewarm
-- Fixed: v0.7.85 development
+- Fixed: v0.7.85 release
 - Created: 2026-08-10
 - Resolved: 2026-08-10
 
@@ -336,7 +336,7 @@ Worker and its peak TypeScript analysis heap remained resident indefinitely.
 - Priority: High
 - Status: Resolved
 - Introduced: v0.7.79 Runtime lifecycle recovery
-- Fixed: v0.7.85 development
+- Fixed: v0.7.85 release
 - Created: 2026-08-10
 - Resolved: 2026-08-10
 
@@ -367,7 +367,7 @@ seconds before the interactive REPL could render its first prompt.
 - Priority: High
 - Status: Resolved
 - Introduced: v0.7.85 development multi-scope repair
-- Fixed: v0.7.85 development
+- Fixed: v0.7.85 release
 - Created: 2026-08-09
 - Resolved: 2026-08-09
 
@@ -404,7 +404,7 @@ patch also replaced the public required `expectedScope` property with required
 - Priority: High
 - Status: Resolved
 - Introduced: v0.7.74 deterministic read fast paths
-- Fixed: v0.7.85 development
+- Fixed: v0.7.85 release
 - Created: 2026-08-09
 - Resolved: 2026-08-09
 
@@ -448,7 +448,7 @@ the complete home could be mutated or deleted without approval.
 - Priority: High
 - Status: Resolved
 - Introduced: v0.7.80 managed-run-context stripping
-- Fixed: v0.7.85 development
+- Fixed: v0.7.85 release
 - Created: 2026-08-07
 - Resolved: 2026-08-08
 
@@ -2576,7 +2576,7 @@ show duplicates or silently delete real user input.
 - **Priority**: High
 - **Status**: Open
 - **Introduced**: Windows LLM, MCP, daemon-startup, and Worker-owned child processes
-- **Fixed**: v0.7.85 (scheduled)
+- **Fixed**: v0.7.86 (scheduled)
 - **Created**: 2026-08-01
 - **Resolved**: -
 
@@ -2647,14 +2647,23 @@ longer installs redundant synchronous child-tree exit hooks under containment.
 This does **not** resolve Issue 256 as a whole. Worker-owned children still need
 the separately scheduled host-issued owner lease before their lifetime can be
 invalidated independently of the long-lived host PID. The issue remains Open
-and the Worker owner-lease portion is scheduled for v0.7.85.
+and the Worker owner-lease portion is scheduled for v0.7.86.
 
 #### 2026-08-07 v0.7.84 release disposition
 
 The v0.7.84 release resolves Issue 282's Actor settlement-recovery problem but
 does not claim Issue 256's remaining Worker owner-lease closure. The current
-schedule is therefore v0.7.85 for the outstanding Worker-owned child lifetime
-boundary; no containment completion is implied by the v0.7.84 release.
+schedule was v0.7.85 for the outstanding Worker-owned child lifetime boundary;
+no containment completion was implied by the v0.7.84 release.
+
+#### 2026-08-11 v0.7.85 release disposition
+
+The v0.7.85 release adds the daemon and per-effect Job containment slices, the
+repo-intelligence Worker idle retirement, and the Runtime startup replay
+optimization, but it does not add the outstanding Worker owner lease required
+to prove descendant closure after an intermediate parent exits. Issue 256
+remains Open and is explicitly rescheduled to v0.7.86; this release makes no
+stronger containment claim.
 
 ### 255: Runtime teardown and cancellation could report completion across indeterminate lifecycle boundaries
 

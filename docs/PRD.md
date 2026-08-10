@@ -1,9 +1,9 @@
 # KodaX Product Requirements
 
-> Last updated: 2026-08-10
+> Last updated: 2026-08-11
 >
-> Current implementation baseline: `v0.7.84` release
-> (`@kodax-ai/kodax@0.7.84` workspace package; npm publication remains manual)
+> Current implementation baseline: `v0.7.85` release
+> (`@kodax-ai/kodax@0.7.85` workspace package; npm publication remains manual)
 >
 > This document describes the current product. Historical pre-v0.7.43
 > chain/harness designs have been removed from this current PRD because they no
@@ -29,12 +29,20 @@ before daemon application code runs. The daemon is placed in a kill-on-close Job
 Object, and shutdown is considered verified only after the durable cleanup
 outcome, daemon exit, and containment-supervisor exit are all observed. The
 broader Worker owner-lease boundary tracked by Issue 256 remains planned for
-v0.7.85.
+v0.7.86; the v0.7.85 daemon and per-effect Job boundaries do not claim to close
+that remaining Worker-owned descendant gap.
 
 The v0.7.84 Runtime also bounds Agent progress persistence to one in-flight
 projection plus one latest replacement. Same-owner Stop can reconcile a late
 Actor settlement after a durability timeout and quiesce the remaining work;
 foreign ownership and persistent storage uncertainty remain fail-closed.
+
+The v0.7.85 baseline adds Session-scoped Runtime Event Journals, governed
+conversation-first Memory management, reliable Memory review draining and
+lesson/verdict production, and the additive `MemoryManagementAgent` SDK facade.
+It also carries Agent Home and learned-root guardrails, terminal startup replay
+avoidance, idle repo-intelligence Worker retirement, and the corresponding
+cross-layer regression coverage.
 
 ## 2. Target Users
 

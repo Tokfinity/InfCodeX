@@ -645,6 +645,17 @@ cannot rewind a local terminal Run or duplicate cancellation effects. No-op
 quiescence avoids an unnecessary Session rewrite. See the
 [v0.7.84 release checklist](docs/release.md#v0784-release-preparation).
 
+**v0.7.85 release:** this release ships the F289/F290 Memory review and
+lesson/verdict pipeline, F291 Session-scoped Runtime Event Journals, and F292
+conversation-first Memory management with the additive experimental SDK
+management facade. It also includes Actor settlement convergence, Agent Home
+and learned-root guardrails, terminal startup replay avoidance, idle
+repo-intelligence Worker retirement, Windows sandbox/ACL hardening, and the
+matching regression guides. These include intentional runtime and system-code
+changes. Issue 256's remaining Worker owner-lease boundary is still open and
+is scheduled for v0.7.86; this release does not claim descendant-closure proof
+for that unresolved portion. See the [v0.7.85 release checklist](docs/release.md#v0785-release-preparation).
+
 The v0.7.77 release also adds an opt-in, host-configurable Shell Execution Contract.
 Runtime Session settings or an individual Run can select `pwsh`, Windows
 PowerShell, `cmd`, `bash`, `zsh`, or an explicit Git Bash executable; KodaX
