@@ -77,7 +77,8 @@ export class ArgumentCompleter implements Completer {
     // 确定当前在哪个参数位置
     const argParts = afterCommand ? afterCommand.split(/\s+/) : [''];
     const argIndex = argParts.length - 1;
-    const currentPartial = (argParts[argIndex] ?? '').toLowerCase();
+    const currentPartial = argParts[argIndex] ?? '';
+    const normalizedPartial = currentPartial.toLowerCase();
 
     // Get argument definitions for this command
     // 获取此命令的参数定义
@@ -104,9 +105,9 @@ export class ArgumentCompleter implements Completer {
     // full arg name (e.g. "anthropic/claude-haiku-4-5").
     return availableArgs
       .filter((arg) => {
-        if (!currentPartial) return true;
+        if (!normalizedPartial) return true;
         if (arg.name.includes('/')) return true;
-        return arg.name.toLowerCase().includes(currentPartial);
+        return arg.name.toLowerCase().includes(normalizedPartial);
       })
       .map((arg) => ({
         text: arg.name,
@@ -119,10 +120,10 @@ export class ArgumentCompleter implements Completer {
         // collapsing to a length sort (every name startsWith('') so the prefix
         // branches below would no-op and reorder by length, pushing entries like
         // `rerun` out of a predictable position). Stable sort keeps input order.
-        if (!currentPartial) return 0;
+        if (!normalizedPartial) return 0;
         // Prefix matches first - 前缀匹配优先
-        const aIsPrefix = a.display.toLowerCase().startsWith(currentPartial);
-        const bIsPrefix = b.display.toLowerCase().startsWith(currentPartial);
+        const aIsPrefix = a.display.toLowerCase().startsWith(normalizedPartial);
+        const bIsPrefix = b.display.toLowerCase().startsWith(normalizedPartial);
         if (aIsPrefix && !bIsPrefix) return -1;
         if (!aIsPrefix && bIsPrefix) return 1;
         return a.display.length - b.display.length;

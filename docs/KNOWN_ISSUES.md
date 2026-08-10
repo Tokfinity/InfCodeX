@@ -14,6 +14,7 @@ _Last Updated: 2026-08-10_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 290 | Medium | Resolved | Mixed-case custom provider aliases lose model autocomplete | custom provider model completion | v0.7.85 development | 2026-08-10 | 2026-08-10 |
 | 289 | High | Resolved | Windows workspace sandbox recursively stamped broad home and temp ACLs in the shell timeout | v0.7.85 Agent Home shell hardening | v0.7.85 development | 2026-08-10 | 2026-08-10 |
 | 288 | Medium | Resolved | Repo-intelligence warm Worker retained its peak memory after cache construction | v0.7.41 startup prewarm | v0.7.85 development | 2026-08-10 | 2026-08-10 |
 | 287 | High | Resolved | Terminal Run recovery replayed complete event histories and blocked CLI startup | v0.7.79 Runtime lifecycle recovery | v0.7.85 development | 2026-08-10 | 2026-08-10 |
@@ -192,6 +193,44 @@ _Last Updated: 2026-08-10_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 290: Mixed-case custom provider aliases lose model autocomplete
+
+- Priority: Medium
+- Status: Resolved
+- Introduced: custom provider model completion
+- Fixed: v0.7.85 development
+- Created: 2026-08-10
+- Resolved: 2026-08-10
+
+#### Original Problem
+
+A configured custom provider whose alias contains uppercase characters appears
+in `/model` provider suggestions, but `/model <provider>/` returns no model
+suggestions. For example, the configured `Token_Hub` provider has `glm-5.2` in
+its static model list, yet `/model Token_Hub/` produces an empty completion
+list. Lowercase custom provider aliases work.
+
+Expected behavior: model completion preserves the configured provider identity
+and returns its default and additional configured models regardless of alias
+casing.
+
+#### Root Cause
+
+`ArgumentCompleter` lowercases the complete current argument before passing it
+to the dynamic `/model` argument source. `getModelArgs()` then extracts the
+provider name from that normalized value, while the custom-provider registry
+uses exact, case-sensitive `Map` keys. Built-in aliases are lowercase, so the
+gap only surfaces for mixed-case custom aliases.
+
+#### Resolution
+
+- `ArgumentCompleter` now passes the raw current argument to dynamic command
+  argument sources, preserving exact custom-provider registry keys.
+- A separate normalized value keeps generic completion filtering and ranking
+  case-insensitive.
+- Public-seam regression coverage registers `Token_Hub` with two configured
+  models and verifies that `/model Token_Hub/` returns both suggestions.
 
 ### 289: Windows workspace sandbox recursively stamped broad home and temp ACLs in the shell timeout
 
@@ -12172,11 +12211,15 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 169 (27 Open, 141 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 170 (27 Open, 142 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-08-10: Issue 290 resolved (v0.7.85 development)
+- Preserved mixed-case custom provider aliases during dynamic model completion
+  while retaining case-insensitive filtering and ranking.
 
 ### 2026-08-09: Issues 285 and 286 resolved (v0.7.85 development)
 - Protected agent-home roots, Runtime control state, and sensitive files while

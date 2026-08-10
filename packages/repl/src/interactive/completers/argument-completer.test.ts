@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { getAgentConfigPath, setAgentConfigHome, type WorkflowAgentBackend, type WorkflowModule } from '@kodax-ai/agent';
-import { getDefaultWorkflowRunManager } from '@kodax-ai/coding';
+import { getDefaultWorkflowRunManager, registerCustomProviders } from '@kodax-ai/coding';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { ArgumentCompleter } from '../completers/argument-completer.js';
 import { deriveProjectKeyFromRoot } from '../project-key.js';
@@ -20,6 +20,7 @@ describe('ArgumentCompleter', () => {
   });
 
   afterEach(() => {
+    registerCustomProviders([]);
     setAgentConfigHome(undefined);
   });
 
@@ -221,6 +222,25 @@ describe('ArgumentCompleter', () => {
         expect(modelNames).toContain('claude-sonnet-4-6');
         expect(modelNames).toContain('claude-opus-4-6');
         expect(modelNames).toContain('claude-haiku-4-5');
+      });
+
+      it('should return models for a mixed-case custom provider alias', async () => {
+        registerCustomProviders([{
+          name: 'Token_Hub',
+          protocol: 'openai',
+          baseUrl: 'https://example.invalid/v1',
+          apiKeyEnv: 'TOKEN_HUB_API_KEY',
+          model: 'glm-5.2',
+          models: ['glm-5.2', 'glm-5.2-flash'],
+        }]);
+
+        const input = '/model Token_Hub/';
+        const completions = await completer.getCompletions(input, input.length);
+
+        expect(completions.map(c => c.display)).toEqual([
+          'Token_Hub/glm-5.2',
+          'Token_Hub/glm-5.2-flash',
+        ]);
       });
 
       it('should include the current MiniMax model lineup for minimax-coding', async () => {
