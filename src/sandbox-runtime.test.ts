@@ -861,14 +861,14 @@ describe('ASRT workspace shell adapter', () => {
         expect(request.config.filesystem.denyRead).toEqual(
           expect.arrayContaining(sensitiveHomeReads),
         );
+        expect(request.config.filesystem.denyWrite)
+          .toContain(path.resolve(customAgentHome, 'runtime'));
+        expect(request.config.filesystem.denyWrite)
+          .toContain(path.resolve(customAgentHome, 'processes'));
+        expect(request.config.filesystem.denyWrite)
+          .toContain(path.resolve(customAgentHome, 'learned'));
       }
       expect(request.config.filesystem.denyRead).not.toContain(path.resolve(reviewableToken));
-      expect(request.config.filesystem.denyWrite)
-        .not.toContain(path.resolve(customAgentHome, 'runtime'));
-      expect(request.config.filesystem.denyWrite)
-        .not.toContain(path.resolve(customAgentHome, 'processes'));
-      expect(request.config.filesystem.denyWrite)
-        .not.toContain(path.resolve(customAgentHome, 'learned'));
       expect(request.config.filesystem.denyWrite)
         .not.toContain(path.resolve(customAgentHome));
       expect(request.config.filesystem.allowRead).not.toContain(homePathEntry);
