@@ -95,6 +95,7 @@ jobs:
           };
           let first;
           let second;
+          let eventSubscription;
           try {
             first = await createKodaXRuntime({
               mode: 'daemon',
@@ -111,16 +112,17 @@ jobs:
               capabilities,
             });
 
+            const session = await first.sessions.create({ title: 'CI Unix Runtime Gate', projectPath: homeDir });
             const events = [];
-            second.events.subscribe({}, (event) => {
+            eventSubscription = second.events.subscribe({ sessionId: session.id }, (event) => {
               events.push(event.type);
               if (event.type !== 'permission.requested') return;
               const payload = event.payload;
               if (!payload || typeof payload !== 'object' || typeof payload.id !== 'string') return;
               void second.permissions.respond(payload.id, { type: 'allow_once' }, { runId: payload.runId });
             });
+            await eventSubscription.ready;
 
-            const session = await first.sessions.create({ title: 'CI Unix Runtime Gate', projectPath: homeDir });
             const decision = await first.permissions.request({
               sessionId: session.id,
               runId: 'ci-unix-permission-run',
@@ -155,6 +157,7 @@ jobs:
             }
             console.log(JSON.stringify(proof));
           } finally {
+            eventSubscription?.close();
             await second?.close();
             await first?.close();
           }
