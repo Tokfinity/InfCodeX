@@ -1186,8 +1186,6 @@ fixed GitHub binary archive sidecar omission before tagging.
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `289` | Memory Review Drain Reliability + Pipeline Observability | Core / Memory Reliability + Observability | High | `v0.7.85` | [v0.7.85](features/v0.7.85.md#feature_289-memory-review-drain-reliability--pipeline-observability) |
-| `290` | Memory Lesson and Verdict Production + failedWithLesson Admission | Core / Memory Production Quality | High | `v0.7.85` | [v0.7.85](features/v0.7.85.md#feature_290-memory-lesson-and-verdict-production--failedwithlesson-admission) |
 | `287` | Advisor Mode Virtual Provider | Enhancement / LLM Provider + Session Quality | High | `v0.8.3` | [v0.8.3](features/v0.8.3.md#feature_287-advisor-mode-virtual-provider) |
 | `288` | CLI-Space Daemon Profile Alignment | Enhancement / Runtime + Multi-Client UX | High | `v0.8.4` | [v0.8.4](features/v0.8.4.md#feature_288-cli-space-daemon-profile-alignment) |
 | `278` | Durable AskUser History Projection + Compact SDK/REPL Visualization | Enhancement / SDK + Session UX | High | `v0.8.0` | [v0.8.0](features/v0.8.0.md#feature_278-durable-askuser-history-projection--compact-sdkrepl-visualization) |
