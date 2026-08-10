@@ -345,10 +345,22 @@ describe('daemon CLI smoke', () => {
         await runtime.close();
       }
       expect(stderr).toMatch(/Integration configuration is invalid/i);
-      await expect(runDaemonCommand([
+      const stop = await runDaemonCommand([
         'stop', '--home', homeDir, '--profile', profile,
         '--timeout-ms', '30000', '--json',
-      ])).resolves.toMatchObject({ stopped: true });
+      ]);
+      if (process.platform === 'win32') {
+        expect(stop).toMatchObject({
+          stopped: false,
+          reason: 'cleanup_unverified',
+        });
+        expect(String(stop.error)).toMatch(/containment metadata is unavailable/i);
+        if (child.exitCode === null && child.signalCode === null) {
+          await killChildProcessTree(child, { forceMs: 2_000, taskkillMs: 5_000 });
+        }
+      } else {
+        expect(stop).toMatchObject({ stopped: true });
+      }
       const exitCode = child.exitCode ?? await new Promise<number | null>((resolve, reject) => {
         child.once('error', reject);
         child.once('exit', resolve);
