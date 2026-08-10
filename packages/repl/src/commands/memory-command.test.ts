@@ -332,7 +332,7 @@ describe('FEATURE_124 Phase D — /memory command', () => {
     const target = 'C:\\Users\\ADMIN\\.kodax\\projects\\project with spaces\\memory\\MEMORY.md';
     const invocation = externalOpenInvocation('win32', target);
 
-    expect(invocation.executable.toLowerCase()).toMatch(/\\explorer\.exe$/);
+    expect(invocation.executable.toLowerCase().replaceAll('\\', '/')).toMatch(/\/explorer\.exe$/);
     expect(invocation.args).toEqual([target]);
   });
 

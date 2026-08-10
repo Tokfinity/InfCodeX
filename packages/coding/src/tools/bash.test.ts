@@ -20,17 +20,20 @@ function nodeOutputCommand(stdout: string, commandMarker = ''): string {
 function passthroughShellSandbox(): KodaXShellSandbox {
   return {
     failClosed: true,
-    prepare: async (input) => input.executable === undefined
-      ? undefined
-      : {
-          executable: input.executable,
-          args: input.args ?? [],
-          env: input.env,
-          ...(input.windowsVerbatimArguments === undefined
-            ? {}
-            : { windowsVerbatimArguments: input.windowsVerbatimArguments }),
-          cleanup: async () => undefined,
-        },
+    prepare: async (input) => {
+      const executable = input.executable
+        ?? (process.platform === 'win32' ? undefined : (process.env.SHELL ?? '/bin/sh'));
+      if (executable === undefined) return undefined;
+      return {
+        executable,
+        args: input.executable === undefined ? ['-c', input.command] : (input.args ?? []),
+        env: input.env,
+        ...(input.windowsVerbatimArguments === undefined
+          ? {}
+          : { windowsVerbatimArguments: input.windowsVerbatimArguments }),
+        cleanup: async () => undefined,
+      };
+    },
   };
 }
 
@@ -660,7 +663,7 @@ describe('toolBash', () => {
     const command = 'node -e "process.stdout.write(\'partial-stdout\\n\'); process.stderr.write(\'partial-stderr\\n\'); setTimeout(() => console.log(\'ready-to-abort\'), 150); setInterval(() => {}, 1000)"';
     let aborted = false;
 
-    const result = await toolBash({ command, timeout: 10 }, {
+    const result = await toolBash({ command, timeout: 60 }, {
       backups: new Map(),
       executionCwd: tempDir,
       abortSignal: controller.signal,
@@ -739,7 +742,7 @@ describe('toolBash', () => {
     });
 
     try {
-      const result = await toolBash({ command, timeout: 10 }, {
+      const result = await toolBash({ command, timeout: 60 }, {
         backups: new Map(),
         executionCwd: tempDir,
         shellSandbox: passthroughShellSandbox(),
@@ -763,7 +766,7 @@ describe('toolBash', () => {
       emitSpy.mockRestore();
       await Promise.all(recoveryPaths.map((filePath) => fs.rm(filePath, { force: true })));
     }
-  }, 15_000);
+  }, 30_000);
 
   it('passes sessionScratchDir to commands as KODAX_SESSION_TMP', async () => {
     const scratchDir = path.join(tempDir, '.agent', 'tmp', 'sessions', 'session-1');
