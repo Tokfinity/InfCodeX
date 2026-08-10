@@ -990,7 +990,8 @@ describe('ASRT workspace shell adapter', () => {
           })
           .find((script) => script.includes('KodaXAsrtAclGuard-v1'));
         expect(guardScript).toContain('icacls.exe');
-        expect(guardScript).not.toContain('Set-Acl');
+        expect(guardScript).toContain('Add-KodaXAsrtWriteAclRule');
+        expect(guardScript).toContain('PropagationFlags]::InheritOnly');
       } finally {
         await prepared.cleanup();
       }

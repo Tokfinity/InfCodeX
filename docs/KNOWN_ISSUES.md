@@ -211,12 +211,12 @@ therefore displayed the inverse queue staircase: 177.3 seconds, 117.1 seconds,
 and 60.5 seconds. The underlying Git and Node commands took only 273 ms, 146 ms,
 and 51 ms without sandbox preparation.
 
-Two broad grants caused the regression. Every workspace session granted all
-ordinary Agent Home children, and every session also granted the complete user
-temporary directory. Per-command sensitive-home denies then recursively stamped
-large trees such as `.codex`. A production-equivalent probe took 71.3 seconds
-to initialize 21 broad Agent Home/temp grants; granting only the repository and
-one isolated temp directory took 2.6 seconds.
+The expensive work was ACL propagation, not Git or Node. Besides broad Agent
+Home and temp grants, ASRT 0.0.65 added an inheriting `FILE_DELETE_CHILD` deny to
+each denied path's parent. A deny for one empty path below the user temp
+directory therefore made Windows revisit the parent tree; stamp and restore each
+took about 58-62 seconds. Because Bash effects are intentionally serialized,
+parallel model calls accumulated that cost into the 60/117/177-second staircase.
 
 #### Resolution
 
@@ -235,15 +235,32 @@ one isolated temp directory took 2.6 seconds.
 - Windows shell `TEMP`, `TMP`, and `TMPDIR` now point to a new disposable
   per-session directory. KodaX removes it after session exit and never reuses an
   accumulating temp tree.
-- Read/write deny ACEs are emitted only when they carve a protected descendant
-  out of an explicit grant. Ungranted real-user paths remain inaccessible to
-  the restricted sandbox user without recursive ACL stamping.
+- `kodax sandbox setup` now installs idempotent persistent read guards for the
+  dedicated `srt-sandbox` SID on existing sensitive roots. This is the only path
+  allowed to pay Windows inheritance migration cost. Startup performs a bounded
+  read-only audit and fails closed with setup guidance when a guard is missing;
+  neither startup nor ordinary commands invoke ASRT stamp/restore on those
+  sensitive trees. A parent delete-child deny is added only when the sandbox
+  token would otherwise possess that right.
+- Workspace `.git/config` and `.git/hooks` receive bounded persistent
+  **write-only** guards before the session starts. Those guards omit read and
+  synchronize rights, so `git status` can read repository configuration while
+  mutation remains OS-denied. Global Git configuration is disabled inside the
+  sandbox (`GIT_CONFIG_GLOBAL=NUL`, `GIT_CONFIG_NOSYSTEM=1`) rather than exposing
+  the user's sensitive config.
+- ASRT receives no duplicate deny for a path already covered by a persistent
+  guard. Uncovered caller-specific SDK denies retain the ordinary ASRT path.
+  The Agent Home root is never granted; exact reviewed child grants override
+  its inherited deny, so safe `~/.kodax` children remain readable/writable while
+  root rename/delete and sensitive siblings remain blocked.
 - Tests cover eager warm-up, bounded grant count, exact safe Agent Home access,
   root/control-plane denial, broken-link rejection, overlapping deny carve-outs,
   bounded safe-scope reuse with retirement backpressure, exclusive review-only
-  cleanup, isolated temp disposal, cancellation, and fail-closed recovery. The
-  lean Windows probe initializes in 2.65 seconds and
-  executes its contained command in 108 ms.
+  cleanup, isolated temp disposal, cancellation, write-only Git guards, and
+  fail-closed recovery. On the reported machine, post-migration doctor takes
+  about 1.65 seconds, a new workspace session prepares in about 5 seconds,
+  same-session preparation takes 4-5 ms, and contained `git status` completes
+  in about 0.5 seconds.
 
 ### 288: Repo-intelligence warm Worker retained its peak memory after cache construction
 

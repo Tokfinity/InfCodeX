@@ -365,6 +365,7 @@ function Test-KodaXParentDeleteChildSafe($acl, $tokenSidValues) {
     if (
       $tokenSidValues -contains $ruleSid -and
       $rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Deny -and
+      ($rule.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::InheritOnly) -eq 0 -and
       (([int]$rule.FileSystemRights -band [int][System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles) -ne 0)
     ) {
       return $true
@@ -381,6 +382,7 @@ function Test-KodaXParentDeleteChildSafe($acl, $tokenSidValues) {
     if (
       $tokenSidValues -contains $ruleSid -and
       $rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow -and
+      ($rule.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::InheritOnly) -eq 0 -and
       (([int]$rule.FileSystemRights -band [int][System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles) -ne 0)
     ) {
       return $false
@@ -388,7 +390,7 @@ function Test-KodaXParentDeleteChildSafe($acl, $tokenSidValues) {
   }
   return $true
 }
-function Test-KodaXAsrtAclRuleReadsData($acl, $sidValue, $inheritance) {
+function Test-KodaXAsrtAclRuleReadsData($acl, $sidValue) {
   foreach ($rule in $acl.Access) {
     try {
       $ruleSid = $rule.IdentityReference.Translate(
@@ -401,9 +403,8 @@ function Test-KodaXAsrtAclRuleReadsData($acl, $sidValue, $inheritance) {
       $ruleSid -eq $sidValue -and
       $rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Deny -and
       -not $rule.IsInherited -and
-      $rule.InheritanceFlags -eq $inheritance -and
       $rule.PropagationFlags -eq [System.Security.AccessControl.PropagationFlags]::None -and
-      (([int]$rule.FileSystemRights -band [int][System.Security.AccessControl.FileSystemRights]::ReadAndExecute) -ne 0)
+      (([int]$rule.FileSystemRights -band ([int][System.Security.AccessControl.FileSystemRights]::ReadAndExecute -bor [int][System.Security.AccessControl.FileSystemRights]::Synchronize)) -ne 0)
     ) {
       return $true
     }
@@ -420,6 +421,21 @@ function Add-KodaXAsrtAclRule($target, $sid, $rights, $inheritance, $ruleText) {
   if ($LASTEXITCODE -ne 0) {
     throw "icacls failed to install a KodaX sandbox guard on $target."
   }
+}
+function Add-KodaXAsrtWriteAclRule($target, $sid, $rights, $inheritance) {
+  $acl = Get-Acl -LiteralPath $target
+  if (Test-KodaXAsrtAclRule $acl $sid.Value $rights $inheritance) {
+    return
+  }
+  $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+    $sid,
+    $rights,
+    $inheritance,
+    [System.Security.AccessControl.PropagationFlags]::None,
+    [System.Security.AccessControl.AccessControlType]::Deny
+  )
+  [void]$acl.AddAccessRule($rule)
+  Set-Acl -LiteralPath $target -AclObject $acl
 }
 try {
   try {
@@ -458,7 +474,7 @@ try {
     $parent = [System.IO.Path]::GetDirectoryName($target)
     $targetAcl = Get-Acl -LiteralPath $target
     $targetReady = Test-KodaXAsrtAclRule $targetAcl $sid.Value $targetRights $inheritance
-    $targetTooBroad = [string]$entry.mode -eq 'write' -and (Test-KodaXAsrtAclRuleReadsData $targetAcl $sid.Value $inheritance)
+    $targetTooBroad = [string]$entry.mode -eq 'write' -and (Test-KodaXAsrtAclRuleReadsData $targetAcl $sid.Value)
     if ($targetTooBroad) {
       $targetReady = $false
     }
@@ -481,12 +497,12 @@ try {
       }
     }
     if (-not $targetReady) {
-      $targetRule = if ([string]$entry.mode -eq 'write') {
-        if ([bool]$entry.directory) { '(OI)(CI)(W,D,DC,WDAC,WO)' } else { '(W,D,WDAC,WO)' }
+      if ([string]$entry.mode -eq 'write') {
+        Add-KodaXAsrtWriteAclRule $target $sid $targetRights $inheritance
       } else {
-        if ([bool]$entry.directory) { '(OI)(CI)(F)' } else { '(F)' }
+        $targetRule = if ([bool]$entry.directory) { '(OI)(CI)(F)' } else { '(F)' }
+        Add-KodaXAsrtAclRule $target $sid $targetRights $inheritance $targetRule
       }
-      Add-KodaXAsrtAclRule $target $sid $targetRights $inheritance $targetRule
     }
     if (-not $parentReady) {
       Add-KodaXAsrtAclRule $parent $sid ([System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles) ([System.Security.AccessControl.InheritanceFlags]::None) '(DC)'
@@ -1805,7 +1821,7 @@ function runWindowsAclGuard(
     {
       input: payload,
       encoding: 'utf8',
-      timeout: install ? 15 * 60_000 : 5_000,
+      timeout: install && mode === 'read' ? 15 * 60_000 : install ? 15_000 : 5_000,
       windowsHide: true,
     },
   );

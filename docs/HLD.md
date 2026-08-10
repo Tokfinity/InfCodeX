@@ -74,7 +74,12 @@ disposable per-session temp directory and leaves unrelated user-owned trees
 ungranted. Safe scopes have bounded reuse and retire before replacement;
 review-only scopes exclude every other shell from ACL initialization through
 reset so the shared Windows sandbox identity cannot expose temporary access to
-a concurrent command.
+a concurrent command. Existing sensitive roots carry idempotent persistent read
+guards for the dedicated sandbox SID, installed only by explicit sandbox setup;
+startup performs a bounded read-only audit. Exact child grants preserve safe
+Agent Home access beneath the inherited deny. Repository config and hooks use
+write-only guards so Git reads continue to work, and covered guards are removed
+from ASRT's per-session deny set to avoid recursive ACL propagation.
 Learned Skill discovery likewise treats local and remote project identities as
 distinct physical roots, searches each applicable root, and directs lifecycle
 mutations back to the store that owns the discovered record.

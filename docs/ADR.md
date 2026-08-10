@@ -55,9 +55,16 @@
 > uses a shared restricted-user SID. Existing
 > targets are granted directly and creates use the nearest existing safe parent;
 > the root object, escaping links, and host control trees are revalidated before
-> the ACL is built. Explicit deny ACEs are retained only as carve-outs beneath
-> granted roots; ungranted real-user trees rely on the restricted user's default
-> lack of access and are never recursively stamped per command.
+> the ACL is built. Windows setup idempotently installs persistent read guards
+> for the dedicated sandbox SID on existing sensitive roots. Process startup
+> only audits those guards and fails closed with setup guidance; it never creates
+> or restores broad sensitive-tree denies. Exact reviewed child grants override
+> the inherited Agent Home deny without granting the root object. Repository
+> config/hooks use
+> write-only persistent guards (no read/synchronize deny), while uncovered
+> caller-specific SDK denies stay on ASRT's ordinary path. A parent
+> delete-child deny is installed only when the sandbox token would otherwise
+> have that right, avoiding recursive parent-tree ACL work in normal cases.
 >
 > **v0.7.84 release addendum:** Agent progress persistence is bounded to one
 > in-flight durable projection plus one latest replacement. Terminal settlement

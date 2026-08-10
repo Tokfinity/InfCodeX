@@ -760,10 +760,15 @@ ASRT's Windows sessions share one restricted-user SID, automatic-safe scopes use
 a bounded eight-entry cache whose eviction completes before replacement. A
 review-only credential/control-file scope is one-shot and holds an exclusive
 cross-process shell-effect fence from before ACL initialization through process
-drain and session reset. On Windows, read/write deny
-ACEs are emitted only as carve-outs beneath an explicit grant; unrelated
-real-user paths remain inaccessible to the restricted sandbox user without
-recursive stamping.
+drain and session reset. `kodax sandbox setup` installs idempotent persistent
+read guards for the dedicated sandbox SID on existing sensitive roots; normal
+startup only audits them and fails closed if migration is required. Exact
+reviewed child grants override the inherited Agent Home deny, while the root
+object itself remains ungranted. Workspace `.git/config` and `.git/hooks` use
+bounded write-only guards that omit read/synchronize denial; global Git config
+is disabled in the sandbox. Covered paths are removed from ASRT's deny arrays,
+uncovered SDK-specific paths retain ASRT behavior, and a parent delete-child
+deny is added only when effective sandbox token ACLs otherwise allow it.
 
 ## 12. Media Input Artifacts
 
