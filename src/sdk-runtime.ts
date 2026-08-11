@@ -254,6 +254,7 @@ import {
   acquireRuntimeInlineOwner,
   enableRuntimeDaemonOwner,
   readRuntimeDaemonLockOwner,
+  readRuntimeOwnerProcessStartIdentity,
   readRuntimeOwnerPolicy,
   readRuntimeDaemonToken,
   releaseRuntimeDaemonLock,
@@ -426,6 +427,7 @@ export function acquireKodaXInlineOwner(
     input.profile,
   );
   const ownerId = `inline_${randomUUID().replace(/-/g, "")}`;
+  const processStartIdentity = readRuntimeOwnerProcessStartIdentity(process.pid);
   const lock = acquireRuntimeInlineOwner(
     paths,
     {
@@ -433,6 +435,7 @@ export function acquireKodaXInlineOwner(
       pid: process.pid,
       createdAt: new Date().toISOString(),
       kind: "inline",
+      ...(processStartIdentity === undefined ? {} : { processStartIdentity }),
     },
     input.enableRollback === true,
   );
@@ -443,8 +446,12 @@ export function acquireKodaXInlineOwner(
     ownerPolicy: readRuntimeOwnerPolicy(paths),
     close() {
       if (closed) return;
+      if (!releaseRuntimeDaemonLock(lock)) {
+        throw new Error(
+          `Failed to release inline owner "${ownerId}"; retry close before changing owner mode.`,
+        );
+      }
       closed = true;
-      releaseRuntimeDaemonLock(lock);
     },
   };
 }
@@ -480,11 +487,25 @@ export function getKodaXRuntimeOwnerState(
         : fs.existsSync(paths.lockFile)
           ? "unreadable"
           : "unowned",
-    owner: owner ?? null,
+    owner: owner === undefined
+      ? null
+      : {
+          runtimeId: owner.runtimeId,
+          pid: owner.pid,
+          createdAt: owner.createdAt,
+          ...(owner.kind === undefined ? {} : { kind: owner.kind }),
+          ...(owner.processContainment === undefined
+            ? {}
+            : { processContainment: owner.processContainment }),
+          ...(owner.supervisorPid === undefined ? {} : { supervisorPid: owner.supervisorPid }),
+        },
   };
 }
 
-/** Enable daemon auto-start after the inline owner has released its fence. */
+/**
+ * Enable daemon auto-start, atomically reclaiming an inline fence only when
+ * the SDK can prove that its owner process is gone.
+ */
 export function enableKodaXDaemonOwner(
   input: {
     readonly homeDir?: string;

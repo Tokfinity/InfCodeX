@@ -6,7 +6,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-No changes yet.
+### Fixed
+
+- `enableKodaXDaemonOwner()` now atomically recovers only a provably abandoned
+  inline owner fence before restoring daemon policy. Live, unreadable,
+  legacy-kind, daemon-kind, and unverifiable owners remain fail-closed.
+- Runtime owner records now retain an OS process-start identity to distinguish
+  stale locks from PID reuse, and inline-owner `close()` reports a failed
+  release without making the handle impossible to retry.
 
 ---
 

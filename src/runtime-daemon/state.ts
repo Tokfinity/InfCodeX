@@ -2,6 +2,11 @@ import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import path from 'node:path';
 
+import { readProcessStartIdentity } from '@kodax-ai/agent';
+
+let currentProcessStartIdentity: string | undefined;
+let currentProcessStartIdentityRead = false;
+
 export type RuntimeDaemonStatus =
   | 'starting'
   | 'ready'
@@ -65,6 +70,8 @@ export interface RuntimeDaemonLockOwner {
   readonly pid: number;
   readonly createdAt: string;
   readonly kind?: 'daemon' | 'inline';
+  /** OS-issued identity used to distinguish a live owner from PID reuse. */
+  readonly processStartIdentity?: string;
   /** Present when the daemon was assigned to a Windows Job before user code could start. */
   readonly processContainment?: 'windows-job';
   /** Process outside the Job whose exit proves that the Job became empty. */
@@ -80,6 +87,15 @@ export interface RuntimeOwnerPolicy {
 export interface RuntimeDaemonLockHandle {
   readonly file: string;
   readonly owner: RuntimeDaemonLockOwner;
+}
+
+export function readRuntimeOwnerProcessStartIdentity(pid: number): string | undefined {
+  if (pid !== process.pid) return readProcessStartIdentity(pid);
+  if (!currentProcessStartIdentityRead) {
+    currentProcessStartIdentity = readProcessStartIdentity(pid);
+    currentProcessStartIdentityRead = true;
+  }
+  return currentProcessStartIdentity;
 }
 
 export type RuntimeDaemonHealth =
@@ -255,17 +271,37 @@ export function commitRuntimeDaemonRollbackPolicy(
   }
 }
 
-/** Enable daemon ownership after the inline owner has released its fence. */
+/** Enable daemon ownership, reclaiming only a provably abandoned inline fence. */
 export function enableRuntimeDaemonOwner(paths: RuntimeDaemonPaths): RuntimeOwnerPolicy {
   ensureRuntimeDaemonDirectories(paths);
   const coordination = tryAcquireRuntimeOwnerCoordination(paths);
   if (!coordination) throw new Error('Runtime owner transition is already in progress.');
   try {
-    if (fs.existsSync(paths.lockFile)) {
-      throw new Error('Cannot enable Runtime daemon ownership while an owner lock exists.');
-    }
     const current = readRuntimeOwnerPolicy(paths);
     if (current.mode === 'daemon') return current;
+    const owner = readRuntimeDaemonLockOwner(paths.lockFile);
+    if (owner === undefined && fs.existsSync(paths.lockFile)) {
+      throw new Error('Cannot enable Runtime daemon ownership because the owner lock is unreadable.');
+    }
+    if (owner !== undefined) {
+      if (owner.kind !== 'inline') {
+        throw new Error(
+          `Cannot enable Runtime daemon ownership while a ${owner.kind ?? 'legacy'} owner lock exists.`,
+        );
+      }
+      const ownerProcessState = runtimeOwnerProcessState(owner);
+      if (ownerProcessState === 'alive') {
+        throw new Error('Cannot enable Runtime daemon ownership while the inline owner is active.');
+      }
+      if (ownerProcessState === 'unknown') {
+        throw new Error(
+          'Cannot enable Runtime daemon ownership because inline owner liveness could not be verified.',
+        );
+      }
+      if (!unlinkRuntimeDaemonLockIfOwned({ file: paths.lockFile, owner })) {
+        throw new Error('Cannot enable Runtime daemon ownership because the inline owner changed.');
+      }
+    }
     return writeRuntimeOwnerPolicy(
       paths,
       'daemon',
@@ -353,10 +389,12 @@ function tryAcquireRuntimeOwnerCoordination(
   recoverAbandoned = true,
 ): RuntimeOwnerCoordinationHandle | undefined {
   const nonce = randomUUID();
+  const processStartIdentity = readRuntimeOwnerProcessStartIdentity(process.pid);
   const owner: RuntimeDaemonLockOwner = {
     runtimeId: `owner-transition-${nonce}`,
     pid: process.pid,
     createdAt: new Date().toISOString(),
+    ...(processStartIdentity === undefined ? {} : { processStartIdentity }),
   };
   let fd: number | undefined;
   try {
@@ -381,7 +419,7 @@ function removeAbandonedRuntimeOwnerCoordination(
   paths: Pick<RuntimeDaemonPaths, 'ownerPolicyLockFile'>,
 ): boolean {
   const current = readRuntimeOwnerCoordinationHandle(paths);
-  if (!current || isRuntimeOwnerProcessAlive(current.owner.pid)) return false;
+  if (!current || runtimeOwnerProcessState(current.owner) !== 'gone') return false;
   try {
     const latest = readRuntimeOwnerCoordinationHandle(paths);
     if (!latest || latest.nonce !== current.nonce) return false;
@@ -406,16 +444,6 @@ function readRuntimeOwnerCoordinationHandle(
     return { nonce: parsed.nonce, owner: parsed };
   } catch {
     return undefined;
-  }
-}
-
-function isRuntimeOwnerProcessAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error: unknown) {
-    return isNodeFileError(error) && error.code === 'EPERM';
   }
 }
 
@@ -550,6 +578,20 @@ export function readRuntimeDaemonState(paths: RuntimeDaemonPaths): RuntimeDaemon
   } catch {
     return undefined;
   }
+}
+
+type RuntimeOwnerProcessState = 'alive' | 'gone' | 'unknown';
+
+function runtimeOwnerProcessState(owner: RuntimeDaemonLockOwner): RuntimeOwnerProcessState {
+  try {
+    process.kill(owner.pid, 0);
+  } catch (error: unknown) {
+    return isNodeFileError(error) && error.code === 'ESRCH' ? 'gone' : 'unknown';
+  }
+  if (owner.processStartIdentity === undefined) return 'alive';
+  const currentIdentity = readRuntimeOwnerProcessStartIdentity(owner.pid);
+  if (currentIdentity === undefined) return 'unknown';
+  return currentIdentity === owner.processStartIdentity ? 'alive' : 'gone';
 }
 
 const MAX_RETAINED_SHUTDOWN_OUTCOMES = 32;
@@ -907,7 +949,10 @@ function sameRuntimeLockOwner(
   return left.runtimeId === right.runtimeId
     && left.pid === right.pid
     && left.createdAt === right.createdAt
-    && left.kind === right.kind;
+    && left.kind === right.kind
+    && left.processStartIdentity === right.processStartIdentity
+    && left.processContainment === right.processContainment
+    && left.supervisorPid === right.supervisorPid;
 }
 
 function sameRuntimeDaemonState(
@@ -1037,7 +1082,14 @@ function isRuntimeDaemonLockOwner(value: unknown): value is RuntimeDaemonLockOwn
   const owner = value as Record<string, unknown>;
   return typeof owner.runtimeId === 'string'
     && typeof owner.pid === 'number'
+    && Number.isSafeInteger(owner.pid)
+    && owner.pid > 0
     && typeof owner.createdAt === 'string'
+    && (owner.kind === undefined || owner.kind === 'daemon' || owner.kind === 'inline')
+    && (
+      owner.processStartIdentity === undefined
+      || (typeof owner.processStartIdentity === 'string' && owner.processStartIdentity.length > 0)
+    )
     && (owner.processContainment === undefined || owner.processContainment === 'windows-job')
     && (owner.processContainment === 'windows-job'
       ? Number.isSafeInteger(owner.supervisorPid) && (owner.supervisorPid as number) > 0

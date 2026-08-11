@@ -424,6 +424,136 @@ describe('runtime Coder owner policy', () => {
     expect(daemon).toMatchObject({ mode: 'daemon', revision: 2 });
     expect(enableRuntimeDaemonOwner(paths)).toEqual(daemon);
   });
+
+  it('atomically reclaims a dead inline owner while enabling daemon ownership', () => {
+    const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
+    expect(updateRuntimeOwnerPolicy(paths, 'inline', 0)).toMatchObject({
+      mode: 'inline',
+      revision: 1,
+    });
+    expect(tryAcquireRuntimeDaemonLock(paths, {
+      runtimeId: 'inline-abandoned',
+      pid: 999_999_999,
+      createdAt: '2026-08-11T00:00:00.000Z',
+      kind: 'inline',
+    })).toBeDefined();
+
+    expect(enableRuntimeDaemonOwner(paths)).toMatchObject({
+      mode: 'daemon',
+      revision: 2,
+    });
+    expect(readRuntimeDaemonLockOwner(paths.lockFile)).toBeUndefined();
+  });
+
+  it('keeps a live inline owner and its policy fail-closed', () => {
+    const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
+    updateRuntimeOwnerPolicy(paths, 'inline', 0);
+    expect(tryAcquireRuntimeDaemonLock(paths, {
+      runtimeId: 'inline-live',
+      pid: process.pid,
+      createdAt: '2026-08-11T00:00:00.000Z',
+      kind: 'inline',
+    })).toBeDefined();
+
+    expect(() => enableRuntimeDaemonOwner(paths)).toThrow(/inline owner.*active/i);
+    expect(readRuntimeOwnerPolicy(paths)).toMatchObject({ mode: 'inline', revision: 1 });
+    expect(readRuntimeDaemonLockOwner(paths.lockFile)).toMatchObject({
+      runtimeId: 'inline-live',
+    });
+  });
+
+  it('keeps an inline owner fail-closed when process liveness is unverifiable', () => {
+    const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
+    const ownerPid = 999_999_998;
+    updateRuntimeOwnerPolicy(paths, 'inline', 0);
+    expect(tryAcquireRuntimeDaemonLock(paths, {
+      runtimeId: 'inline-unverifiable',
+      pid: ownerPid,
+      createdAt: '2026-08-11T00:00:00.000Z',
+      kind: 'inline',
+    })).toBeDefined();
+    const originalKill = process.kill;
+    process.kill = ((pid, signal) => {
+      if (pid === ownerPid) {
+        throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' });
+      }
+      return originalKill(pid, signal);
+    }) as typeof process.kill;
+
+    try {
+      expect(() => enableRuntimeDaemonOwner(paths)).toThrow(/liveness could not be verified/i);
+      expect(readRuntimeOwnerPolicy(paths)).toMatchObject({ mode: 'inline', revision: 1 });
+      expect(readRuntimeDaemonLockOwner(paths.lockFile)).toMatchObject({
+        runtimeId: 'inline-unverifiable',
+      });
+    } finally {
+      process.kill = originalKill;
+    }
+  });
+
+  it('reclaims an inline lock after PID reuse is proved by process identity', () => {
+    const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
+    updateRuntimeOwnerPolicy(paths, 'inline', 0);
+    const reusedPidOwner = {
+      runtimeId: 'inline-reused-pid',
+      pid: process.pid,
+      createdAt: '2026-08-11T00:00:00.000Z',
+      kind: 'inline' as const,
+      processStartIdentity: 'not-the-current-process',
+    };
+    expect(tryAcquireRuntimeDaemonLock(paths, reusedPidOwner)).toBeDefined();
+
+    expect(enableRuntimeDaemonOwner(paths)).toMatchObject({ mode: 'daemon', revision: 2 });
+    expect(readRuntimeDaemonLockOwner(paths.lockFile)).toBeUndefined();
+  });
+
+  it('never reclaims a daemon-kind lock while enabling daemon ownership', () => {
+    const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
+    updateRuntimeOwnerPolicy(paths, 'inline', 0);
+    expect(tryAcquireRuntimeDaemonLock(paths, {
+      runtimeId: 'daemon-abandoned',
+      pid: 999_999_999,
+      createdAt: '2026-08-11T00:00:00.000Z',
+      kind: 'daemon',
+    })).toBeDefined();
+
+    expect(() => enableRuntimeDaemonOwner(paths)).toThrow(/daemon owner lock exists/i);
+    expect(readRuntimeOwnerPolicy(paths)).toMatchObject({ mode: 'inline', revision: 1 });
+    expect(readRuntimeDaemonLockOwner(paths.lockFile)).toMatchObject({
+      runtimeId: 'daemon-abandoned',
+    });
+  });
+
+  it('never guesses that a dead legacy-kind owner is an inline owner', () => {
+    const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
+    updateRuntimeOwnerPolicy(paths, 'inline', 0);
+    expect(tryAcquireRuntimeDaemonLock(paths, {
+      runtimeId: 'legacy-abandoned',
+      pid: 999_999_999,
+      createdAt: '2026-08-11T00:00:00.000Z',
+    })).toBeDefined();
+
+    expect(() => enableRuntimeDaemonOwner(paths)).toThrow(/legacy owner lock exists/i);
+    expect(readRuntimeOwnerPolicy(paths)).toMatchObject({ mode: 'inline', revision: 1 });
+    expect(readRuntimeDaemonLockOwner(paths.lockFile)).toMatchObject({
+      runtimeId: 'legacy-abandoned',
+    });
+  });
+
+  it('never reclaims a malformed owner lock while enabling daemon ownership', () => {
+    const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
+    updateRuntimeOwnerPolicy(paths, 'inline', 0);
+    fs.writeFileSync(paths.lockFile, JSON.stringify({
+      runtimeId: 'inline-invalid',
+      pid: -1,
+      createdAt: '2026-08-11T00:00:00.000Z',
+      kind: 'inline',
+    }), 'utf8');
+
+    expect(() => enableRuntimeDaemonOwner(paths)).toThrow(/owner lock is unreadable/i);
+    expect(fs.existsSync(paths.lockFile)).toBe(true);
+    expect(readRuntimeOwnerPolicy(paths)).toMatchObject({ mode: 'inline', revision: 1 });
+  });
 });
 
 describe('runtime daemon health classification', () => {

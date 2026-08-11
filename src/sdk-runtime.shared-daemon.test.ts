@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -9,6 +10,8 @@ import { FileSessionStorage } from '@kodax-ai/repl';
 import {
   acquireKodaXInlineOwner,
   createKodaXRuntime,
+  enableKodaXDaemonOwner,
+  getKodaXRuntimeOwnerState,
   setKodaXRuntimeOwnerMode,
 } from './sdk-runtime.js';
 import { acquireRuntimeDaemonProcessLease } from './runtime-daemon/process.js';
@@ -22,6 +25,85 @@ afterEach(() => {
 });
 
 describe('F269 shared Runtime contracts', () => {
+  it('recovers a public inline owner left by a crashed process', () => {
+    const homeDir = makeHome();
+    const profile = 'coder';
+    const child = spawnSync(process.execPath, [
+      '--import',
+      'tsx',
+      '--input-type=module',
+      '--eval',
+      `
+        import {
+          acquireKodaXInlineOwner,
+          setKodaXRuntimeOwnerMode,
+        } from './src/sdk-runtime.ts';
+        const homeDir = process.argv[1];
+        const profile = process.argv[2];
+        setKodaXRuntimeOwnerMode({
+          homeDir,
+          profile,
+          mode: 'inline',
+          expectedRevision: 0,
+        });
+        acquireKodaXInlineOwner({ homeDir, profile });
+      `,
+      homeDir,
+      profile,
+    ], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    expect(child.status, child.stderr).toBe(0);
+    const abandoned = getKodaXRuntimeOwnerState({ homeDir, profile });
+    expect(abandoned).toMatchObject({
+      policy: { mode: 'inline', revision: 1 },
+      ownerStatus: 'owned',
+      owner: { kind: 'inline' },
+    });
+    expect(abandoned.owner).not.toHaveProperty('processStartIdentity');
+
+    expect(enableKodaXDaemonOwner({ homeDir, profile })).toMatchObject({
+      mode: 'daemon',
+      revision: 2,
+    });
+    expect(getKodaXRuntimeOwnerState({ homeDir, profile })).toMatchObject({
+      policy: { mode: 'daemon', revision: 2 },
+      ownerStatus: 'unowned',
+      owner: null,
+    });
+  });
+
+  it('keeps an inline owner close retryable when policy coordination is busy', () => {
+    const homeDir = makeHome();
+    const profile = 'coder';
+    setKodaXRuntimeOwnerMode({
+      homeDir,
+      profile,
+      mode: 'inline',
+      expectedRevision: 0,
+    });
+    const inline = acquireKodaXInlineOwner({ homeDir, profile });
+    expect(() => enableKodaXDaemonOwner({ homeDir, profile }))
+      .toThrow(/inline owner.*active/i);
+    const ownerRoot = path.join(homeDir, '.kodax', 'runtime', 'daemon', profile);
+    const coordinationFile = path.join(ownerRoot, 'owner-policy.lock');
+    const ownerFile = path.join(ownerRoot, 'daemon.lock');
+    fs.writeFileSync(coordinationFile, JSON.stringify({
+      runtimeId: 'owner-transition-live',
+      pid: process.pid,
+      createdAt: new Date().toISOString(),
+      nonce: 'live-transition',
+    }), 'utf8');
+
+    expect(() => inline.close()).toThrow(/release.*inline owner/i);
+    expect(fs.existsSync(ownerFile)).toBe(true);
+    fs.rmSync(coordinationFile);
+    expect(() => inline.close()).not.toThrow();
+    expect(fs.existsSync(ownerFile)).toBe(false);
+  });
+
   it('uses revision CAS for session settings and never silently overwrites', async () => {
     const runtime = await createKodaXRuntime({ homeDir: makeHome() });
     const session = await runtime.sessions.create({ title: 'CAS' });

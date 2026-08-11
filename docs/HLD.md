@@ -209,6 +209,10 @@ never ambient profile capability. Dispatched Host Tool calls are never blindly
 replayed. Daemon and inline Coder share one owner policy fence, including a
 sticky inline rollback mode. Partner remains a private inline Runtime with a
 distinct product data namespace and does not participate in the Coder fence.
+An explicit daemon-enable command performs owner-policy reconciliation inside
+the SDK coordination fence: it may remove only a parseable inline owner whose
+process identity is proven gone. Live, unreadable, legacy-kind, daemon-kind,
+and unverifiable owners remain fail-closed; embedders never delete owner files.
 
 Worker and daemon calls cross a typed DTO boundary. Process-local callbacks,
 class instances, `AbortSignal`, cyclic values, and extension runtime objects do

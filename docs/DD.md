@@ -302,6 +302,14 @@ inline sticky. Partner compatibility depends on the embedder retaining its
 existing distinct inline data/sessions root; Partner does not acquire or write
 the Coder owner fence.
 
+`enableKodaXDaemonOwner()` is the atomic convergence command for returning an
+inline profile to daemon policy. While holding `owner-policy.lock`, it rereads
+the policy and owner fence, removes only an exact `kind: inline` owner whose OS
+process identity is proven gone, and then commits the policy revision. Unknown
+liveness, malformed/legacy fences, and daemon-kind fences are not repaired by
+this synchronous path. New owner records include an optional process-start
+identity so PID reuse cannot be mistaken for the original owner.
+
 Actor Session snapshots separately persist one exclusive Runtime owner.
 Current owners expose a Runtime-scoped loopback liveness challenge, so a
 contender can distinguish that exact owner from an unrelated process that

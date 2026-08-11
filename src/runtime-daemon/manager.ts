@@ -17,6 +17,7 @@ import {
 import { startRuntimeDaemonHost, type RuntimeDaemonHost } from './host.js';
 import {
   assertRuntimeDaemonOwnerAllowed,
+  readRuntimeOwnerProcessStartIdentity,
   releaseRuntimeDaemonLock,
   resolveRuntimeDaemonEndpointScope,
   resolveRuntimeDaemonPathsFromConfigHome,
@@ -79,11 +80,13 @@ export async function acquireRuntimeDaemonLease(
   const jobContained = isCurrentProcessWindowsJobContained()
     && Number.isSafeInteger(supervisorPid)
     && supervisorPid > 0;
+  const processStartIdentity = readRuntimeOwnerProcessStartIdentity(process.pid);
   const owner = {
     runtimeId: `rt_${randomUUID().replace(/-/g, '').slice(0, 12)}`,
     pid: process.pid,
     createdAt: new Date().toISOString(),
     kind: 'daemon' as const,
+    ...(processStartIdentity === undefined ? {} : { processStartIdentity }),
     ...(jobContained ? {
       processContainment: 'windows-job' as const,
       supervisorPid,

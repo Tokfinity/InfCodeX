@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-08-11_
+_Last Updated: 2026-08-12_
 
 ---
 
@@ -14,6 +14,7 @@ _Last Updated: 2026-08-11_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 291 | High | Resolved | Crashed inline Runtime owner leaves daemon startup permanently fenced | v0.7.69 owner-policy fencing | Unreleased | 2026-08-11 | 2026-08-11 |
 | 290 | Medium | Resolved | Mixed-case custom provider aliases lose model autocomplete | custom provider model completion | v0.7.85 release | 2026-08-10 | 2026-08-10 |
 | 289 | High | Resolved | Windows workspace sandbox recursively stamped broad home and temp ACLs in the shell timeout | v0.7.85 Agent Home shell hardening | v0.7.85 release | 2026-08-10 | 2026-08-10 |
 | 288 | Medium | Resolved | Repo-intelligence warm Worker retained its peak memory after cache construction | v0.7.41 startup prewarm | v0.7.85 release | 2026-08-10 | 2026-08-10 |
@@ -193,6 +194,38 @@ _Last Updated: 2026-08-11_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 291: Crashed inline Runtime owner leaves daemon startup permanently fenced
+
+- Priority: High
+- Status: Resolved
+- Introduced: v0.7.69 owner-policy fencing
+- Fixed: Unreleased
+- Created: 2026-08-11
+- Resolved: 2026-08-11
+
+#### Problem and root cause
+
+If an inline owner process exited without closing its handle, `daemon.lock`
+remained under sticky inline policy. `enableKodaXDaemonOwner()` rejected every
+existing lock without proving whether its owner still existed. In addition,
+inline handle `close()` marked itself closed and ignored a failed coordinated
+release, turning a transient coordination conflict into an unretryable stale
+fence.
+
+#### Resolution
+
+- Daemon enable now checks and removes a provably dead inline fence inside the
+  existing owner-policy critical section, then commits daemon policy.
+- Owner records carry process-start identity for PID-reuse safety. Older
+  `kind: inline` records that lack this identity recover only when their PID is
+  definitively absent.
+- Daemon-kind, legacy-kind, malformed, active, and unverifiable owners remain
+  untouched.
+- Inline close becomes retryable and makes release failure visible.
+
+See
+[ISSUE_291_UNRELEASED_REGRESSION_GUIDE.md](test-guides/ISSUE_291_UNRELEASED_REGRESSION_GUIDE.md).
 
 ### 290: Mixed-case custom provider aliases lose model autocomplete
 
@@ -12220,11 +12253,15 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 170 (27 Open, 143 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 171 (27 Open, 144 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-08-11: Issue 291 resolved in source (Unreleased)
+- Atomically recovered only provably dead inline owner fences during daemon
+  enable and made inline close failures visible and retryable.
 
 ### 2026-08-10: Issue 290 resolved (v0.7.85 development)
 - Preserved mixed-case custom provider aliases during dynamic model completion
