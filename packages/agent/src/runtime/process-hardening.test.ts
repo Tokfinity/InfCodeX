@@ -118,6 +118,25 @@ describe('process hardening', () => {
   });
 
   describe('prepareJavaScriptChildLaunch', () => {
+    it('prioritizes Electron Node mode over the generic bundled executable contract', () => {
+      const launch = prepareJavaScriptChildLaunch({
+        args: ['-e', 'process.stdout.write("ok")'],
+        env: { KODAX_SENTINEL: 'preserved' },
+        executable: 'C:/KodaX/space.exe',
+        isBundled: true,
+        isElectron: true,
+      });
+
+      expect(launch.command).toBe('C:/KodaX/space.exe');
+      expect(launch.args.slice(0, 2)).toEqual([
+        '--import',
+        expect.stringContaining('delete%20process.env.ELECTRON_RUN_AS_NODE'),
+      ]);
+      expect(launch.env.ELECTRON_RUN_AS_NODE).toBe('1');
+      expect(launch.env.BUN_BE_BUN).toBeUndefined();
+      expect(launch.env.KODAX_SENTINEL).toBe('preserved');
+    });
+
     it('uses the standalone executable as Bun without treating it as a KodaX self-entry', () => {
       const parentEnv = {
         ELECTRON_RUN_AS_NODE: 'stale',

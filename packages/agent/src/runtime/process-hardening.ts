@@ -110,6 +110,16 @@ export function prepareJavaScriptChildLaunch(
   options: PrepareJavaScriptChildLaunchOptions,
 ): JavaScriptChildLaunch {
   const command = options.executable ?? process.execPath;
+  if (options.isElectron === true) {
+    const env: NodeJS.ProcessEnv = { ...options.env };
+    delete env[BUN_BE_BUN_ENV];
+    const launch = prepareInternalNodeLaunch({
+      args: options.args,
+      env,
+      isElectron: true,
+    });
+    return { command, ...launch };
+  }
   if (options.isBundled ?? process.env.KODAX_BUNDLED === 'true') {
     const env: NodeJS.ProcessEnv = {
       ...options.env,

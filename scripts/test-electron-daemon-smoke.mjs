@@ -20,6 +20,7 @@ const ordinaryQueryCount = 20;
 let electronProcess;
 let electronSpawnError;
 const electronOutput = [];
+let smokePassed = false;
 
 try {
   const consoleProbe = await prepareConsoleProbe();
@@ -36,15 +37,28 @@ try {
     guiCountFile,
     environmentProofFile,
     consoleProbe,
+    queryCount: ordinaryQueryCount,
+    sessionId: 'windows-gui-query-smoke',
   });
 
-  // Let the SDK's 60-second cold-start budget report its own structured failure
-  // before the harness times out, including on slow CI/antivirus hosts.
-  const result = await waitForJson(resultFile, 180_000);
+  // Cover cold start plus 20 end-to-end sandboxed Shell commands even on
+  // slower CI/antivirus hosts.
+  const result = await waitForJson(resultFile, 600_000);
   assert.deepEqual(result.ok, true, result.error ?? 'Packaged Electron startup failed.');
   assert.equal(result.clientCount, 1, 'The packaged facade must be the only logical client after cold start.');
   assert.equal(result.ordinaryQueryCount, ordinaryQueryCount);
-  assert.deepEqual(result.environmentProof, {
+  assert.equal(
+    result.appliedSandboxCount,
+    ordinaryQueryCount,
+    'Every packaged Runtime query must execute Bash through the Windows restricted-user sandbox.',
+  );
+  const {
+    sandboxDoctor,
+    directSandboxProbe,
+    directPowerShellProbe,
+    ...environmentProof
+  } = result.environmentProof;
+  assert.deepEqual(environmentProof, {
     daemon: 'absent',
     externalChild: 'absent',
     externalChildStatus: 0,
@@ -52,15 +66,51 @@ try {
     shellProbeExitCode: 0,
     shellProbeNodeMode: 'absent',
   }, 'The Electron Node bootstrap switch must not reach daemon or user child code.');
+  assert.equal(
+    sandboxDoctor?.ready,
+    true,
+    `The packaged daemon OS sandbox must be ready: ${JSON.stringify(sandboxDoctor)}`,
+  );
+  assert.deepEqual(directSandboxProbe, {
+    status: 'completed',
+    sandboxed: true,
+    exitCode: 0,
+    stdout: 'direct-sandbox-ok',
+    stderr: '',
+  }, 'The packaged Electron executable must start directly under the restricted-user sandbox.');
+  assert.equal(directPowerShellProbe?.status, 'completed');
+  assert.equal(directPowerShellProbe?.sandboxed, true);
+  assert.equal(directPowerShellProbe?.exitCode, 0);
+  assert.match(directPowerShellProbe?.stdout ?? '', /direct-powershell-ok/);
+  assert.equal(directPowerShellProbe?.stderr, '');
   await verifyConsoleProbe(consoleProbe);
   const sdk = await importInstalledRuntimeSdk();
-  await verifyAttachDetachAndOwnerFence(sdk, result.runtimeId, detachFile, guiCountFile);
+  await verifyAttachDetachAndOwnerFence(
+    sdk,
+    executable,
+    result.runtimeId,
+    detachFile,
+    guiCountFile,
+    consoleProbe,
+  );
   await waitForExit(electronProcess, 15_000);
+  smokePassed = true;
   process.stdout.write(`Packaged Electron daemon smoke passed for Electron ${electronPackage.version}.\n`);
 } finally {
   if (electronProcess?.exitCode === null) electronProcess.kill();
   await stopDaemonBestEffort();
-  await rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  if (!smokePassed && process.env.KODAX_KEEP_ELECTRON_SMOKE === '1') {
+    process.stderr.write(`[electron-daemon-smoke] retained failure artifacts: ${temporaryRoot}\n`);
+  } else {
+    try {
+      await rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch (error) {
+      if (smokePassed) throw error;
+      process.stderr.write(
+        `[electron-daemon-smoke] cleanup warning; retained failure artifacts at ${temporaryRoot}: ${String(error)}\n`,
+      );
+    }
+  }
 }
 
 async function prepareConsoleProbe() {
@@ -226,7 +276,8 @@ function startElectron(executable, files) {
       KODAX_SMOKE_DETACH: files.detachFile,
       KODAX_SMOKE_GUI_COUNT: files.guiCountFile,
       KODAX_SMOKE_ENV_PROOF: files.environmentProofFile,
-      KODAX_SMOKE_QUERY_COUNT: String(ordinaryQueryCount),
+      KODAX_SMOKE_QUERY_COUNT: String(files.queryCount),
+      KODAX_SMOKE_SESSION_ID: files.sessionId,
       KODAX_CONSOLE_PROBE_DIR: files.consoleProbe.observationDir,
       KODAX_CONSOLE_PROBE_QUERY: files.consoleProbe.queryFile,
       KODAX_TRACING: '0',
@@ -248,7 +299,14 @@ async function importInstalledRuntimeSdk() {
   return import(pathToFileURL(entry).href);
 }
 
-async function verifyAttachDetachAndOwnerFence(sdk, runtimeId, detachFile, guiCountFile) {
+async function verifyAttachDetachAndOwnerFence(
+  sdk,
+  executable,
+  runtimeId,
+  detachFile,
+  guiCountFile,
+  consoleProbe,
+) {
   const attached = await sdk.connectKodaXRuntime({
     homeDir,
     profile,
@@ -269,15 +327,56 @@ async function verifyAttachDetachAndOwnerFence(sdk, runtimeId, detachFile, guiCo
   await stopForInline(management);
   await management.close();
   await waitForUnowned(sdk);
+  await assertNoAclPoisonMarkers('A clean packaged-daemon stop must remove every ACL owner marker.');
   assert.equal(sdk.enableKodaXDaemonOwner({ homeDir, profile }).mode, 'daemon');
 
-  const restarted = await sdk.connectKodaXRuntime({ homeDir, profile, autoStart: true, requirements: { daemonManagement: 1 } });
-  assert.notEqual(restarted.identity.runtimeId, runtimeId);
-  await waitForClientCount(restarted, 1);
-  await stopForInline(restarted);
+  const restartResultFile = path.join(temporaryRoot, 'restart-result.json');
+  const restartDetachFile = path.join(temporaryRoot, 'restart-detach');
+  const restartEnvironmentProofFile = path.join(temporaryRoot, 'restart-environment-proof.json');
+  electronSpawnError = undefined;
+  electronOutput.length = 0;
+  electronProcess = startElectron(executable, {
+    resultFile: restartResultFile,
+    detachFile: restartDetachFile,
+    guiCountFile,
+    environmentProofFile: restartEnvironmentProofFile,
+    consoleProbe,
+    queryCount: 1,
+    sessionId: 'windows-gui-query-smoke-restart',
+  });
+  const restartResult = await waitForJson(restartResultFile, 600_000);
+  assert.equal(restartResult.ok, true, restartResult.error ?? 'Packaged Electron restart failed.');
+  assert.notEqual(restartResult.runtimeId, runtimeId);
+  assert.equal(restartResult.ordinaryQueryCount, 1);
+  assert.equal(
+    restartResult.appliedSandboxCount,
+    1,
+    'The post-restart Shell must report an applied Windows restricted-user sandbox.',
+  );
+  assert.equal(restartResult.environmentProof?.shellProbeExitCode, 0);
+  assert.equal(restartResult.environmentProof?.shellProbe, 'shell-probe-ok');
+
+  const restarted = await sdk.connectKodaXRuntime({ homeDir, profile, autoStart: false, requirements: { daemonManagement: 1 } });
+  assert.equal(restarted.identity.runtimeId, restartResult.runtimeId);
+  await waitForClientCount(restarted, 2);
   await restarted.close();
+  await writeFile(restartDetachFile, 'detach', 'utf8');
+  await waitForExit(electronProcess, 15_000);
+  assert.equal((await readFile(guiCountFile, 'utf8')).trim().split(/\r?\n/).length, 2);
+
+  const restartManagement = await sdk.connectKodaXRuntime({ homeDir, profile, autoStart: false, requirements: { daemonManagement: 1 } });
+  await waitForClientCount(restartManagement, 1);
+  await stopForInline(restartManagement);
+  await restartManagement.close();
   await waitForUnowned(sdk);
+  await assertNoAclPoisonMarkers('The restarted daemon must also confirm clean ACL teardown.');
   assert.equal(sdk.enableKodaXDaemonOwner({ homeDir, profile }).mode, 'daemon');
+}
+
+async function assertNoAclPoisonMarkers(message) {
+  const directory = path.join(homeDir, '.kodax', 'sandbox-runtime', 'acl-poison');
+  const entries = existsSync(directory) ? await readdir(directory) : [];
+  assert.deepEqual(entries, [], message);
 }
 
 async function stopForInline(runtime) {

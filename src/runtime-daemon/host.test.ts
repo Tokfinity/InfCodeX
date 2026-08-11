@@ -149,6 +149,50 @@ describe("runtime daemon host", () => {
     expect(readRuntimeDaemonLockOwner(paths.lockFile)).toBeUndefined();
   });
 
+  it("retains daemon ownership while Runtime cleanup is pending", async () => {
+    const paths = resolveRuntimeDaemonPaths(tempHome(), "close-barrier");
+    const runtime = makeRuntime();
+    const originalClose = runtime.close.bind(runtime);
+    let releaseRuntimeClose!: () => void;
+    const runtimeCloseBarrier = new Promise<void>((resolve) => {
+      releaseRuntimeClose = resolve;
+    });
+    let reportRuntimeCloseStarted!: () => void;
+    const runtimeCloseStarted = new Promise<void>((resolve) => {
+      reportRuntimeCloseStarted = resolve;
+    });
+    runtime.close = async () => {
+      reportRuntimeCloseStarted();
+      await runtimeCloseBarrier;
+      await originalClose();
+    };
+    const lock = tryAcquireRuntimeDaemonLock(paths, {
+      runtimeId: runtime.identity.runtimeId,
+      pid: process.pid,
+      createdAt: runtime.identity.startedAt,
+    });
+    expect(lock).toBeDefined();
+    if (!lock) throw new Error("Expected daemon lock for close barrier test.");
+    const host = await startRuntimeDaemonHost({
+      runtime,
+      paths,
+      endpoint: await makeTestEndpoint(),
+      lock,
+    });
+    cleanupTasks.push(() => host.close());
+
+    const closing = host.close();
+    await runtimeCloseStarted;
+    expect(runtime.closed).toBe(false);
+    expect(readRuntimeDaemonLockOwner(paths.lockFile)).toBeDefined();
+
+    releaseRuntimeClose();
+    await closing;
+
+    expect(runtime.closed).toBe(true);
+    expect(readRuntimeDaemonLockOwner(paths.lockFile)).toBeUndefined();
+  });
+
   it("releases host ownership when daemon.stop is requested through the protocol", async () => {
     const paths = resolveRuntimeDaemonPaths(tempHome(), "default");
     const runtime = makeRuntime();

@@ -12,6 +12,9 @@ const guiCountFile = requireEnvironment('KODAX_SMOKE_GUI_COUNT');
 const environmentProofFile = requireEnvironment('KODAX_SMOKE_ENV_PROOF');
 const consoleProbeQueryFile = requireEnvironment('KODAX_CONSOLE_PROBE_QUERY');
 const ordinaryQueryCount = Number(requireEnvironment('KODAX_SMOKE_QUERY_COUNT'));
+const sessionId = requireEnvironment('KODAX_SMOKE_SESSION_ID');
+const workspaceDir = path.join(homeDir, 'workspace');
+const standaloneProbeDir = path.join(homeDir, 'standalone-probe');
 
 app.on('window-all-closed', () => {});
 
@@ -22,6 +25,8 @@ void run().catch((error) => {
 
 async function run() {
   await app.whenReady();
+  fs.mkdirSync(workspaceDir, { recursive: true });
+  fs.mkdirSync(standaloneProbeDir, { recursive: true });
   fs.appendFileSync(guiCountFile, `${process.pid}\n`, 'utf8');
   if (process.argv.includes('daemon') && process.argv.includes('serve')) {
     throw new Error('The daemon child re-entered the packaged Electron GUI application.');
@@ -38,28 +43,106 @@ async function run() {
   });
   await waitForFile(environmentProofFile, 15_000);
   const environmentProof = JSON.parse(fs.readFileSync(environmentProofFile, 'utf8'));
+  if (environmentProof.sandboxDoctor?.ready !== true) {
+    throw new Error(
+      'Packaged daemon OS sandbox is unavailable: '
+      + JSON.stringify(environmentProof.sandboxDoctor),
+    );
+  }
+  if (
+    environmentProof.directSandboxProbe?.status !== 'completed'
+    || environmentProof.directSandboxProbe.exitCode !== 0
+    || environmentProof.directSandboxProbe.stdout !== 'direct-sandbox-ok'
+  ) {
+    throw new Error(
+      'Packaged Electron sandbox target bootstrap failed: '
+      + JSON.stringify(environmentProof.directSandboxProbe),
+    );
+  }
+  if (
+    environmentProof.directPowerShellProbe?.status !== 'completed'
+    || environmentProof.directPowerShellProbe.exitCode !== 0
+    || !environmentProof.directPowerShellProbe.stdout.includes('direct-powershell-ok')
+  ) {
+    throw new Error(
+      'Direct restricted-user PowerShell probe failed: '
+      + JSON.stringify(environmentProof.directPowerShellProbe),
+    );
+  }
   const session = await runtime.sessions.create({
-    sessionId: 'windows-gui-query-smoke',
+    sessionId,
     title: 'Windows GUI query smoke',
-    projectPath: homeDir,
+    projectPath: workspaceDir,
     surface: 'space-desktop',
   });
-  for (let index = 0; index < ordinaryQueryCount; index += 1) {
-    fs.writeFileSync(consoleProbeQueryFile, String(index), 'utf8');
-    try {
-      const handle = await runtime.runs.start({
-        sessionId: session.id,
-        prompt: `ordinary query ${index}`,
-        options: { provider: 'windows-hide-smoke' },
-        operation: { operationId: `windows-hide-smoke-${index}` },
-      });
-      await handle.result;
-    } catch (error) {
-      const detail = error instanceof Error ? error.stack : String(error);
-      throw new Error(`Ordinary query ${index} failed: ${detail}`);
-    } finally {
-      fs.writeFileSync(consoleProbeQueryFile, 'idle', 'utf8');
+  await runtime.sessions.updateSettings(session.id, {
+    permissionMode: 'auto',
+    autoModeEngine: 'rules',
+    shellExecution: {
+      version: 1,
+      shell: {
+        kind: 'powershell',
+        executable: process.env.SystemRoot
+          + '\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+        profile: 'none',
+      },
+      environment: { inherit: 'filtered', windowsPath: 'registry' },
+      cache: { ttlMs: 0, refreshToken: 'packaged-electron-runtime-sandbox' },
+      probeTimeoutMs: 10_000,
+    },
+  });
+  const permissionSubscription = runtime.events.subscribe({
+    sessionId: session.id,
+    type: 'permission.requested',
+  }, (event) => {
+    const request = event.payload;
+    if (request?.toolName !== 'bash' || typeof request.id !== 'string') return;
+    void runtime.permissions.respond(request.id, { type: 'allow_once' }, {
+      runId: request.runId,
+    });
+  });
+  const sandboxedRuns = new Set();
+  const sandboxSubscription = runtime.events.subscribe({
+    sessionId: session.id,
+    type: 'tool.sandbox',
+  }, (event) => {
+    if (
+      typeof event.runId === 'string'
+      && event.payload?.update?.observation?.state === 'applied'
+      && event.payload.update.observation.backend === 'windows-restricted-user'
+    ) {
+      sandboxedRuns.add(event.runId);
     }
+  });
+  let appliedSandboxCount = 0;
+  try {
+    for (let index = 0; index < ordinaryQueryCount; index += 1) {
+      fs.writeFileSync(consoleProbeQueryFile, String(index), 'utf8');
+      try {
+        const handle = await runtime.runs.start({
+          sessionId: session.id,
+          prompt: `ordinary query ${index}`,
+          options: { provider: 'windows-hide-smoke' },
+          operation: { operationId: `windows-hide-smoke-${sessionId}-${index}` },
+        });
+        const completed = await handle.result;
+        if (completed.phase !== 'completed') {
+          throw completed.error ?? new Error(`Runtime shell query ended in phase ${completed.phase}.`);
+        }
+        if (!sandboxedRuns.has(handle.runId)) {
+          throw new Error(`Ordinary query ${index} did not report an applied Windows sandbox.`);
+        }
+        appliedSandboxCount += 1;
+      } catch (error) {
+        const detail = error instanceof Error ? error.stack : String(error);
+        throw new Error(`Ordinary query ${index} failed: ${detail}`);
+      } finally {
+        fs.writeFileSync(consoleProbeQueryFile, 'idle', 'utf8');
+      }
+    }
+  } finally {
+    sandboxSubscription.close();
+    permissionSubscription.close();
   }
   const preflight = await runtime.status.preflight();
   writeResult({
@@ -69,6 +152,7 @@ async function run() {
     clientCount: preflight.clientCount,
     environmentProof,
     ordinaryQueryCount,
+    appliedSandboxCount,
   });
 
   await waitForFile(detachFile, 90_000);
@@ -95,14 +179,25 @@ function prepareEnvironmentProbeExtension() {
     'dist',
     'sdk-coding.js',
   );
+  const sandboxEntry = path.join(
+    __dirname,
+    'node_modules',
+    '@kodax-ai',
+    'kodax',
+    'dist',
+    'sdk-sandbox.js',
+  );
   const llmUrl = pathToFileURL(llmEntry).href;
   const codingUrl = pathToFileURL(codingEntry).href;
+  const sandboxUrl = pathToFileURL(sandboxEntry).href;
   fs.mkdirSync(configDir, { recursive: true });
   fs.writeFileSync(extensionPath, `
 import { spawnSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { KodaXBaseProvider } from ${JSON.stringify(llmUrl)};
 import { toolBash } from ${JSON.stringify(codingUrl)};
+import { doctorKodaXSandbox, runKodaXSandboxed, setupKodaXSandbox } from ${JSON.stringify(sandboxUrl)};
 
 class WindowsHideSmokeProvider extends KodaXBaseProvider {
   name = 'windows-hide-smoke';
@@ -117,12 +212,41 @@ class WindowsHideSmokeProvider extends KodaXBaseProvider {
     return true;
   }
 
-  async stream() {
+  toolSequence = 0;
+
+  async stream(messages) {
+    const last = messages.at(-1);
+    const blocks = Array.isArray(last?.content) ? last.content : [];
+    const toolResult = blocks.find((block) => block?.type === 'tool_result');
+    if (toolResult) {
+      const content = typeof toolResult.content === 'string'
+        ? toolResult.content
+        : JSON.stringify(toolResult.content);
+      if (!content.includes('Exit: 0') || !content.includes('runtime-sandbox-ok')) {
+        throw new Error('Runtime sandbox Bash result was not successful: ' + content);
+      }
+      return {
+        textBlocks: [{ type: 'text', text: 'done' }],
+        toolBlocks: [],
+        thinkingBlocks: [],
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        stopReason: 'end_turn',
+      };
+    }
+    this.toolSequence += 1;
     return {
-      textBlocks: [{ type: 'text', text: 'done' }],
-      toolBlocks: [],
+      textBlocks: [],
+      toolBlocks: [{
+        type: 'tool_use',
+        id: 'runtime-sandbox-shell-' + this.toolSequence,
+        name: 'bash',
+        input: {
+          command: "if ($env:ELECTRON_RUN_AS_NODE) { Write-Error 'Electron Node mode leaked'; exit 97 }; Write-Output 'runtime-sandbox-ok'",
+        },
+      }],
       thinkingBlocks: [],
       usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      stopReason: 'tool_use',
     };
   }
 }
@@ -162,6 +286,50 @@ const shellProbeExitCode =
     ? Number.parseInt(shellProbeLines[shellProbeExitIndex].slice('Exit: '.length), 10)
     : null;
 const shellProbeOutput = shellProbeLines.slice(shellProbeExitIndex + 1);
+let sandboxDoctor = await doctorKodaXSandbox({ refresh: true });
+if (
+  !sandboxDoctor.ready
+  && sandboxDoctor.diagnostics.length > 0
+  && sandboxDoctor.diagnostics.every((diagnostic) => diagnostic.includes('[acl_guards_missing]'))
+) {
+  sandboxDoctor = await setupKodaXSandbox();
+}
+const directSandboxProbe = sandboxDoctor.ready
+  ? await runKodaXSandboxed({
+      command: process.execPath,
+      args: [
+        '-e',
+        "if (process.env.ELECTRON_RUN_AS_NODE) process.exit(97); process.stdout.write('direct-sandbox-ok')",
+      ],
+      cwd: ${JSON.stringify(standaloneProbeDir)},
+      filesystem: {
+        allowRead: [dirname(process.execPath), ${JSON.stringify(standaloneProbeDir)}],
+        allowWrite: [],
+      },
+      env: { ELECTRON_RUN_AS_NODE: '1' },
+      timeoutMs: 15_000,
+    })
+  : undefined;
+const directPowerShellProbe = sandboxDoctor.ready
+  ? await runKodaXSandboxed({
+      command: process.env.SystemRoot
+        + '\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe',
+      args: [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        "if ($env:ELECTRON_RUN_AS_NODE) { Write-Error 'Electron Node mode leaked'; exit 97 }; Write-Output 'direct-powershell-ok'",
+      ],
+      cwd: ${JSON.stringify(standaloneProbeDir)},
+      filesystem: {
+        allowRead: [${JSON.stringify(standaloneProbeDir)}],
+        allowWrite: [],
+      },
+      timeoutMs: 15_000,
+    })
+  : undefined;
 writeFileSync(${JSON.stringify(environmentProofFile)}, JSON.stringify({
   daemon: process.env.ELECTRON_RUN_AS_NODE ?? 'absent',
   externalChild: child.stdout.trim(),
@@ -170,6 +338,9 @@ writeFileSync(${JSON.stringify(environmentProofFile)}, JSON.stringify({
   shellProbe: shellProbeOutput[0],
   shellProbeExitCode,
   shellProbeNodeMode: shellProbeOutput[1]?.replace(/^node-mode=/, ''),
+  sandboxDoctor,
+  directSandboxProbe,
+  directPowerShellProbe,
 }), 'utf8');
 
 export default function(api) {

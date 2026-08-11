@@ -209,6 +209,7 @@ import {
   createAsrtShellSandbox,
   createAsrtSkillScriptRunner,
   sandboxRuntimeCapability,
+  shutdownAsrtWorkspaceSessions,
 } from "./sandbox-runtime.js";
 import type {
   RuntimeAgentBindingService,
@@ -372,6 +373,8 @@ export interface RuntimeOwnerIdentity {
   readonly pid: number;
   readonly createdAt: string;
   readonly kind?: "daemon" | "inline";
+  /** OS-issued identity used to distinguish a live owner from PID reuse. */
+  readonly processStartIdentity?: string;
   readonly processContainment?: "windows-job";
   readonly supervisorPid?: number;
 }
@@ -3944,6 +3947,9 @@ export async function createKodaXRuntime(
       if (!ownerLivenessClosed) {
         await ownerLiveness.close();
         ownerLivenessClosed = true;
+      }
+      if (options.sharedDaemonHost) {
+        await shutdownAsrtWorkspaceSessions();
       }
       if (!busClosed) {
         bus.close();

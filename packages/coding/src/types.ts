@@ -1655,7 +1655,13 @@ export interface KodaXPreparedShellSandboxInvocation {
   readonly env: NodeJS.ProcessEnv;
   readonly windowsVerbatimArguments?: boolean;
   readonly fileSystemEffectLease?: KodaXFileSystemEffectLease;
-  cleanup(): Promise<KodaXShellSandboxObservation | undefined>;
+  /** Final synchronous fail-closed check immediately before the effect gate starts the target. */
+  readonly authorizeStart?: () => void;
+  cleanup(input?: {
+    readonly execution: 'not_started' | 'started_or_unknown';
+  }): Promise<KodaXShellSandboxObservation | undefined>;
+  /** Evicts a cleanup-requested sandbox session; its safe reset may drain asynchronously. */
+  readonly retire?: () => Promise<void>;
 }
 
 /** Runtime-owned OS sandbox broker for selected concrete shell calls. */

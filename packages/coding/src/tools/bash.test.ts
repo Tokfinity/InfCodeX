@@ -211,6 +211,454 @@ describe('toolBash', () => {
     expect(order.indexOf('cleanup')).toBeLessThan(order.indexOf('release'));
   });
 
+  it('surfaces filesystem-effect completion failure as a required sandbox lifecycle error', async () => {
+    const fileSystemEffectLease = {
+      bindEffectProcess: vi.fn(async () => undefined),
+      finishEffectProcess: vi.fn(async () => {
+        throw new Error('injected effect completion failure');
+      }),
+      release: vi.fn(async () => undefined),
+    };
+
+    const result = await toolBash({ command: 'effect-completion-failure' }, {
+      backups: new Map(),
+      toolCallId: 'bash-effect-completion-failure',
+      shellSandbox: {
+        failClosed: true,
+        prepare: async () => ({
+          executable: process.execPath,
+          args: ['-e', "process.stdout.write('target-ran-once')"],
+          env: process.env,
+          fileSystemEffectLease,
+          cleanup: async () => undefined,
+        }),
+      },
+    });
+
+    expect(result).toContain('[Error] Required OS sandbox execution could not be verified');
+    expect(result).toContain('injected effect completion failure');
+    expect(result).toContain('target-ran-once');
+    expect(result).not.toContain('output post-processing failed');
+    expect(fileSystemEffectLease.release).toHaveBeenCalledOnce();
+  });
+
+  it('surfaces filesystem-effect lease release failure instead of reporting command success', async () => {
+    const fileSystemEffectLease = {
+      bindEffectProcess: vi.fn(async () => undefined),
+      finishEffectProcess: vi.fn(async () => undefined),
+      release: vi.fn(async () => {
+        throw new Error('injected effect lease release failure');
+      }),
+    };
+
+    const result = await toolBash({ command: 'effect-release-failure' }, {
+      backups: new Map(),
+      toolCallId: 'bash-effect-release-failure',
+      shellSandbox: {
+        failClosed: true,
+        prepare: async () => ({
+          executable: process.execPath,
+          args: ['-e', "process.stdout.write('target-ran-once')"],
+          env: process.env,
+          fileSystemEffectLease,
+          cleanup: async () => undefined,
+        }),
+      },
+    });
+
+    expect(result).toContain('[Error] Required OS sandbox execution could not be verified');
+    expect(result).toContain('injected effect lease release failure');
+    expect(result).toContain('target-ran-once');
+    expect(result).not.toContain('output post-processing failed');
+  });
+
+  it('surfaces sandbox cleanup failure when the filesystem-effect lease cannot be acquired', async () => {
+    const sentinel = path.join(tempDir, 'lease-acquisition-target-ran.txt');
+    let reportMutationStarted!: () => void;
+    const mutationStarted = new Promise<void>((resolve) => { reportMutationStarted = resolve; });
+    let releaseMutation!: () => void;
+    const holdMutation = new Promise<void>((resolve) => { releaseMutation = resolve; });
+    const mutation = withFileMutation(path.join(tempDir, 'held-mutation.txt'), async () => {
+      reportMutationStarted();
+      await holdMutation;
+    });
+    await mutationStarted;
+    const cleanup = vi.fn(async () => {
+      throw new Error('injected pre-lease sandbox cleanup failure');
+    });
+    const retire = vi.fn(async () => undefined);
+
+    try {
+      const result = await toolBash({ command: 'must-not-run-with-active-mutation' }, {
+        backups: new Map(),
+        toolCallId: 'bash-lease-acquisition-cleanup-failure',
+        shellSandbox: {
+          failClosed: true,
+          prepare: async () => ({
+            executable: process.execPath,
+            args: ['-e', `require('node:fs').writeFileSync(${JSON.stringify(sentinel)}, 'ran')`],
+            env: process.env,
+            cleanup,
+            retire,
+          }),
+        },
+      });
+
+      expect(result).toContain('another filesystem effect is active');
+      expect(result).toContain('Required OS sandbox cleanup failed');
+      expect(result).toContain('injected pre-lease sandbox cleanup failure');
+      expect(cleanup).toHaveBeenCalledWith({ execution: 'not_started' });
+      expect(retire).toHaveBeenCalledOnce();
+      await expect(fs.readFile(sentinel, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      releaseMutation();
+      await mutation;
+    }
+  }, 10_000);
+
+  it('reports filesystem-effect binding failure without executing the command', async () => {
+    const sentinel = path.join(tempDir, 'binding-target-ran.txt');
+    const cleanup = vi.fn(async () => {
+      throw new Error('injected binding cleanup failure');
+    });
+    const retire = vi.fn(async () => undefined);
+    const fileSystemEffectLease = {
+      bindEffectProcess: vi.fn(async () => {
+        throw new Error('persisted effect identity rejected');
+      }),
+      finishEffectProcess: vi.fn(async () => {
+        throw new Error('injected effect finish failure');
+      }),
+      release: vi.fn(async () => undefined),
+    };
+    const prepare = vi.fn(async () => ({
+      executable: process.execPath,
+      args: ['-e', `require('node:fs').writeFileSync(${JSON.stringify(sentinel)}, 'ran')`],
+      env: process.env,
+      fileSystemEffectLease,
+      cleanup,
+      retire,
+    }));
+
+    const result = await toolBash({ command: 'must-not-run-after-binding-failure' }, {
+      backups: new Map(),
+      toolCallId: 'bash-binding-failure',
+      shellSandbox: { failClosed: true, prepare },
+    });
+
+    expect(result).toContain('[Error] Command was not started');
+    expect(result).toContain('filesystem-effect binding');
+    expect(result).toContain('persisted effect identity rejected');
+    expect(result).not.toContain('Exit: 4294967295');
+    await expect(fs.readFile(sentinel, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(fileSystemEffectLease.finishEffectProcess).toHaveBeenCalledOnce();
+    expect(fileSystemEffectLease.release).toHaveBeenCalledOnce();
+    expect(cleanup).toHaveBeenCalledWith({ execution: 'not_started' });
+    expect(retire).toHaveBeenCalledOnce();
+  });
+
+  it('runs the final sandbox authorization after binding but before starting the target', async () => {
+    const sentinel = path.join(tempDir, 'authorization-target-ran.txt');
+    const order: string[] = [];
+    const fileSystemEffectLease = {
+      bindEffectProcess: vi.fn(async () => { order.push('bind'); }),
+      finishEffectProcess: vi.fn(async () => undefined),
+      release: vi.fn(async () => undefined),
+    };
+    const authorizeStart = vi.fn(() => {
+      order.push('authorize');
+      throw new Error('sandbox ACL state became unsafe');
+    });
+    const prepare = vi.fn(async () => ({
+      executable: process.execPath,
+      args: ['-e', `require('node:fs').writeFileSync(${JSON.stringify(sentinel)}, 'ran')`],
+      env: process.env,
+      fileSystemEffectLease,
+      authorizeStart,
+      cleanup: async () => undefined,
+    }));
+
+    const result = await toolBash({ command: 'must-not-run-after-authorization-failure' }, {
+      backups: new Map(),
+      toolCallId: 'bash-authorization-failure',
+      shellSandbox: { failClosed: true, prepare },
+    });
+
+    expect(result).toContain('[Error] Command was not started');
+    expect(result).toContain('sandbox ACL state became unsafe');
+    expect(order).toEqual(['bind', 'authorize']);
+    await expect(fs.readFile(sentinel, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('does not authorize a background target cancelled while effect binding is pending', async () => {
+    const sentinel = path.join(tempDir, 'cancelled-binding-target-ran.txt');
+    const controller = new AbortController();
+    let resolveBinding!: () => void;
+    let reportBindingStarted!: () => void;
+    const bindingStarted = new Promise<void>((resolve) => { reportBindingStarted = resolve; });
+    let reportReleaseCompleted!: () => void;
+    const releaseCompleted = new Promise<void>((resolve) => { reportReleaseCompleted = resolve; });
+    const fileSystemEffectLease = {
+      bindEffectProcess: vi.fn(async () => {
+        reportBindingStarted();
+        await new Promise<void>((resolve) => { resolveBinding = resolve; });
+      }),
+      finishEffectProcess: vi.fn(async () => undefined),
+      release: vi.fn(async () => { reportReleaseCompleted(); }),
+    };
+    const authorizeStart = vi.fn();
+    const running = toolBash({
+      command: 'must-not-run-after-cancelled-binding',
+      run_in_background: true,
+    }, {
+      backups: new Map(),
+      toolCallId: 'bash-cancelled-pending-binding',
+      abortSignal: controller.signal,
+      shellSandbox: {
+        failClosed: true,
+        prepare: async () => ({
+          executable: process.execPath,
+          args: ['-e', `require('node:fs').writeFileSync(${JSON.stringify(sentinel)}, 'ran')`],
+          env: process.env,
+          fileSystemEffectLease,
+          authorizeStart,
+          cleanup: async () => undefined,
+        }),
+      },
+    });
+
+    await bindingStarted;
+    controller.abort();
+    let responseTimer: ReturnType<typeof setTimeout> | undefined;
+    const result = await Promise.race([
+      running,
+      new Promise<never>((_resolve, reject) => {
+        responseTimer = setTimeout(
+          () => reject(new Error('cancelled pending bind did not return')),
+          5_000,
+        );
+      }),
+    ]).finally(() => {
+      if (responseTimer !== undefined) clearTimeout(responseTimer);
+    });
+    expect(result).toContain('[Cancelled]');
+    expect(result).toContain('binding is still pending');
+    expect(authorizeStart).not.toHaveBeenCalled();
+    await expect(fs.readFile(sentinel, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    resolveBinding();
+    await releaseCompleted;
+  }, 15_000);
+
+  it('does not authorize a foreground target whose deadline expires while effect binding is pending', async () => {
+    const sentinel = path.join(tempDir, 'timed-out-binding-target-ran.txt');
+    let resolveBinding!: () => void;
+    let reportBindingStarted!: () => void;
+    const bindingStarted = new Promise<void>((resolve) => { reportBindingStarted = resolve; });
+    let reportReleaseCompleted!: () => void;
+    const releaseCompleted = new Promise<void>((resolve) => { reportReleaseCompleted = resolve; });
+    const fileSystemEffectLease = {
+      bindEffectProcess: vi.fn(async () => {
+        reportBindingStarted();
+        await new Promise<void>((resolve) => { resolveBinding = resolve; });
+      }),
+      finishEffectProcess: vi.fn(async () => undefined),
+      release: vi.fn(async () => { reportReleaseCompleted(); }),
+    };
+    const authorizeStart = vi.fn();
+    const running = toolBash({
+      command: 'must-not-run-after-binding-timeout',
+      timeout: 0.2,
+    }, {
+      backups: new Map(),
+      toolCallId: 'bash-timeout-pending-binding',
+      shellSandbox: {
+        failClosed: true,
+        prepare: async () => ({
+          executable: process.execPath,
+          args: ['-e', `require('node:fs').writeFileSync(${JSON.stringify(sentinel)}, 'ran')`],
+          env: process.env,
+          fileSystemEffectLease,
+          authorizeStart,
+          cleanup: async () => undefined,
+        }),
+      },
+    });
+
+    await bindingStarted;
+    let responseTimer: ReturnType<typeof setTimeout> | undefined;
+    const result = await Promise.race([
+      running,
+      new Promise<never>((_resolve, reject) => {
+        responseTimer = setTimeout(
+          () => reject(new Error('timed-out pending bind did not return')),
+          5_000,
+        );
+      }),
+    ]).finally(() => {
+      if (responseTimer !== undefined) clearTimeout(responseTimer);
+    });
+    expect(result).toContain('[Timeout]');
+    expect(result).toContain('binding is still pending');
+    expect(authorizeStart).not.toHaveBeenCalled();
+    await expect(fs.readFile(sentinel, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(0);
+    try {
+      resolveBinding();
+      await releaseCompleted;
+      expect(authorizeStart).not.toHaveBeenCalled();
+      await expect(fs.readFile(sentinel, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      clock.mockRestore();
+    }
+  }, 15_000);
+
+  it('runs the next command after a foreground binding failure fully releases its lease', async () => {
+    let prepareCount = 0;
+    let firstLeaseReleased = false;
+    const shellSandbox: KodaXShellSandbox = {
+      failClosed: true,
+      prepare: async () => {
+        prepareCount += 1;
+        if (prepareCount === 1) {
+          return {
+            executable: process.execPath,
+            args: ['-e', "process.stdout.write('must-not-run')"],
+            env: process.env,
+            fileSystemEffectLease: {
+              bindEffectProcess: async () => {
+                throw new Error('injected first binding failure');
+              },
+              finishEffectProcess: async () => undefined,
+              release: async () => {
+                await new Promise((resolve) => setTimeout(resolve, 25));
+                firstLeaseReleased = true;
+              },
+            },
+            cleanup: async () => undefined,
+          };
+        }
+        if (!firstLeaseReleased) throw new Error('previous effect lease was not released');
+        return {
+          executable: process.execPath,
+          args: ['-e', "process.stdout.write('recovered-echo-ok')"],
+          env: process.env,
+          fileSystemEffectLease: {
+            bindEffectProcess: async () => undefined,
+            finishEffectProcess: async () => undefined,
+            release: async () => undefined,
+          },
+          cleanup: async () => undefined,
+        };
+      },
+    };
+
+    const failed = await toolBash({ command: 'first-binding-failure' }, {
+      backups: new Map(),
+      toolCallId: 'bash-binding-recovery-first',
+      shellSandbox,
+    });
+    const recovered = await toolBash({ command: 'echo ok' }, {
+      backups: new Map(),
+      toolCallId: 'bash-binding-recovery-second',
+      shellSandbox,
+    });
+
+    expect(failed).toContain('injected first binding failure');
+    expect(failed).not.toContain('must-not-run');
+    expect(completedCommandBody(recovered)).toBe('recovered-echo-ok');
+    expect(prepareCount).toBe(2);
+  });
+
+  it('reports background filesystem-effect binding failure without starting a job', async () => {
+    const sentinel = path.join(tempDir, 'background-binding-target-ran.txt');
+    const cleanup = vi.fn(async () => {
+      throw new Error('injected background binding cleanup failure');
+    });
+    const retire = vi.fn(async () => undefined);
+    const fileSystemEffectLease = {
+      bindEffectProcess: vi.fn(async () => {
+        throw new Error('background effect identity rejected');
+      }),
+      finishEffectProcess: vi.fn(async () => {
+        throw new Error('injected background effect finish failure');
+      }),
+      release: vi.fn(async () => undefined),
+    };
+    const prepare = vi.fn(async () => ({
+      executable: process.execPath,
+      args: ['-e', `require('node:fs').writeFileSync(${JSON.stringify(sentinel)}, 'ran')`],
+      env: process.env,
+      fileSystemEffectLease,
+      cleanup,
+      retire,
+    }));
+
+    const result = await toolBash({
+      command: 'must-not-run-in-background-after-binding-failure',
+      run_in_background: true,
+    }, {
+      backups: new Map(),
+      toolCallId: 'bash-background-binding-failure',
+      shellSandbox: { failClosed: true, prepare },
+    });
+
+    expect(result).toContain('[Error] Command was not started');
+    expect(result).toContain('filesystem-effect binding');
+    expect(result).toContain('background effect identity rejected');
+    expect(result).not.toContain('Command started in background');
+    await expect(fs.readFile(sentinel, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(fileSystemEffectLease.finishEffectProcess).toHaveBeenCalledOnce();
+    expect(fileSystemEffectLease.release).toHaveBeenCalledOnce();
+    expect(cleanup).toHaveBeenCalledWith({ execution: 'not_started' });
+    expect(retire).toHaveBeenCalledOnce();
+  });
+
+  it('does not replay an unattested foreground execution', async () => {
+    const executionCount = path.join(tempDir, 'foreground-execution-count.txt');
+    const order: string[] = [];
+    const script = [
+      "const fs=require('node:fs')",
+      `const file=${JSON.stringify(executionCount)}`,
+      "const count=fs.existsSync(file)?Number(fs.readFileSync(file,'utf8')):0",
+      "fs.writeFileSync(file,String(count+1))",
+      "process.stdout.write('foreground-ran-once')",
+      "process.stderr.write('foreground-sandbox-diagnostic')",
+    ].join(';');
+    const shellSandbox: KodaXShellSandbox = {
+      failClosed: true,
+      prepare: async () => ({
+        executable: process.execPath,
+        args: ['-e', script],
+        env: process.env,
+        fileSystemEffectLease: {
+          bindEffectProcess: async () => { order.push('bind'); },
+          finishEffectProcess: async () => { order.push('finish'); },
+          release: async () => { order.push('release'); },
+        },
+        cleanup: async () => {
+          order.push('cleanup');
+          throw new Error('foreground sandbox attestation missing');
+        },
+        retire: async () => { order.push('retire'); },
+      }),
+    };
+
+    const result = await toolBash({ command: 'foreground-unattested' }, {
+      backups: new Map(),
+      toolCallId: 'bash-foreground-unattested',
+      shellSandbox,
+    });
+
+    expect(await fs.readFile(executionCount, 'utf8')).toBe('1');
+    expect(result).toContain('Required OS sandbox execution could not be verified');
+    expect(result).toContain('foreground sandbox attestation missing');
+    expect(result).toContain('was not retried');
+    expect(result).toContain('foreground-ran-once');
+    expect(result).toContain('foreground-sandbox-diagnostic');
+    expect(result).not.toContain('Exit: 0');
+    expect(order).toEqual(['bind', 'finish', 'cleanup', 'retire', 'release']);
+  });
+
   it('falls back to ordinary execution when sandbox preparation unexpectedly fails', async () => {
     const reportToolSandboxObservation = vi.fn();
     const prepare = vi.fn(async () => {
@@ -367,6 +815,40 @@ describe('toolBash', () => {
     controller.abort();
     await expect(running).resolves.toContain('[Cancelled]');
     expect(reportToolSandboxObservation).not.toHaveBeenCalled();
+  });
+
+  it('retires a workspace session when pre-start cleanup fails', async () => {
+    const controller = new AbortController();
+    const cleanup = vi.fn(async () => {
+      throw new Error('pre-start workspace cleanup failed');
+    });
+    const retire = vi.fn(async () => undefined);
+    const shellSandbox: KodaXShellSandbox = {
+      failClosed: true,
+      prepare: async () => {
+        controller.abort();
+        return {
+          executable: process.execPath,
+          args: ['--version'],
+          env: process.env,
+          cleanup,
+          retire,
+        };
+      },
+    };
+
+    const result = await toolBash({ command: 'must-not-start' }, {
+      backups: new Map(),
+      toolCallId: 'bash-pre-start-cleanup-failure',
+      shellSandbox,
+      abortSignal: controller.signal,
+    });
+
+    expect(result).toContain('[Cancelled]');
+    expect(result).toContain('Required OS sandbox cleanup failed');
+    expect(result).toContain('pre-start workspace cleanup failed');
+    expect(cleanup).toHaveBeenCalledWith({ execution: 'not_started' });
+    expect(retire).toHaveBeenCalledOnce();
   });
 
   it('does not spawn when the command deadline expires during sandbox preparation', async () => {
@@ -814,6 +1296,118 @@ describe('toolBash', () => {
     await expect(withFileMutation(path.join(tempDir, 'after-fast-background.txt'), async () => 'ready'))
       .resolves.toBe('ready');
   });
+
+  it('records an unattested background execution without replaying it', async () => {
+    const executionCount = path.join(tempDir, 'background-execution-count.txt');
+    const script = [
+      "const fs=require('node:fs')",
+      `const file=${JSON.stringify(executionCount)}`,
+      "const count=fs.existsSync(file)?Number(fs.readFileSync(file,'utf8')):0",
+      "fs.writeFileSync(file,String(count+1))",
+      "process.stdout.write('background-ran-once')",
+    ].join(';');
+    const shellSandbox: KodaXShellSandbox = {
+      failClosed: true,
+      prepare: async () => ({
+        executable: process.execPath,
+        args: ['-e', script],
+        env: process.env,
+        cleanup: async () => {
+          throw new Error('sandbox attestation missing');
+        },
+      }),
+    };
+
+    const result = await toolBash({
+      command: 'background-unattested',
+      run_in_background: true,
+    }, {
+      backups: new Map(),
+      toolCallId: 'bash-background-unattested',
+      shellSandbox,
+    });
+    const outputPath = parseBackgroundOutputPath(result);
+    await waitForOutputMatch(outputPath, /Required OS sandbox execution could not be verified/);
+
+    expect(await fs.readFile(executionCount, 'utf8')).toBe('1');
+    const output = await fs.readFile(outputPath, 'utf8');
+    expect(output).toContain('background-ran-once');
+    expect(output).toContain('sandbox attestation missing');
+    expect(output).toContain('was not retried');
+    await fs.rm(outputPath, { force: true });
+  });
+
+  it.runIf(process.platform === 'win32')(
+    'does not leak the effect-gate launch payload into the command environment',
+    async () => {
+      const command = 'node -e "process.stdout.write(process.env.KODAX_EFFECT_COMMAND_JSON===undefined?\'absent\':\'leaked\')"';
+      const result = await toolBash({ command }, {
+        backups: new Map(),
+        executionCwd: tempDir,
+      });
+
+      expect(completedCommandBody(result)).toBe('absent');
+    },
+    WINDOWS_PROCESS_TREE_TEST_TIMEOUT_MS,
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'restores Electron Node mode only for a prepared JavaScript broker child',
+    async () => {
+      const electronDescriptor = Object.getOwnPropertyDescriptor(process.versions, 'electron');
+      Object.defineProperty(process.versions, 'electron', {
+        configurable: true,
+        value: 'test-electron',
+      });
+      try {
+        const shellSandbox: KodaXShellSandbox = {
+          failClosed: true,
+          prepare: async () => ({
+            executable: process.execPath,
+            args: ['-e', "process.stdout.write(process.env.ELECTRON_RUN_AS_NODE??'absent')"],
+            env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+            cleanup: async () => undefined,
+          }),
+        };
+        const result = await toolBash({ command: 'prepared-electron-broker' }, {
+          backups: new Map(),
+          executionCwd: tempDir,
+          toolCallId: 'prepared-electron-broker',
+          shellSandbox,
+        });
+
+        expect(completedCommandBody(result)).toBe('1');
+
+        const commandShell = process.env.COMSPEC ?? 'cmd.exe';
+        const externalSandbox: KodaXShellSandbox = {
+          failClosed: true,
+          prepare: async () => ({
+            executable: commandShell,
+            args: [
+              '/d',
+              '/s',
+              '/c',
+              'if defined ELECTRON_RUN_AS_NODE (echo leaked) else (echo absent)',
+            ],
+            env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+            cleanup: async () => undefined,
+          }),
+        };
+        const externalResult = await toolBash({ command: 'prepared-external-child' }, {
+          backups: new Map(),
+          executionCwd: tempDir,
+          toolCallId: 'prepared-external-child',
+          shellSandbox: externalSandbox,
+        });
+
+        expect(completedCommandBody(externalResult).trim()).toBe('absent');
+      } finally {
+        if (electronDescriptor === undefined) delete process.versions.electron;
+        else Object.defineProperty(process.versions, 'electron', electronDescriptor);
+      }
+    },
+    WINDOWS_PROCESS_TREE_TEST_TIMEOUT_MS,
+  );
 
   it.runIf(process.platform === 'win32')(
     'keeps a passthrough sandbox inside the per-effect Job until detached descendants drain',

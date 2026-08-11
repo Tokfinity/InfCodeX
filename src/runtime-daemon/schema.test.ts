@@ -86,6 +86,28 @@ describe('runtime daemon protocol schema', () => {
     })).toContain('$.unexpected is not allowed.');
   });
 
+  it('accepts the daemon owner process-start identity returned by management inspection', () => {
+    const schema = RUNTIME_DAEMON_METHOD_SCHEMAS['daemon.management.get'].result;
+
+    expect(validateRuntimeDaemonJsonSchema(schema, {
+      runtimeId: 'runtime-1',
+      revision: 1,
+      ownerPolicy: {
+        mode: 'daemon',
+        revision: 1,
+        updatedAt: '2026-08-12T00:00:00.000Z',
+      },
+      owner: {
+        runtimeId: 'runtime-1',
+        pid: 42,
+        createdAt: '2026-08-12T00:00:00.000Z',
+        kind: 'daemon',
+        processStartIdentity: 'windows:134158464000000000',
+      },
+      preflight: {},
+    })).toEqual([]);
+  });
+
   it('accepts surface and cursor fields for session.list pagination', () => {
     const schema = RUNTIME_DAEMON_METHOD_SCHEMAS['session.list'].params;
     expect(validateRuntimeDaemonJsonSchema(schema, {

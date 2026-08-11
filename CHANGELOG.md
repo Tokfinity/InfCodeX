@@ -8,6 +8,12 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Packaged Electron hosts on Windows now keep Electron's Node bootstrap mode
+  across the internal filesystem-effect gate without leaking it to user
+  commands. Sandbox readiness uses KodaX's staged runner outside ASAR, failed
+  workspace sessions are retired, stale ACLs are recovered before startup and
+  after each sandbox owner exits, and an execution with missing attestation is
+  reported without replaying a possibly side-effecting command.
 - `enableKodaXDaemonOwner()` now atomically recovers only a provably abandoned
   inline owner fence before restoring daemon policy. Live, unreadable,
   legacy-kind, daemon-kind, and unverifiable owners remain fail-closed.

@@ -226,6 +226,7 @@ import {
   runAsrtWorkspaceSessionProcess,
   sandboxRuntimeCapability,
   sandboxSetupGuidance,
+  shutdownAsrtWorkspaceSessions,
 } from './sandbox-runtime.js';
 import { createReplLearningBinding } from './repl-learning-binding.js';
 import {
@@ -1888,6 +1889,11 @@ async function cleanupDaemonServeProcessResources(input: {
     }
   };
 
+  await attempt(
+    'sandbox workspace session',
+    shutdownAsrtWorkspaceSessions,
+    Math.max(0, deadline - Date.now()),
+  );
   await attempt('A2A', input.closeA2A);
   await attempt('integration hot-reload', input.closeHotReload);
   await attempt('extension Runtime', input.disposeExtensions);
