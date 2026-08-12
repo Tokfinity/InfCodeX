@@ -289,8 +289,16 @@ const shellProbeOutput = shellProbeLines.slice(shellProbeExitIndex + 1);
 let sandboxDoctor = await doctorKodaXSandbox({ refresh: true });
 if (
   !sandboxDoctor.ready
-  && sandboxDoctor.diagnostics.length > 0
-  && sandboxDoctor.diagnostics.every((diagnostic) => diagnostic.includes('[acl_guards_missing]'))
+  && (
+    (
+      sandboxDoctor.diagnostics.length > 0
+      && sandboxDoctor.diagnostics.every((diagnostic) => diagnostic.includes('[acl_guards_missing]'))
+    )
+    || (
+      sandboxDoctor.setupRequired
+      && process.env.KODAX_ELECTRON_SMOKE_AUTO_SETUP === '1'
+    )
+  )
 ) {
   sandboxDoctor = await setupKodaXSandbox();
 }

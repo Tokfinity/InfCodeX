@@ -10,6 +10,7 @@ interface WorkflowStep {
   readonly uses?: string;
   readonly id?: string;
   readonly if?: string;
+  readonly env?: Readonly<Record<string, unknown>>;
   readonly with?: Readonly<Record<string, unknown>>;
 }
 
@@ -60,6 +61,8 @@ describe('GitHub release workflow', () => {
     expect(steps.find((step) => step.name === 'Build')?.run).toBe('npm run build');
     expect(steps.find((step) => step.name === 'Packaged Electron daemon release gate')?.run)
       .toBe('npm run test:electron-daemon:built');
+    expect(steps.find((step) => step.name === 'Packaged Electron daemon release gate')?.env)
+      .toMatchObject({ KODAX_ELECTRON_SMOKE_AUTO_SETUP: '1' });
     expect(steps.find((step) => step.name?.startsWith('Build binary'))?.run)
       .toContain('--skip-tsc');
   });
@@ -96,5 +99,14 @@ describe('GitHub release workflow', () => {
       expect(install?.if).toContain("steps.electron-smoke-cache.outputs.cache-hit != 'true'");
       expect(ensureBinary?.run).toBe('node .electron-smoke/node_modules/electron/install.js');
     }
+  });
+
+  it('opts the packaged smoke gate into sandbox setup on fresh Windows runners', () => {
+    const source = readFileSync(resolve('.github/workflows/ci.yml'), 'utf8');
+    const workflow = parse(source) as ReleaseWorkflow;
+    const step = workflow.jobs?.['packaged-electron-daemon']?.steps
+      ?.find((candidate) => candidate.name === 'Packaged Electron daemon gate');
+
+    expect(step?.env).toMatchObject({ KODAX_ELECTRON_SMOKE_AUTO_SETUP: '1' });
   });
 });

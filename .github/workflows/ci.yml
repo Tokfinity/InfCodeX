@@ -195,6 +195,7 @@ jobs:
         env:
           KODAX_ELECTRON_DIST: ${{ github.workspace }}\.electron-smoke\node_modules\electron\dist
           KODAX_ELECTRON_BUILDER_CLI: ${{ github.workspace }}\.electron-smoke\node_modules\electron-builder\out\cli\cli.js
+          KODAX_ELECTRON_SMOKE_AUTO_SETUP: '1'
         run: npm run test:electron-daemon
 
   shell-contract-windows:
