@@ -61,6 +61,8 @@ describe('GitHub release workflow', () => {
     expect(steps.find((step) => step.name === 'Build')?.run).toBe('npm run build');
     expect(steps.find((step) => step.name === 'Packaged Electron daemon release gate')?.run)
       .toBe('npm run test:electron-daemon:built');
+    expect(steps.find((step) => step.name === 'Provision Windows sandbox for packaged Electron release gate')?.run)
+      .toContain('installWindowsSandbox');
     expect(steps.find((step) => step.name === 'Packaged Electron daemon release gate')?.env)
       .toMatchObject({ KODAX_ELECTRON_SMOKE_AUTO_SETUP: '1' });
     expect(steps.find((step) => step.name?.startsWith('Build binary'))?.run)
@@ -91,6 +93,7 @@ describe('GitHub release workflow', () => {
       const cache = steps.find((step) => step.name === 'Cache packaged Electron smoke toolchain');
       const install = steps.find((step) => step.name === 'Install packaged Electron smoke toolchain');
       const ensureBinary = steps.find((step) => step.name === 'Ensure packaged Electron binary');
+      const provision = steps.find((step) => step.name?.startsWith('Provision Windows sandbox'));
       expect(cache).toMatchObject({
         uses: 'actions/cache@v5',
         id: 'electron-smoke-cache',
@@ -98,6 +101,7 @@ describe('GitHub release workflow', () => {
       });
       expect(install?.if).toContain("steps.electron-smoke-cache.outputs.cache-hit != 'true'");
       expect(ensureBinary?.run).toBe('node .electron-smoke/node_modules/electron/install.js');
+      expect(provision?.run).toContain('installWindowsSandbox');
     }
   });
 

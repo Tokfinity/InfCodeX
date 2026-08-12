@@ -108,6 +108,15 @@ jobs:
         if: steps.filter.outputs.skip == 'false' && matrix.target == 'win-x64'
         run: node .electron-smoke/node_modules/electron/install.js
 
+      - name: Provision Windows sandbox for packaged Electron release gate
+        if: steps.filter.outputs.skip == 'false' && matrix.target == 'win-x64'
+        shell: pwsh
+        run: >-
+          node --input-type=module -e
+          "import { installWindowsSandbox } from '@anthropic-ai/sandbox-runtime';
+          const result = installWindowsSandbox();
+          if (result.cancelled || !result.user.provisioned) throw new Error('Windows sandbox provisioning did not complete.');"
+
       - name: Build
         if: steps.filter.outputs.skip == 'false'
         run: npm run build

@@ -191,6 +191,14 @@ jobs:
       - name: Ensure packaged Electron binary
         run: node .electron-smoke/node_modules/electron/install.js
 
+      - name: Provision Windows sandbox for packaged Electron gate
+        shell: pwsh
+        run: >-
+          node --input-type=module -e
+          "import { installWindowsSandbox } from '@anthropic-ai/sandbox-runtime';
+          const result = installWindowsSandbox();
+          if (result.cancelled || !result.user.provisioned) throw new Error('Windows sandbox provisioning did not complete.');"
+
       - name: Packaged Electron daemon gate
         env:
           KODAX_ELECTRON_DIST: ${{ github.workspace }}\.electron-smoke\node_modules\electron\dist
