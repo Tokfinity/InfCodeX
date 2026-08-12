@@ -2737,6 +2737,10 @@ before ACL recovery. Missing attestation fences later filesystem effects and
 does not replay the command; spawn, lease-release, and cleanup failures remain
 combined in the lifecycle diagnostic for operator recovery.
 
+POSIX workspace sessions use the same replacement fence: an unconfirmed
+process-tree or cleanup failure latches the sandbox safety state and prevents a
+new workspace session from racing the retained one.
+
 `homeDir` and `KODAX_HOME` deliberately name different levels. Runtime SDK and
 CLI daemon `--home` accept the **base directory that contains `.kodax`**;
 lower-level `KODAX_HOME` points at the **data directory itself** and need not be

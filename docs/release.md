@@ -96,6 +96,9 @@ includes all commits after `v0.7.85`, including:
 - Windows sandbox lifecycle attestation, termination-proof-before-recovery,
   durable ACL owner markers, cross-profile recovery locking, and no-replay
   behavior when a Shell effect is not proven drained;
+- POSIX workspace-session safety latching, so an unconfirmed process-tree or
+  cleanup failure blocks replacement sandbox sessions instead of allowing a
+  stale owner to race a new one;
 - explicit aggregation of spawn, lease-release, and sandbox-cleanup failures,
   with lifecycle safety diagnostics and retained recovery evidence;
 - packaged Electron sandbox probes and regression coverage for all of the above.

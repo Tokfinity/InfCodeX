@@ -36,6 +36,9 @@ No changes yet.
 - Windows sandbox lifecycle failures now wait for termination proof, preserve
   cleanup evidence, fence later filesystem effects, and never replay a command
   whose effect process was not proven drained.
+- POSIX sandbox workspace sessions now latch an unconfirmed process-tree or
+  cleanup failure and reject replacement sessions until the safety state is
+  reset, matching the fail-closed lifecycle contract across platforms.
 
 ---
 

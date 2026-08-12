@@ -662,7 +662,9 @@ learning locks, and Windows sandbox lifecycle attestation. Sandbox ACL owner
 markers are durable and serialized across Runtime profiles; stop waits for
 termination proof before ACL recovery, preserves combined cleanup failures, and
 fences later filesystem effects instead of replaying a command whose process
-tree was not proven drained. Issue 256's remaining Worker owner-lease boundary
+tree was not proven drained. POSIX workspace sessions apply the same
+fail-closed replacement rule when process-tree cleanup is unconfirmed. Issue
+256's remaining Worker owner-lease boundary
 stays open and is scheduled for v0.7.87. See the
 [v0.7.86 release checklist](docs/release.md#v0786-release-preparation).
 
