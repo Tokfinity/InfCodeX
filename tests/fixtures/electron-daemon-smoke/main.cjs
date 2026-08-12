@@ -190,6 +190,28 @@ function prepareEnvironmentProbeExtension() {
   const llmUrl = pathToFileURL(llmEntry).href;
   const codingUrl = pathToFileURL(codingEntry).href;
   const sandboxUrl = pathToFileURL(sandboxEntry).href;
+  const powerShellCommand = path.join(
+    process.env.SystemRoot ?? 'C:\\Windows',
+    'System32',
+    'WindowsPowerShell',
+    'v1.0',
+    'powershell.exe',
+  );
+  const powerShellArgs = [
+    '-NoProfile',
+    '-NonInteractive',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-Command',
+    "if ($env:ELECTRON_RUN_AS_NODE) { Write-Error 'Electron Node mode leaked'; exit 97 }; Write-Output 'direct-powershell-ok'",
+  ];
+  const powerShellProbeScript = [
+    "const { spawnSync } = require('node:child_process');",
+    `const result = spawnSync(${JSON.stringify(powerShellCommand)}, ${JSON.stringify(powerShellArgs)}, { encoding: 'utf8' });`,
+    "process.stdout.write(result.stdout ?? '');",
+    "process.stderr.write(result.stderr ?? '');",
+    "process.exit(result.status ?? 1);",
+  ].join(' ');
   fs.mkdirSync(configDir, { recursive: true });
   fs.writeFileSync(extensionPath, `
 import { spawnSync } from 'node:child_process';
@@ -305,21 +327,20 @@ const directSandboxProbe = sandboxDoctor.ready
   : undefined;
 const directPowerShellProbe = sandboxDoctor.ready
   ? await runKodaXSandboxed({
-      command: process.env.SystemRoot
-        + '\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe',
+      // Keep the external PowerShell child under the Electron Node target
+      // already proven above. This avoids making Electron itself the outer
+      // PowerShell target in the packaged smoke broker.
+      command: process.execPath,
       args: [
-        '-NoProfile',
-        '-NonInteractive',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-Command',
-        "if ($env:ELECTRON_RUN_AS_NODE) { Write-Error 'Electron Node mode leaked'; exit 97 }; Write-Output 'direct-powershell-ok'",
+        '-e',
+        ${JSON.stringify(powerShellProbeScript)},
       ],
       cwd: ${JSON.stringify(standaloneProbeDir)},
       filesystem: {
-        allowRead: [${JSON.stringify(standaloneProbeDir)}],
+        allowRead: [dirname(process.execPath), ${JSON.stringify(standaloneProbeDir)}],
         allowWrite: [],
       },
+      env: { ELECTRON_RUN_AS_NODE: '1' },
       timeoutMs: 15_000,
     })
   : undefined;
