@@ -1222,6 +1222,7 @@ async function recordUnconfirmedWindowsSandboxOwner(
     recordWindowsSandboxAclFailure(durableError);
     return durableError instanceof Error ? durableError : error;
   }
+  recordWindowsSandboxAclFailure(error);
   return error;
 }
 
@@ -2841,16 +2842,27 @@ const pendingWorkspaceSessionWarmups = new Set<Promise<WorkspaceSessionClient | 
 const pendingWorkspaceSessionResets = new Set<Promise<void>>();
 const pendingWindowsSandboxAclTransitions = new Set<Promise<void>>();
 let windowsSandboxAclFailure: Error | undefined;
+let sandboxProcessSafetyFailure: Error | undefined;
 let workspaceBeforeExitRegistered = false;
 
 function recordWindowsSandboxAclFailure(error: unknown): void {
-  if (process.platform !== 'win32') return;
-  windowsSandboxAclFailure ??= error instanceof Error
+  const normalized = error instanceof Error
     ? error
     : new Error(String(error));
+  if (process.platform !== 'win32') {
+    sandboxProcessSafetyFailure ??= normalized;
+    return;
+  }
+  windowsSandboxAclFailure ??= normalized;
 }
 
 function assertWindowsSandboxAclProcessSafe(): void {
+  if (process.platform !== 'win32' && sandboxProcessSafetyFailure !== undefined) {
+    throw new Error(
+      'Sandbox process cleanup was not confirmed; stop the retained process tree before more sandboxed commands.',
+      { cause: sandboxProcessSafetyFailure },
+    );
+  }
   if (process.platform !== 'win32') return;
   if (windowsSandboxAclFailure !== undefined) {
     throw new Error(
@@ -3606,6 +3618,7 @@ export async function resetAsrtWorkspaceSessionsForTest(options: {
   await waitForWindowsSandboxAclTransitions();
   pendingWorkspaceSessionResets.clear();
   windowsSandboxAclFailure = undefined;
+  sandboxProcessSafetyFailure = undefined;
   windowsSandboxAclStartupRecovered = false;
   activeWindowsSandboxAclOwnerMarkers.clear();
   process.removeListener('exit', releasePreparedWindowsRunnerGrant);
