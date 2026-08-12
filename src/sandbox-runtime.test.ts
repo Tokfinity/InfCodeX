@@ -3403,6 +3403,31 @@ describe('ASRT Skill-script adapter', () => {
   );
 
   it.runIf(process.platform === 'win32')(
+    'uses PowerShell 7 for Windows ACL guards when it is installed',
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-pwsh-acl-'));
+      tempRoots.push(root);
+      const pwsh = path.join(root, 'PowerShell', '7', 'pwsh.exe');
+      await mkdir(path.dirname(pwsh), { recursive: true });
+      await writeFile(pwsh, '', 'utf8');
+      const original = process.env.ProgramFiles;
+      process.env.ProgramFiles = root;
+      try {
+        await expect(doctorSandboxRuntime({ refresh: true })).resolves.toMatchObject({
+          ready: true,
+          setupRequired: false,
+        });
+        expect(capturedSyncSpawns.some(({ command, args }) => (
+          command === pwsh && args.includes('-EncodedCommand')
+        ))).toBe(true);
+      } finally {
+        if (original === undefined) delete process.env.ProgramFiles;
+        else process.env.ProgramFiles = original;
+      }
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
     'reports an incomplete Windows account before attempting the WFP runner',
     async () => {
       windowsSandboxMock.user.inBuiltinUsers = false;

@@ -2373,13 +2373,7 @@ function runWindowsAclGuard(
       mode,
     })),
   });
-  const powershell = path.join(
-    process.env.SystemRoot ?? 'C:\\Windows',
-    'System32',
-    'WindowsPowerShell',
-    'v1.0',
-    'powershell.exe',
-  );
+  const powershell = windowsAclPowerShellExecutable();
   const result = spawnSync(
     powershell,
     [
@@ -2417,6 +2411,19 @@ function runWindowsAclGuard(
     for (const root of roots) guardedPaths.add(windowsAclGuardKey(root));
   }
   return missing;
+}
+
+function windowsAclPowerShellExecutable(): string {
+  const programFiles = process.env.ProgramFiles ?? 'C:\\Program Files';
+  const pwsh = path.join(programFiles, 'PowerShell', '7', 'pwsh.exe');
+  if (existsSync(pwsh)) return pwsh;
+  return path.join(
+    process.env.SystemRoot ?? 'C:\\Windows',
+    'System32',
+    'WindowsPowerShell',
+    'v1.0',
+    'powershell.exe',
+  );
 }
 
 function installWindowsAclGuards(
