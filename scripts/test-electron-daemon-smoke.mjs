@@ -14,7 +14,9 @@ const electronBuilderCli = requirePath('KODAX_ELECTRON_BUILDER_CLI');
 const electronPackage = JSON.parse(await readFile(path.join(electronDist, '..', 'package.json'), 'utf8'));
 const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), 'kodax-electron-daemon-smoke-'));
 const appDir = path.join(temporaryRoot, 'app');
-const homeDir = path.join(temporaryRoot, 'home');
+const homeDir = process.env.KODAX_ELECTRON_SMOKE_HOME
+  ?? path.join(temporaryRoot, 'home');
+const externalHomeDir = process.env.KODAX_ELECTRON_SMOKE_HOME !== undefined;
 const profile = `electron-smoke-${process.pid}-${Date.now()}`;
 const ordinaryQueryCount = 20;
 let electronProcess;
@@ -104,6 +106,9 @@ try {
   } else {
     try {
       await rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      if (externalHomeDir) {
+        await rm(homeDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
     } catch (error) {
       if (smokePassed) throw error;
       process.stderr.write(
