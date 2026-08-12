@@ -192,6 +192,8 @@ jobs:
         run: node .electron-smoke/node_modules/electron/install.js
 
       - name: Provision Windows sandbox for packaged Electron gate
+        env:
+          KODAX_HOME: ${{ runner.temp }}\kodax-electron-sandbox-home\.kodax
         shell: pwsh
         run: >-
           node --input-type=module -e
@@ -203,10 +205,13 @@ jobs:
         run: npm run build
 
       - name: Prepare Windows sandbox ACL guards for packaged Electron gate
+        env:
+          KODAX_HOME: ${{ runner.temp }}\kodax-electron-sandbox-home\.kodax
         run: node scripts/prepare-windows-electron-sandbox.mjs
 
       - name: Packaged Electron daemon gate
         env:
+          KODAX_HOME: ${{ runner.temp }}\kodax-electron-sandbox-home\.kodax
           KODAX_ELECTRON_DIST: ${{ github.workspace }}\.electron-smoke\node_modules\electron\dist
           KODAX_ELECTRON_BUILDER_CLI: ${{ github.workspace }}\.electron-smoke\node_modules\electron-builder\out\cli\cli.js
         run: npm run test:electron-daemon:built
