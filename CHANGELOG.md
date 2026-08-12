@@ -6,7 +6,46 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-No changes yet.
+### Fixed
+
+- Windows sandbox doctor and required Shell calls now surface actionable ACL
+  crash-recovery guidance for legacy or corrupt owner markers instead of a
+  generic unavailable result. Sandbox setup is serialized with owner admission
+  and cannot mutate account, guard, or WFP state while any sandbox owner or
+  unresolved poison marker exists for the shared Windows sandbox account. New owner markers
+  remain readable by older runtimes, while atomic-write staging files are kept
+  outside the legacy marker directory.
+- Windows workspace Shell sessions now derive bounded read grants from each
+  command's final PATH and shell executable. Existing lexical and canonical
+  directories are admitted exactly; junction targets receive only the minimum
+  traversal ancestors below their profile application root, so version managers,
+  shims, virtual environments, and sibling runtime files work without naming
+  individual tools or exposing broad Documents/AppData vendor trees. Windows
+  keeps one command scope active at a time and confirms the previous owner's ACL
+  reset before switching scopes. Standalone SDK calls, workspace sessions, and
+  duplicate SDK module copies also obey one machine-wide owner boundary across
+  Runtime profiles and KodaX homes, so their grants cannot combine through the
+  shared Windows sandbox identity. The
+  target receives a case-normalized environment and preserves the Windows
+  verbatim-argument contract, so
+  profile-managed executables and quoted path arguments survive both broker layers.
+- Auto-started Runtime clients now require sandbox execution capability v2, so
+  an idle daemon from KodaX 0.7.85 is replaced only after its durable shutdown
+  outcome and Windows Job supervisor prove the old process tree is empty. A
+  daemon without that verification contract remains fail-closed and must be
+  stopped explicitly before the repaired Shell chain is exposed.
+- The first upgrade from a Runtime that predates the machine-wide Windows
+  sandbox-owner protocol requires all unmanaged legacy KodaX/Space processes
+  (including standalone SDK processes using another KodaX home) to be stopped.
+  Those binaries cannot participate in the new global owner lock; current and
+  future runtimes are serialized machine-wide after the transition.
+- Clean Windows workspace-session shutdown now honors the sandbox runtime's full
+  ACL reset budget before escalating to process-tree termination, while unclean
+  or unverified exits remain durably fail-closed.
+- The packaged Electron regression smoke now runs 20 Runtime Shell commands
+  through a profile-added junction toolchain, resolves the packaged Node binary
+  through its version-manager ancestry, exercises a quoted `cmd.exe` path, and
+  keeps its probe I/O inside the admitted workspace.
 
 ---
 

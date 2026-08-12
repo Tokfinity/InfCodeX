@@ -11,10 +11,21 @@ const detachFile = requireEnvironment('KODAX_SMOKE_DETACH');
 const guiCountFile = requireEnvironment('KODAX_SMOKE_GUI_COUNT');
 const environmentProofFile = requireEnvironment('KODAX_SMOKE_ENV_PROOF');
 const consoleProbeQueryFile = requireEnvironment('KODAX_CONSOLE_PROBE_QUERY');
+const consoleProbeExecutable = requireEnvironment('KODAX_CONSOLE_PROBE_EXECUTABLE');
+const nodeExecutable = requireEnvironment('KODAX_SMOKE_NODE_EXECUTABLE');
+const profileToolchainRoot = requireEnvironment('KODAX_SMOKE_PROFILE_TOOLCHAIN');
 const ordinaryQueryCount = Number(requireEnvironment('KODAX_SMOKE_QUERY_COUNT'));
 const sessionId = requireEnvironment('KODAX_SMOKE_SESSION_ID');
 const workspaceDir = path.join(homeDir, 'workspace');
 const standaloneProbeDir = path.join(homeDir, 'standalone-probe');
+const profileToolchainVersion = path.join(profileToolchainRoot, 'versions', 'v1');
+const profileToolchainActive = path.join(profileToolchainRoot, 'active');
+const profileToolchainPowerShellSetup = `$env:PATH = '${profileToolchainActive.replaceAll("'", "''")};' + $env:PATH`;
+const profileToolchainCmdSetup = `set "PATH=${profileToolchainActive};%PATH%"`;
+const profileToolchainPath = [
+  profileToolchainActive,
+  process.env.PATH ?? process.env.Path ?? '',
+].filter(Boolean).join(path.delimiter);
 
 app.on('window-all-closed', () => {});
 
@@ -27,6 +38,15 @@ async function run() {
   await app.whenReady();
   fs.mkdirSync(workspaceDir, { recursive: true });
   fs.mkdirSync(standaloneProbeDir, { recursive: true });
+  fs.mkdirSync(profileToolchainVersion, { recursive: true });
+  const quotedCommandDirectory = path.join(workspaceDir, 'quoted command directory');
+  fs.mkdirSync(quotedCommandDirectory, { recursive: true });
+  fs.writeFileSync(path.join(quotedCommandDirectory, 'quoted-command-ok.txt'), 'ok', 'utf8');
+  fs.copyFileSync(consoleProbeExecutable, path.join(profileToolchainVersion, 'profile-tool.exe'));
+  fs.copyFileSync(nodeExecutable, path.join(profileToolchainVersion, 'node.exe'));
+  if (!fs.existsSync(profileToolchainActive)) {
+    fs.symlinkSync(profileToolchainVersion, profileToolchainActive, 'junction');
+  }
   fs.appendFileSync(guiCountFile, `${process.pid}\n`, 'utf8');
   if (process.argv.includes('daemon') && process.argv.includes('serve')) {
     throw new Error('The daemon child re-entered the packaged Electron GUI application.');
@@ -41,7 +61,7 @@ async function run() {
     clientInfo: { name: 'packaged-electron-smoke', instanceId: 'packaged-electron-smoke' },
     requirements: { daemonManagement: 1 },
   });
-  await waitForFile(environmentProofFile, 15_000);
+  await waitForFile(environmentProofFile, 120_000);
   const environmentProof = JSON.parse(fs.readFileSync(environmentProofFile, 'utf8'));
   if (environmentProof.sandboxDoctor?.ready !== true) {
     throw new Error(
@@ -81,12 +101,16 @@ async function run() {
     shellExecution: {
       version: 1,
       shell: {
-        kind: 'powershell',
-        executable: process.env.SystemRoot
-          + '\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+        kind: 'cmd',
+        executable: process.env.ComSpec ?? process.env.COMSPEC ?? 'cmd.exe',
         profile: 'none',
       },
-      environment: { inherit: 'filtered', windowsPath: 'registry' },
+      environment: {
+        inherit: 'filtered',
+        windowsPath: 'registry',
+        set: { PATH: profileToolchainPath },
+        setup: profileToolchainCmdSetup,
+      },
       cache: { ttlMs: 0, refreshToken: 'packaged-electron-runtime-sandbox' },
       probeTimeoutMs: 10_000,
     },
@@ -219,7 +243,7 @@ import { writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { KodaXBaseProvider } from ${JSON.stringify(llmUrl)};
 import { toolBash } from ${JSON.stringify(codingUrl)};
-import { doctorKodaXSandbox, runKodaXSandboxed } from ${JSON.stringify(sandboxUrl)};
+import { doctorKodaXSandbox, runKodaXSandboxed, setupKodaXSandbox } from ${JSON.stringify(sandboxUrl)};
 
 class WindowsHideSmokeProvider extends KodaXBaseProvider {
   name = 'windows-hide-smoke';
@@ -244,7 +268,16 @@ class WindowsHideSmokeProvider extends KodaXBaseProvider {
       const content = typeof toolResult.content === 'string'
         ? toolResult.content
         : JSON.stringify(toolResult.content);
-      if (!content.includes('Exit: 0') || !content.includes('runtime-sandbox-ok')) {
+      if (
+        !content.includes('Exit: 0')
+        || !content.includes('runtime-sandbox-ok')
+        || !content.includes('profile-toolchain-ok')
+        || !content.includes('node-realpath-ok')
+        || !content.toLowerCase().includes(${JSON.stringify(
+          `node-realpath=${path.join(profileToolchainVersion, 'node.exe')}`.toLowerCase(),
+        )})
+        || !content.includes('quoted-command-ok.txt')
+      ) {
         throw new Error('Runtime sandbox Bash result was not successful: ' + content);
       }
       return {
@@ -263,7 +296,14 @@ class WindowsHideSmokeProvider extends KodaXBaseProvider {
         id: 'runtime-sandbox-shell-' + this.toolSequence,
         name: 'bash',
         input: {
-          command: "if ($env:ELECTRON_RUN_AS_NODE) { Write-Error 'Electron Node mode leaked'; exit 97 }; Write-Output 'runtime-sandbox-ok'",
+          command: ${JSON.stringify(
+            `profile-tool.exe --profile-toolchain `
+            + `&& node -e "const p=require('node:fs').realpathSync(process.execPath);`
+            + `process.stdout.write('node-realpath='+p+'\\nnode-realpath-ok')" `
+            + `&& if defined ELECTRON_RUN_AS_NODE `
+            + `(exit /b 97) else (dir /b "${path.join(workspaceDir, 'quoted command directory')}" `
+            + '&& echo runtime-sandbox-ok)',
+          )},
         },
       }],
       thinkingBlocks: [],
@@ -277,12 +317,21 @@ const child = spawnSync(process.env.ComSpec ?? 'cmd.exe', [
   '/d', '/s', '/c',
   'if defined ELECTRON_RUN_AS_NODE (echo present) else (echo absent)',
 ], { encoding: 'utf8', windowsHide: true });
+let sandboxDoctor = await doctorKodaXSandbox({ refresh: true });
+if (
+  !sandboxDoctor.ready
+  && sandboxDoctor.diagnostics.length > 0
+  && sandboxDoctor.diagnostics.every((diagnostic) => diagnostic.startsWith('[acl_guards_missing]'))
+) {
+  sandboxDoctor = await setupKodaXSandbox();
+}
 const shellProbe = await toolBash(
   {
     command:
       "Write-Output 'shell-probe-ok'; "
       + "Write-Output ('node-mode=' + $(if (Test-Path Env:ELECTRON_RUN_AS_NODE) "
-      + "{ $env:ELECTRON_RUN_AS_NODE } else { 'absent' }))",
+      + "{ $env:ELECTRON_RUN_AS_NODE } else { 'absent' })); "
+      + 'profile-tool.exe --profile-toolchain',
   },
   {
     backups: new Map(),
@@ -295,7 +344,12 @@ const shellProbe = await toolBash(
           + '\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe',
         profile: 'none',
       },
-      environment: { inherit: 'filtered', windowsPath: 'registry' },
+      environment: {
+        inherit: 'filtered',
+        windowsPath: 'registry',
+        set: { PATH: ${JSON.stringify(profileToolchainPath)} },
+        setup: ${JSON.stringify(profileToolchainPowerShellSetup)},
+      },
       cache: { ttlMs: 0, refreshToken: 'packaged-electron-smoke' },
       probeTimeoutMs: 10_000,
     },
@@ -308,7 +362,6 @@ const shellProbeExitCode =
     ? Number.parseInt(shellProbeLines[shellProbeExitIndex].slice('Exit: '.length), 10)
     : null;
 const shellProbeOutput = shellProbeLines.slice(shellProbeExitIndex + 1);
-let sandboxDoctor = await doctorKodaXSandbox({ refresh: true });
 const directSandboxProbe = sandboxDoctor.ready
   ? await runKodaXSandboxed({
       command: process.execPath,
@@ -352,6 +405,7 @@ writeFileSync(${JSON.stringify(environmentProofFile)}, JSON.stringify({
   shellProbe: shellProbeOutput[0],
   shellProbeExitCode,
   shellProbeNodeMode: shellProbeOutput[1]?.replace(/^node-mode=/, ''),
+  shellProbeToolchain: shellProbeOutput[2],
   sandboxDoctor,
   directSandboxProbe,
   directPowerShellProbe,

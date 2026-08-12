@@ -1,5 +1,6 @@
 import { EventEmitter, once } from 'node:events';
-import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -35,6 +36,9 @@ const capturedWrappedCommands = vi.hoisted(
 const capturedWorkspaceSessionConfigs = vi.hoisted(
   () => [] as Array<Readonly<Record<string, unknown>>>,
 );
+const capturedWorkspaceRequests = vi.hoisted(
+  () => [] as Array<Readonly<Record<string, unknown>>>,
+);
 const capturedSandboxWrapConfigs = vi.hoisted(
   () => [] as Array<Readonly<Record<string, unknown>>>,
 );
@@ -50,18 +54,22 @@ const processTreeKillMock = vi.hoisted(() => ({
   releaseUnknown: undefined as (() => void) | undefined,
 }));
 const processIdentityMock = vi.hoisted(() => ({
-  windowsBootIdentity: 'windows-boot-a' as string | undefined,
+  windowsBootIdentity: 'windows-boot-100' as string | undefined,
+  pid4StartIdentity: '13370000000000' as string | undefined,
 }));
 const recoveryLockMock = vi.hoisted(() => ({
   timeoutFailures: 0,
   timeoutOnCall: undefined as number | undefined,
   calls: 0,
   releaseFailures: 0,
+  beforeOperation: undefined as (() => void | Promise<void>) | undefined,
 }));
 const fileSystemMock = vi.hoisted(() => ({
   rmFailurePath: undefined as string | undefined,
   writeBrokerRequestFailure: false,
   writeAclPoisonMarkerFailure: false,
+  renameAclPoisonMarkerFailures: 0,
+  aclPoisonMarkerWriteTargets: [] as string[],
 }));
 const stubbornBroker = vi.hoisted(() => ({
   mode: 'none' as 'none' | 'silent' | 'overflow',
@@ -111,6 +119,7 @@ const windowsSandboxMock = vi.hoisted(() => ({
   grantFailure: undefined as string | undefined,
   grants: [] as Array<Readonly<Record<string, unknown>>>,
   revokes: [] as Array<Readonly<Record<string, unknown>>>,
+  installCalls: 0,
 }));
 
 vi.mock('node:fs/promises', async (importOriginal) => {
@@ -141,15 +150,35 @@ vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
   return {
     ...actual,
+    renameSync: vi.fn((
+      oldPath: Parameters<typeof actual.renameSync>[0],
+      newPath: Parameters<typeof actual.renameSync>[1],
+    ) => {
+      if (
+        fileSystemMock.renameAclPoisonMarkerFailures > 0
+        && typeof newPath === 'string'
+        && path.basename(newPath).startsWith('unconfirmed-owner-')
+      ) {
+        fileSystemMock.renameAclPoisonMarkerFailures -= 1;
+        throw Object.assign(new Error('injected ACL poison marker rename failure'), { code: 'EPERM' });
+      }
+      return actual.renameSync(oldPath, newPath);
+    }),
     writeFileSync: vi.fn((
       target: Parameters<typeof actual.writeFileSync>[0],
       data: Parameters<typeof actual.writeFileSync>[1],
       options?: Parameters<typeof actual.writeFileSync>[2],
     ) => {
       if (
+        typeof target === 'string'
+        && path.basename(path.dirname(target)).startsWith('acl-poison')
+      ) {
+        fileSystemMock.aclPoisonMarkerWriteTargets.push(target);
+      }
+      if (
         fileSystemMock.writeAclPoisonMarkerFailure
         && typeof target === 'string'
-        && target.includes(`${path.sep}acl-poison${path.sep}`)
+        && path.basename(path.dirname(target)).startsWith('acl-poison')
       ) {
         throw Object.assign(new Error('injected ACL poison marker write failure'), { code: 'EPERM' });
       }
@@ -176,6 +205,14 @@ vi.mock('node:child_process', async (importOriginal) => {
       const encodedIndex = args.indexOf('-EncodedCommand');
       if (encodedIndex >= 0) {
         const script = Buffer.from(args[encodedIndex + 1] ?? '', 'base64').toString('utf16le');
+        if (script.includes('KodaXWindowsBootIdentity-v1')) {
+          return {
+            status: processIdentityMock.windowsBootIdentity === undefined ? 1 : 0,
+            signal: null,
+            stdout: processIdentityMock.windowsBootIdentity?.replace('windows-boot-', '') ?? '',
+            stderr: '',
+          };
+        }
         if (script.includes('KodaXAsrtAclGuard-v1')) {
           const payload = JSON.parse(options?.input ?? '{}') as {
             readonly install?: boolean;
@@ -282,7 +319,7 @@ vi.mock('node:child_process', async (importOriginal) => {
       child.signalCode = null;
       child.kill = vi.fn((signal?: NodeJS.Signals | number) => {
         capturedKillSignals.push(signal);
-        if (stubbornBroker.mode !== 'none' && signal === 'SIGKILL') {
+        if (signal === 'SIGKILL') {
           queueMicrotask(() => {
             child.signalCode = 'SIGKILL';
             child.stdout.end();
@@ -321,6 +358,9 @@ vi.mock('node:child_process', async (importOriginal) => {
                 readonly targetStartedMarker?: string;
               };
             };
+            if (message.type === 'wrap' && message.request !== undefined) {
+              capturedWorkspaceRequests.push(message.request);
+            }
             if (message.type === 'cleanup') workspaceSessionControl.cleanupRequests += 1;
             const response = message.type === 'wrap'
               ? workspaceSessionControl.wrapFailure === undefined ? {
@@ -462,7 +502,7 @@ vi.mock('@kodax-ai/agent', async (importOriginal) => {
     ...actual,
     readProcessStartIdentity: (pid: number) => (
       pid === 4
-        ? processIdentityMock.windowsBootIdentity
+        ? processIdentityMock.pid4StartIdentity
         : actual.readProcessStartIdentity(pid)
     ),
     killChildProcessTree: (
@@ -521,6 +561,7 @@ vi.mock('@kodax-ai/agent', async (importOriginal) => {
           recoveryLockMock.timeoutFailures = Math.max(0, recoveryLockMock.timeoutFailures - 1);
           throw new Error(`learning store lock timed out: ${lockPath}`);
         }
+        await recoveryLockMock.beforeOperation?.();
       }
       const result = await actual.withKodaXFileLock(lockPath, operation, acquireTimeoutMs);
       if (lockPath.endsWith('acl-recovery.lock') && recoveryLockMock.releaseFailures > 0) {
@@ -554,7 +595,21 @@ vi.mock('@anthropic-ai/sandbox-runtime', async (importOriginal) => {
         capturedWrappedCommands.push(command);
         if (customConfig) capturedSandboxWrapConfigs.push(customConfig);
         return Promise.resolve({
-          argv: [process.execPath, 'exec', '--quiet', '--', process.execPath, '-e', command],
+          argv: [
+            process.execPath,
+            'exec',
+            '--quiet',
+            '--env',
+            'Path=wrapper-path',
+            '--env',
+            'PATHEXT=.EXE',
+            '--env',
+            'WRAPPED_ONLY=yes',
+            '--',
+            process.execPath,
+            '-e',
+            command,
+          ],
           env: process.env,
         });
       },
@@ -576,6 +631,10 @@ vi.mock('@anthropic-ai/sandbox-runtime', async (importOriginal) => {
     },
     getWindowsSandboxUserStatus: () => ({ ...windowsSandboxMock.user }),
     verifyWindowsWfpEgress: () => Promise.resolve(),
+    installWindowsSandbox: () => {
+      windowsSandboxMock.installCalls += 1;
+      return { cancelled: false };
+    },
   };
 });
 
@@ -584,6 +643,7 @@ import {
   createAsrtShellSandbox,
   createAsrtSkillScriptRunner,
   doctorSandboxRuntime,
+  prepareSandboxRuntimeForSetup,
   runKodaXSandboxed,
   runAsrtBrokerProcess,
   resetAsrtWorkspaceSessionsForTest,
@@ -595,17 +655,20 @@ import {
 const tempRoots: string[] = [];
 
 beforeEach(async () => {
-  processIdentityMock.windowsBootIdentity = 'windows-boot-a';
+  processIdentityMock.windowsBootIdentity = 'windows-boot-100';
+  processIdentityMock.pid4StartIdentity = '13370000000000';
   recoveryLockMock.timeoutFailures = 0;
   recoveryLockMock.timeoutOnCall = undefined;
   recoveryLockMock.calls = 0;
   recoveryLockMock.releaseFailures = 0;
+  recoveryLockMock.beforeOperation = undefined;
   const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-runner-'));
   tempRoots.push(root);
   const source = path.join(root, 'package', 'srt-win.exe');
   await mkdir(path.dirname(source), { recursive: true });
   await writeFile(source, 'trusted-test-runner', 'utf8');
   windowsSandboxMock.runnerSource = source;
+  vi.stubEnv('ProgramData', path.join(root, 'program-data'));
   vi.stubEnv('KODAX_HOME', path.join(root, '.kodax'));
 });
 
@@ -613,11 +676,14 @@ afterEach(async () => {
   fileSystemMock.rmFailurePath = undefined;
   fileSystemMock.writeBrokerRequestFailure = false;
   fileSystemMock.writeAclPoisonMarkerFailure = false;
+  fileSystemMock.renameAclPoisonMarkerFailures = 0;
+  fileSystemMock.aclPoisonMarkerWriteTargets.length = 0;
   processTreeKillMock.releaseUnknown?.();
   processTreeKillMock.releaseUnknown = undefined;
   processTreeKillMock.outcome = 'actual';
   processTreeKillMock.childPid = undefined;
-  processIdentityMock.windowsBootIdentity = 'windows-boot-a';
+  processIdentityMock.windowsBootIdentity = 'windows-boot-100';
+  processIdentityMock.pid4StartIdentity = '13370000000000';
   workspaceSessionControl.releaseReady?.();
   workspaceSessionControl.releaseWrap?.();
   workspaceSessionControl.delayReady = false;
@@ -641,6 +707,7 @@ afterEach(async () => {
   capturedSyncSpawns.length = 0;
   capturedWrappedCommands.length = 0;
   capturedWorkspaceSessionConfigs.length = 0;
+  capturedWorkspaceRequests.length = 0;
   capturedSandboxWrapConfigs.length = 0;
   capturedKillSignals.length = 0;
   capturedProcessTreeKillOptions.length = 0;
@@ -669,6 +736,7 @@ afterEach(async () => {
   windowsSandboxMock.grantFailure = undefined;
   windowsSandboxMock.grants.length = 0;
   windowsSandboxMock.revokes.length = 0;
+  windowsSandboxMock.installCalls = 0;
   sandboxWrapper.mode = 'attest';
   vi.unstubAllEnvs();
   await Promise.all(tempRoots.splice(0).map((root) => rm(root, {
@@ -711,7 +779,7 @@ async function markSandboxRuntimeUnavailable(): Promise<void> {
 }
 
 describe('ASRT workspace shell adapter', () => {
-  it('starts the shared fail-closed workspace warm-up before the first shell call', async () => {
+  it('avoids an eager Windows ACL owner and keeps POSIX workspace warm-up', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-shell-warm-'));
     tempRoots.push(root);
 
@@ -721,6 +789,11 @@ describe('ASRT workspace shell adapter', () => {
       failClosed: true,
     });
 
+    if (process.platform === 'win32') {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(0);
+      return;
+    }
     await vi.waitFor(() => {
       const sessions = capturedSpawnArgv.filter((argv) => argv.some((arg) => (
         arg.includes('sandbox-workspace-session')
@@ -774,17 +847,13 @@ describe('ASRT workspace shell adapter', () => {
   });
 
   it.runIf(process.platform === 'win32')(
-    'keeps the eager workspace session free of broad Agent Home grants',
+    'does not materialize workspace grants before an admitted Windows command',
     async () => {
       const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-shell-lean-warm-'));
       const agentHome = path.join(root, 'agent-home');
-      const agentsDirectory = path.join(agentHome, 'agents');
-      const sessionsDirectory = path.join(agentHome, 'sessions');
       const workspace = path.join(root, 'workspace');
       tempRoots.push(root);
       await mkdir(workspace, { recursive: true });
-      await mkdir(agentsDirectory, { recursive: true });
-      await mkdir(sessionsDirectory, { recursive: true });
       vi.stubEnv('KODAX_HOME', agentHome);
 
       createAsrtShellSandbox({
@@ -793,20 +862,292 @@ describe('ASRT workspace shell adapter', () => {
         failClosed: true,
       });
 
-      await vi.waitFor(() => expect(capturedWorkspaceSessionConfigs).toHaveLength(1));
-      const config = capturedWorkspaceSessionConfigs[0] as {
-        readonly filesystem: {
-          readonly allowWrite: readonly string[];
-          readonly denyWrite: readonly string[];
-        };
-      };
-      expect(config.filesystem.allowWrite).not.toContain(path.resolve(agentsDirectory));
-      expect(config.filesystem.allowWrite).not.toContain(path.resolve(sessionsDirectory));
-      expect(config.filesystem.denyWrite).not.toContain(
-        path.resolve(agentHome, 'runtime'),
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(0);
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'scopes workspace sessions to the actual command toolchain paths',
+    async () => {
+      const workspace = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-path-workspace-'));
+      const profileRoot = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-path-profile-'));
+      const externalToolRoot = await mkdtemp(path.join(process.cwd(), '.kodax-asrt-path-external-'));
+      tempRoots.push(workspace, profileRoot, externalToolRoot);
+      const roamingRoot = path.join(profileRoot, 'Roaming');
+      const localRoot = path.join(profileRoot, 'Local');
+      const programsRoot = path.join(localRoot, 'Programs');
+      const commandTempRoot = path.join(localRoot, 'Temp');
+      const managerRoot = path.join(roamingRoot, 'fnm');
+      const nodeVersionsRoot = path.join(managerRoot, 'node-versions');
+      const versionReleaseRoot = path.join(nodeVersionsRoot, 'v1');
+      const versionRoot = path.join(versionReleaseRoot, 'installation');
+      const externalVersionReleaseRoot = path.join(nodeVersionsRoot, 'v2');
+      const externalLinkVersionRoot = path.join(externalVersionReleaseRoot, 'installation');
+      const nvmRoot = path.join(roamingRoot, 'nvm');
+      const nvmVersionRoot = path.join(nvmRoot, 'v22');
+      const pyenvRoot = path.join(programsRoot, 'pyenv');
+      const pyenvVersionsRoot = path.join(pyenvRoot, 'versions');
+      const pythonVersionRoot = path.join(pyenvVersionsRoot, '3.12');
+      const pythonScripts = path.join(pythonVersionRoot, 'Scripts');
+      const miseRoot = path.join(localRoot, 'mise');
+      const miseInstallsRoot = path.join(miseRoot, 'installs');
+      const miseToolRoot = path.join(miseInstallsRoot, 'python');
+      const miseVersionRoot = path.join(miseToolRoot, '3.13');
+      const miseBin = path.join(miseVersionRoot, 'bin');
+      const activeToolRoot = path.join(localRoot, 'fnm_multishells');
+      const activeToolchain = path.join(activeToolRoot, 'active-toolchain');
+      const activeNvmToolchain = path.join(activeToolRoot, 'active-nvm');
+      const externalActiveToolchain = path.join(externalToolRoot, 'active-toolchain');
+      const sensitiveToolchain = path.join(localRoot, 'sensitive-toolchain');
+      const missingToolchain = path.join(localRoot, 'missing-toolchain');
+      const systemToolchain = path.join(localRoot, 'system-toolchain');
+      const shimRoot = path.join(roamingRoot, '.tool-manager');
+      const shimDirectory = path.join(shimRoot, 'shims');
+      const packageRoot = path.join(roamingRoot, 'node_modules');
+      const packageBin = path.join(packageRoot, '.bin');
+      const shellManager = path.join(programsRoot, '.shell-manager');
+      const shellDirectory = path.join(shellManager, 'bin');
+      const shellExecutable = path.join(shellDirectory, 'shell.exe');
+      const documentsScripts = path.join(profileRoot, 'Documents', 'venv', 'Scripts');
+      const windowsApps = path.join(localRoot, 'Microsoft', 'WindowsApps');
+      const sensitiveTarget = path.resolve(process.env.KODAX_HOME!);
+      await mkdir(versionRoot, { recursive: true });
+      await mkdir(externalLinkVersionRoot, { recursive: true });
+      await mkdir(nvmVersionRoot, { recursive: true });
+      await mkdir(pythonScripts, { recursive: true });
+      await mkdir(miseBin, { recursive: true });
+      await mkdir(activeToolRoot, { recursive: true });
+      await mkdir(shimDirectory, { recursive: true });
+      await mkdir(packageBin, { recursive: true });
+      await mkdir(shellDirectory, { recursive: true });
+      await mkdir(documentsScripts, { recursive: true });
+      await mkdir(windowsApps, { recursive: true });
+      await mkdir(sensitiveTarget, { recursive: true });
+      await writeFile(path.join(versionRoot, 'tool.exe'), 'tool', 'utf8');
+      await writeFile(shellExecutable, 'shell', 'utf8');
+      await symlink(versionRoot, activeToolchain, 'junction');
+      await symlink(nvmVersionRoot, activeNvmToolchain, 'junction');
+      await symlink(externalLinkVersionRoot, externalActiveToolchain, 'junction');
+      await symlink(
+        path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32'),
+        systemToolchain,
+        'junction',
       );
-      expect(config.filesystem.denyWrite).toEqual([]);
-      expect(config.filesystem.allowWrite.length).toBeLessThan(20);
+      expect(realpathSync(sensitiveTarget)).toBe(sensitiveTarget);
+      await symlink(sensitiveTarget, sensitiveToolchain, 'junction');
+      vi.stubEnv('APPDATA', roamingRoot);
+      vi.stubEnv('LOCALAPPDATA', localRoot);
+
+      const sandbox = createAsrtShellSandbox({
+        workspaceRoot: workspace,
+        shouldSandbox: () => true,
+        failClosed: true,
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(0);
+
+      const commandPath = [
+        activeToolchain,
+        activeNvmToolchain,
+        externalActiveToolchain,
+        pythonScripts,
+        miseBin,
+        shimDirectory,
+        packageBin,
+        documentsScripts,
+        windowsApps,
+        missingToolchain,
+        systemToolchain,
+        sensitiveToolchain,
+        path.join(sensitiveTarget, 'bin'),
+      ];
+      const commandEnvironment = Object.fromEntries(
+        Object.entries(process.env).filter(([name]) => name.toUpperCase() !== 'PATH'),
+      );
+      commandEnvironment.APPDATA = path.join(profileRoot, 'forged-roaming');
+      commandEnvironment.LOCALAPPDATA = path.join(profileRoot, 'forged-local');
+      commandEnvironment.TEMP = commandTempRoot;
+      commandEnvironment.TMP = commandTempRoot;
+      commandEnvironment.pAtH = commandPath.join(path.delimiter);
+      const first = await sandbox.prepare({
+        toolCallId: 'profile-toolchain-path-1',
+        toolInput: { command: 'tool --version' },
+        command: 'tool --version',
+        executable: shellExecutable,
+        args: ['/c', 'tool --version'],
+        cwd: workspace,
+        env: commandEnvironment,
+      });
+      if (!first) throw new Error('expected a command-scoped workspace invocation');
+      await first.cleanup();
+
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(1);
+      const scopedConfig = capturedWorkspaceSessionConfigs[0] as {
+        readonly filesystem: { readonly allowRead: readonly string[] };
+      };
+      expect(scopedConfig.filesystem.allowRead).toEqual(expect.arrayContaining([
+        path.resolve(activeToolchain),
+        path.resolve(versionRoot),
+        path.resolve(versionReleaseRoot),
+        path.resolve(nodeVersionsRoot),
+        path.resolve(externalLinkVersionRoot),
+        path.resolve(externalVersionReleaseRoot),
+        path.resolve(activeNvmToolchain),
+        path.resolve(nvmVersionRoot),
+        path.resolve(pythonScripts),
+        path.resolve(miseBin),
+        path.resolve(shimDirectory),
+        path.resolve(packageBin),
+        path.resolve(shellDirectory),
+        path.resolve(documentsScripts),
+        path.resolve(windowsApps),
+        path.dirname(process.execPath),
+      ]));
+      expect(scopedConfig.filesystem.allowRead).not.toContain(path.resolve(roamingRoot));
+      expect(scopedConfig.filesystem.allowRead).not.toContain(path.resolve(localRoot));
+      expect(scopedConfig.filesystem.allowRead).not.toContain(path.resolve(programsRoot));
+      expect(scopedConfig.filesystem.allowRead).not.toContain(path.resolve(commandTempRoot));
+      expect(scopedConfig.filesystem.allowRead).not.toContain(path.resolve(activeToolRoot));
+      expect(scopedConfig.filesystem.allowRead).not.toContain(path.resolve(managerRoot));
+      expect(scopedConfig.filesystem.allowRead).not.toContain(path.resolve(nvmRoot));
+      expect(scopedConfig.filesystem.allowRead).not.toContain(path.resolve(pyenvRoot));
+      expect(scopedConfig.filesystem.allowRead).not.toContain(path.resolve(miseRoot));
+      expect(scopedConfig.filesystem.allowRead).not.toContain(path.resolve(shimRoot));
+      expect(scopedConfig.filesystem.allowRead).not.toContain(path.resolve(packageRoot));
+      expect(scopedConfig.filesystem.allowRead).not.toContain(path.resolve(shellManager));
+      expect(scopedConfig.filesystem.allowRead).not.toContain(
+        path.resolve(profileRoot, 'Documents'),
+      );
+      expect(scopedConfig.filesystem.allowRead).not.toContain(
+        path.resolve(localRoot, 'Microsoft'),
+      );
+      expect(scopedConfig.filesystem.allowRead).not.toContain(
+        path.resolve(profileRoot, 'forged-local'),
+      );
+      expect(scopedConfig.filesystem.allowRead).toContain(path.resolve(systemToolchain));
+      expect(scopedConfig.filesystem.allowRead).not.toContain(path.resolve(missingToolchain));
+      expect(scopedConfig.filesystem.allowRead).not.toContain(
+        path.resolve(process.env.SystemRoot ?? 'C:\\Windows', 'System32'),
+      );
+      expect(scopedConfig.filesystem.allowRead).not.toContain(
+        path.resolve(sensitiveTarget, 'bin'),
+      );
+      expect(scopedConfig.filesystem.allowRead).not.toContain(
+        path.resolve(sensitiveToolchain),
+      );
+      expect(scopedConfig.filesystem.allowRead).not.toContain(
+        path.resolve(externalActiveToolchain),
+      );
+
+      commandEnvironment.pAtH = [...commandPath].reverse().join(path.delimiter);
+      const second = await sandbox.prepare({
+        toolCallId: 'profile-toolchain-path-2',
+        toolInput: { command: 'tool --version' },
+        command: 'tool --version',
+        executable: shellExecutable,
+        args: ['/c', 'tool --version'],
+        cwd: workspace,
+        env: commandEnvironment,
+      });
+      if (!second) throw new Error('expected the normalized toolchain session to be reused');
+      await second.cleanup();
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(1);
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'resets the previous Windows toolchain scope before admitting another one',
+    async () => {
+      const workspace = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-path-switch-'));
+      const toolchainA = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-tool-a-'));
+      const toolchainB = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-tool-b-'));
+      tempRoots.push(workspace, toolchainA, toolchainB);
+      const sandbox = createAsrtShellSandbox({
+        workspaceRoot: workspace,
+        shouldSandbox: () => true,
+        failClosed: true,
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(0);
+
+      const first = await sandbox.prepare({
+        toolCallId: 'toolchain-scope-a',
+        toolInput: { command: 'tool-a --version' },
+        command: 'tool-a --version',
+        windowsVerbatimArguments: true,
+        cwd: workspace,
+        env: { PATH: toolchainA },
+      });
+      if (!first) throw new Error('expected first toolchain invocation');
+      await first.cleanup();
+      expect(capturedWorkspaceRequests.at(-1)?.windowsVerbatimArguments).toBe(true);
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(1);
+
+      workspaceSessionControl.delayClose = true;
+      const secondPending = sandbox.prepare({
+        toolCallId: 'toolchain-scope-b',
+        toolInput: { command: 'tool-b --version' },
+        command: 'tool-b --version',
+        cwd: workspace,
+        env: { PATH: toolchainB },
+      });
+      await vi.waitFor(() => expect(workspaceSessionControl.releaseClose).toBeTypeOf('function'));
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(1);
+      workspaceSessionControl.delayClose = false;
+      workspaceSessionControl.releaseClose?.();
+      workspaceSessionControl.releaseClose = undefined;
+
+      const second = await secondPending;
+      if (!second) throw new Error('expected second toolchain invocation');
+      await second.cleanup();
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(2);
+      const firstConfig = capturedWorkspaceSessionConfigs[0] as {
+        readonly filesystem: { readonly allowRead: readonly string[] };
+      };
+      const secondConfig = capturedWorkspaceSessionConfigs[1] as {
+        readonly filesystem: { readonly allowRead: readonly string[] };
+      };
+      expect(firstConfig.filesystem.allowRead).toContain(path.resolve(toolchainA));
+      expect(secondConfig.filesystem.allowRead).toContain(path.resolve(toolchainB));
+      expect(secondConfig.filesystem.allowRead).not.toContain(path.resolve(toolchainA));
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'waits for command-scoped ACL initialization before returning an invocation',
+    async () => {
+      const workspace = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-path-race-'));
+      const toolchain = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-path-race-tool-'));
+      tempRoots.push(workspace, toolchain);
+      workspaceSessionControl.delayReady = true;
+      const sandbox = createAsrtShellSandbox({
+        workspaceRoot: workspace,
+        shouldSandbox: () => true,
+        failClosed: true,
+      });
+      const preparing = sandbox.prepare({
+        toolCallId: 'profile-toolchain-path-race',
+        toolInput: { command: 'tool --version' },
+        command: 'tool --version',
+        cwd: workspace,
+        env: { PATH: toolchain },
+      });
+
+      await vi.waitFor(() => {
+        expect(capturedWorkspaceSessionConfigs).toHaveLength(1);
+        expect(workspaceSessionControl.releaseReady).toBeTypeOf('function');
+      });
+      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(1);
+      workspaceSessionControl.delayReady = false;
+      workspaceSessionControl.releaseReady?.();
+      workspaceSessionControl.releaseReady = undefined;
+
+      const prepared = await preparing;
+      if (!prepared) throw new Error('expected a command-scoped workspace invocation');
+      await prepared.cleanup();
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(1);
     },
   );
 
@@ -856,7 +1197,8 @@ describe('ASRT workspace shell adapter', () => {
       ? `${home[0]!.toLowerCase()}${home.slice(1)}`
       : home;
     const sensitivePathEntry = path.join(home, '.ssh', 'bin');
-    const ordinaryHomePathEntry = path.join(home, 'tools', 'bin');
+    const ordinaryHomePathEntry = path.join(root, 'tools', 'bin');
+    await mkdir(ordinaryHomePathEntry, { recursive: true });
     vi.stubEnv('PATH', [
       homePathEntry,
       sensitivePathEntry,
@@ -1364,7 +1706,8 @@ describe('ASRT workspace shell adapter', () => {
         env: process.env,
       });
 
-      await expect(prepare('bash-workspace-marker-failure')).resolves.toBeUndefined();
+      await expect(prepare('bash-workspace-marker-failure'))
+        .rejects.toThrow('injected ACL poison marker write failure');
       expect(capturedSpawnArgv).toHaveLength(spawnCount);
       expect(capturedWorkspaceSessionConfigs).toHaveLength(0);
 
@@ -1377,10 +1720,12 @@ describe('ASRT workspace shell adapter', () => {
   );
 
   it.runIf(process.platform === 'win32')(
-    'confirms workspace ACL reset during explicit process shutdown',
+    'confirms a clean workspace owner EOF without requiring uncertain tree capture',
     async () => {
       const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-workspace-shutdown-'));
       tempRoots.push(root);
+      processTreeKillMock.outcome = 'unknown';
+      processTreeKillMock.childPid = 91234;
       const sandbox = createAsrtShellSandbox({
         workspaceRoot: root,
         shouldSandbox: () => true,
@@ -1403,10 +1748,20 @@ describe('ASRT workspace shell adapter', () => {
         'acl-poison',
       );
       await expect(readdir(poisonDirectory)).resolves.toHaveLength(1);
+      const [markerName] = await readdir(poisonDirectory);
+      const marker = JSON.parse(
+        await readFile(path.join(poisonDirectory, markerName!), 'utf8'),
+      ) as Readonly<Record<string, unknown>>;
+      expect(marker).toMatchObject({ version: 1, state: 'active' });
+      expect(fileSystemMock.aclPoisonMarkerWriteTargets).not.toEqual([]);
+      expect(fileSystemMock.aclPoisonMarkerWriteTargets.every(
+        (target) => path.basename(path.dirname(target)) === 'acl-poison-staging',
+      )).toBe(true);
 
       await shutdownAsrtWorkspaceSessions();
 
       await expect(readdir(poisonDirectory)).resolves.toEqual([]);
+      expect(capturedProcessTreeKillOptions).toEqual([]);
     },
   );
 
@@ -1484,9 +1839,10 @@ describe('ASRT workspace shell adapter', () => {
       await first.cleanup();
 
       windowsSandboxMock.aclRecoveryOutcome = 'malformed';
-      await first.retire?.();
-      const replacement = await prepare('bash-after-reset-recovery-failure');
-      expect(replacement).toBeUndefined();
+      await expect(first.retire?.())
+        .rejects.toThrow('Windows sandbox ACL recovery failed');
+      await expect(prepare('bash-after-reset-recovery-failure'))
+        .rejects.toThrow('Windows sandbox ACL cleanup was not confirmed');
       expect(capturedWorkspaceSessionConfigs).toHaveLength(1);
       expect(capturedSyncSpawns.filter(({ args }) => (
         args.includes('acl') && args.includes('recover')
@@ -1495,7 +1851,7 @@ describe('ASRT workspace shell adapter', () => {
   );
 
   it.runIf(process.platform === 'win32')(
-    'blocks a cached workspace session after standalone ACL recovery poisons the process',
+    'resets a cached workspace owner before standalone SDK admission',
     async () => {
       const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-workspace-cached-poison-'));
       tempRoots.push(root);
@@ -1517,17 +1873,23 @@ describe('ASRT workspace shell adapter', () => {
       if (!first) throw new Error('expected cached workspace invocation');
       await first.cleanup();
 
-      windowsSandboxMock.aclRecoveryOutcome = 'failure';
-      await expect(runKodaXSandboxed({
+      workspaceSessionControl.delayClose = true;
+      const standalone = runKodaXSandboxed({
         command: process.execPath,
         args: ['--version'],
         cwd: root,
         filesystem: { allowRead: [], allowWrite: [] },
-      })).rejects.toThrow('Windows sandbox ACL recovery failed');
-      windowsSandboxMock.aclRecoveryOutcome = 'success';
+      });
+      await vi.waitFor(() => expect(workspaceSessionControl.releaseClose).toBeTypeOf('function'));
+      expect(capturedBrokerRequests).toHaveLength(0);
+      workspaceSessionControl.releaseClose?.();
+      workspaceSessionControl.delayClose = false;
+      await expect(standalone).resolves.toMatchObject({ status: 'completed', exitCode: 0 });
 
-      await expect(prepare('bash-after-standalone-poison')).resolves.toBeUndefined();
-      expect(capturedWorkspaceSessionConfigs).toHaveLength(1);
+      const second = await prepare('bash-after-standalone');
+      if (!second) throw new Error('expected cached workspace invocation after contention');
+      await second.cleanup();
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(2);
     },
   );
 
@@ -1585,7 +1947,7 @@ describe('ASRT workspace shell adapter', () => {
     ))).toHaveLength(1);
   });
 
-  it('does not hold the workspace session lock across target lifetimes', async () => {
+  it('serializes Windows ACL scopes while retaining POSIX session concurrency', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-session-parallel-'));
     tempRoots.push(root);
     const sandbox = createAsrtShellSandbox({
@@ -1602,12 +1964,28 @@ describe('ASRT workspace shell adapter', () => {
       env: process.env,
     });
 
-    const [first, second] = await Promise.all([
-      prepare('bash-parallel-1'),
-      prepare('bash-parallel-2'),
-    ]);
-    if (!first || !second) throw new Error('expected parallel workspace invocations');
-    await Promise.all([first.cleanup(), second.cleanup()]);
+    if (process.platform === 'win32') {
+      const first = await prepare('bash-serialized-1');
+      if (!first) throw new Error('expected first serialized workspace invocation');
+      let secondPrepared = false;
+      const secondPending = prepare('bash-serialized-2').then((value) => {
+        secondPrepared = true;
+        return value;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(secondPrepared).toBe(false);
+      await first.cleanup();
+      const second = await secondPending;
+      if (!second) throw new Error('expected second serialized workspace invocation');
+      await second.cleanup();
+    } else {
+      const [first, second] = await Promise.all([
+        prepare('bash-parallel-1'),
+        prepare('bash-parallel-2'),
+      ]);
+      if (!first || !second) throw new Error('expected parallel workspace invocations');
+      await Promise.all([first.cleanup(), second.cleanup()]);
+    }
 
     expect(capturedSpawnArgv.filter((argv) => argv.some((arg) => (
       arg.includes('sandbox-workspace-session')
@@ -1660,7 +2038,9 @@ describe('ASRT workspace shell adapter', () => {
     )))).toHaveLength(2);
   });
 
-  it('evicts an unattested workspace session without waiting for another active lease', async () => {
+  it.skipIf(process.platform === 'win32')(
+    'evicts an unattested POSIX workspace session without waiting for another active lease',
+    async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-session-retire-active-'));
     tempRoots.push(root);
     const sandbox = createAsrtShellSandbox({
@@ -1714,7 +2094,8 @@ describe('ASRT workspace shell adapter', () => {
       arg.includes('sandbox-workspace-session')
       || arg === '__asrt-workspace-session'
     )))).toHaveLength(2);
-  });
+    },
+  );
 
   it('blocks a replacement queued before an asynchronously retired session resets uncleanly', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-session-retire-unclean-'));
@@ -1740,16 +2121,17 @@ describe('ASRT workspace shell adapter', () => {
       .rejects.toThrow('could not be attested');
     workspaceSessionControl.delayClose = true;
     workspaceSessionControl.closeExitCode = 1;
-    await unattested.retire?.();
+      const retirement = unattested.retire?.() ?? Promise.resolve();
+      void retirement.catch(() => undefined);
+      await vi.waitFor(() => expect(workspaceSessionControl.releaseClose).toBeDefined());
+      const replacementPending = prepare('bash-retire-after-unclean');
+      workspaceSessionControl.releaseClose?.();
+      workspaceSessionControl.releaseClose = undefined;
 
-    const replacementPending = prepare('bash-retire-after-unclean');
-    await vi.waitFor(() => expect(workspaceSessionControl.releaseClose).toBeDefined());
-    workspaceSessionControl.releaseClose?.();
-    workspaceSessionControl.releaseClose = undefined;
-
-    const replacement = await replacementPending;
-    await replacement?.cleanup();
-    expect(replacement).toBeUndefined();
+      await expect(retirement)
+        .rejects.toThrow('ASRT workspace session ACL reset was not confirmed');
+      await expect(replacementPending)
+      .rejects.toThrow('Windows sandbox ACL cleanup was not confirmed');
     expect(capturedWorkspaceSessionConfigs).toHaveLength(1);
   });
 
@@ -1775,7 +2157,7 @@ describe('ASRT workspace shell adapter', () => {
 
       if (failurePoint === 'wrap') {
         workspaceSessionControl.wrapFailure = 'injected wrap failure';
-        await expect(prepare('bash-wrap-rpc-failed')).resolves.toBeUndefined();
+        await expect(prepare('bash-wrap-rpc-failed')).rejects.toThrow('injected wrap failure');
         workspaceSessionControl.wrapFailure = undefined;
       } else {
         const first = await prepare('bash-cleanup-rpc-failed');
@@ -1888,7 +2270,16 @@ describe('ASRT workspace shell adapter', () => {
 
     fileSystemMock.writeBrokerRequestFailure = true;
     workspaceSessionControl.cleanupFailure = 'injected cleanup after request write failure';
-    await expect(prepare('bash-request-write-failure')).resolves.toBeUndefined();
+    const failure = await prepare('bash-request-write-failure').then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(AggregateError);
+    const failures = (failure as AggregateError).errors.map((error) => String(error));
+    expect(failures).toEqual(expect.arrayContaining([
+      expect.stringContaining('injected broker request write failure'),
+      expect.stringContaining('injected cleanup after request write failure'),
+    ]));
     fileSystemMock.writeBrokerRequestFailure = false;
     workspaceSessionControl.cleanupFailure = undefined;
 
@@ -1899,7 +2290,7 @@ describe('ASRT workspace shell adapter', () => {
   });
 
   it.runIf(process.platform === 'win32')(
-    'does not reuse a rejected eager warm-up for later Agent Home commands',
+    'does not reuse a rejected Windows workspace owner for a later command',
     async () => {
       const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-warmup-recovery-'));
       const agentHome = path.join(root, 'agent-home');
@@ -1919,13 +2310,20 @@ describe('ASRT workspace shell adapter', () => {
         failClosed: true,
       });
 
-      await expect(sandbox.prepare({
+      const rejectedOwner = sandbox.prepare({
         toolCallId: 'bash-warmup-failed',
         toolInput: { command: 'echo first' },
         command: 'echo first',
         cwd: root,
         env: process.env,
-      })).resolves.toBeUndefined();
+      });
+      await expect(Promise.race([
+        rejectedOwner,
+        new Promise((_, reject) => setTimeout(
+          () => reject(new Error('rejected workspace owner did not settle')),
+          3_000,
+        )),
+      ])).rejects.toThrow('ASRT workspace session returned malformed control data');
 
       workspaceSessionControl.malformedReady = false;
       const recovered = await sandbox.prepare({
@@ -1949,7 +2347,7 @@ describe('ASRT workspace shell adapter', () => {
       }), 'utf8');
       await recovered.cleanup();
 
-      expect(capturedWorkspaceSessionConfigs.length).toBeGreaterThanOrEqual(2);
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(2);
     },
   );
 
@@ -1992,7 +2390,7 @@ describe('ASRT workspace shell adapter', () => {
 
       await prepare('safe-1');
       await prepare('safe-2');
-      expect(capturedWorkspaceSessionConfigs).toHaveLength(2);
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(1);
 
       access = {
         read: [reviewedConfig],
@@ -2001,7 +2399,7 @@ describe('ASRT workspace shell adapter', () => {
       };
       await prepare('reviewed-1');
       await prepare('reviewed-2');
-      expect(capturedWorkspaceSessionConfigs).toHaveLength(4);
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(3);
     },
   );
 
@@ -2138,7 +2536,7 @@ describe('ASRT workspace shell adapter', () => {
   );
 
   it.runIf(process.platform === 'win32')(
-    'bounds cached safe Agent Home ACL scopes',
+    'keeps only the current safe Agent Home ACL scope',
     async () => {
       const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-scope-cap-'));
       const agentHome = path.join(root, 'agent-home');
@@ -2172,23 +2570,23 @@ describe('ASRT workspace shell adapter', () => {
       };
 
       for (let index = 0; index < 8; index += 1) await prepare(index);
-      expect(capturedWorkspaceSessionConfigs).toHaveLength(9);
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(8);
 
       workspaceSessionControl.delayClose = true;
       const ninth = prepare(8);
       await vi.waitFor(() => expect(workspaceSessionControl.releaseClose).toBeDefined());
       await new Promise<void>((resolve) => setImmediate(resolve));
-      expect(capturedWorkspaceSessionConfigs).toHaveLength(9);
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(8);
       workspaceSessionControl.delayClose = false;
       workspaceSessionControl.releaseClose?.();
       workspaceSessionControl.releaseClose = undefined;
       await ninth;
-      expect(capturedWorkspaceSessionConfigs).toHaveLength(10);
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(9);
 
       await prepare(8);
-      expect(capturedWorkspaceSessionConfigs).toHaveLength(10);
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(9);
       await prepare(0);
-      expect(capturedWorkspaceSessionConfigs).toHaveLength(11);
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(10);
     },
   );
 
@@ -2231,21 +2629,18 @@ describe('ASRT workspace shell adapter', () => {
       for (let index = 0; index < 8; index += 1) {
         expect(await prepare(index)).toBeDefined();
       }
-      expect(capturedWorkspaceSessionConfigs).toHaveLength(9);
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(8);
 
       workspaceSessionControl.closeExitCode = 1;
-      await expect(prepare(8)).resolves.toBeUndefined();
-      expect(capturedWorkspaceSessionConfigs).toHaveLength(9);
-      expect(reportObservation).toHaveBeenLastCalledWith({
-        version: 1,
-        state: 'fallback',
-        reason: 'prepare_failed',
-        execution: 'normal_permission_policy',
-      });
+      await expect(prepare(8))
+        .rejects.toThrow('ASRT workspace session ACL reset was not confirmed');
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(8);
+      expect(reportObservation).not.toHaveBeenCalled();
 
       workspaceSessionControl.closeExitCode = 0;
-      await expect(prepare(8)).resolves.toBeUndefined();
-      expect(capturedWorkspaceSessionConfigs).toHaveLength(9);
+      await expect(prepare(8))
+        .rejects.toThrow('Windows sandbox ACL cleanup was not confirmed');
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(8);
     },
   );
 
@@ -2368,6 +2763,8 @@ describe('ASRT workspace shell adapter', () => {
   it('fails closed promptly when workspace process-tree termination cannot be confirmed', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-session-unknown-kill-'));
     tempRoots.push(root);
+    workspaceSessionControl.malformedReady = true;
+    processTreeKillMock.outcome = 'unknown';
     const sandbox = createAsrtShellSandbox({
       workspaceRoot: root,
       shouldSandbox: () => true,
@@ -2382,24 +2779,21 @@ describe('ASRT workspace shell adapter', () => {
       cwd: root,
       env: process.env,
     });
-    const first = await prepare('bash-before-unknown-session-kill');
-    if (!first) throw new Error('expected workspace invocation');
-    await first.cleanup();
-
-    processTreeKillMock.outcome = 'unknown';
-    await first.retire?.();
+    await expect(prepare('bash-before-unknown-session-kill'))
+      .rejects.toThrow('process-tree termination was not confirmed');
     const startedAt = Date.now();
-    const replacement = await prepare('bash-after-unknown-session-kill');
+    await expect(prepare('bash-after-unknown-session-kill'))
+      .rejects.toThrow('Windows sandbox ACL cleanup was not confirmed');
     expect(Date.now() - startedAt).toBeLessThan(1_500);
-    expect(replacement).toBeUndefined();
     expect(capturedWorkspaceSessionConfigs).toHaveLength(1);
 
     processTreeKillMock.releaseUnknown?.();
     processTreeKillMock.releaseUnknown = undefined;
     processTreeKillMock.outcome = 'actual';
+    workspaceSessionControl.malformedReady = false;
   });
 
-  it('force-terminates and blocks replacement after an unclean workspace session exit', async () => {
+  it('force-terminates a malformed owner and recovers after verified ACL cleanup', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-session-poison-'));
     tempRoots.push(root);
     stubbornBroker.mode = 'silent';
@@ -2419,8 +2813,8 @@ describe('ASRT workspace shell adapter', () => {
       env: process.env,
     })).resolves.toBeUndefined();
     expect(capturedProcessTreeKillOptions).toContainEqual(expect.objectContaining({
-      gracefulStdinEnd: true,
-      gracefulMs: process.platform === 'win32' ? 15_000 : 1_500,
+      gracefulStdinEnd: false,
+      gracefulMs: 1_500,
     }));
     expect(capturedKillSignals).toContain('SIGTERM');
     expect(capturedKillSignals).toContain('SIGKILL');
@@ -2436,11 +2830,12 @@ describe('ASRT workspace shell adapter', () => {
       cwd: root,
       env: process.env,
     });
-    expect(recovered).toBeUndefined();
+    if (!recovered) throw new Error('expected recovery after confirmed forced termination');
+    await recovered.cleanup();
     expect(capturedSpawnArgv.filter((argv) => argv.some((arg) => (
       arg.includes('sandbox-workspace-session')
       || arg === '__asrt-workspace-session'
-    )))).toHaveLength(1);
+    )))).toHaveLength(2);
   });
 
   it('uses the compiled KodaX internal session entry in bundled builds', async () => {
@@ -2600,7 +2995,7 @@ describe('ASRT workspace shell adapter', () => {
       cwd: process.cwd(),
       env: process.env,
       reportObservation,
-    })).resolves.toBeUndefined();
+    })).rejects.toThrow(/ASRT|sandbox/i);
     expect(sandbox.failClosed).toBe(true);
     expect(sandbox.processTreeContainment).toBe(
       process.platform === 'linux' ? 'root-exit-drains' : undefined,
@@ -2647,6 +3042,43 @@ describe('ASRT workspace shell adapter', () => {
       expect(capturedSyncSpawns.filter(({ args }) => (
         args.includes('acl') && args.includes('recover') && args.includes('--json')
       ))).toHaveLength(3);
+      expect(fileSystemMock.aclPoisonMarkerWriteTargets.some((target) => (
+        target.startsWith(path.join(path.resolve(process.env.ProgramData!), 'KodaX'))
+      ))).toBe(true);
+      expect(fileSystemMock.aclPoisonMarkerWriteTargets.some((target) => (
+        target.startsWith(path.resolve(process.env.KODAX_HOME!))
+      ))).toBe(true);
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'retires a workspace owner before admitting a standalone owner in the same module',
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-owner-singleton-'));
+      tempRoots.push(root);
+      const sandbox = createAsrtShellSandbox({
+        workspaceRoot: root,
+        shouldSandbox: () => true,
+        failClosed: true,
+      });
+      const invocation = await sandbox.prepare({
+        toolCallId: 'bash-active-workspace-owner',
+        toolInput: { command: 'node --version' },
+        command: 'node --version',
+        executable: process.execPath,
+        args: ['--version'],
+        cwd: root,
+        env: process.env,
+      });
+      if (!invocation) throw new Error('expected workspace invocation');
+      await invocation.cleanup();
+
+      await expect(runKodaXSandboxed({
+        command: process.execPath,
+        args: ['--version'],
+        cwd: root,
+        filesystem: { allowRead: [], allowWrite: [] },
+      })).resolves.toMatchObject({ status: 'completed', exitCode: 0 });
     },
   );
 
@@ -2750,6 +3182,31 @@ describe('ASRT workspace shell adapter', () => {
     },
   );
 
+  it.runIf(process.platform === 'win32')(
+    'writes fallback unconfirmed evidence directly into the fail-closed marker directory',
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-sdk-unconfirmed-fallback-'));
+      tempRoots.push(root);
+      fileSystemMock.renameAclPoisonMarkerFailures = 1;
+      processTreeKillMock.outcome = 'unknown';
+      stubbornBroker.mode = 'silent';
+
+      await expect(runKodaXSandboxed({
+        command: process.execPath,
+        args: ['--version'],
+        cwd: root,
+        filesystem: { allowRead: [], allowWrite: [] },
+        timeoutMs: 10,
+      })).rejects.toThrow('termination was not confirmed');
+
+      expect(fileSystemMock.aclPoisonMarkerWriteTargets).toEqual(expect.arrayContaining([
+        expect.stringMatching(/[\\/]acl-poison[\\/]unconfirmed-owner-.*\.json$/),
+      ]));
+      processTreeKillMock.releaseUnknown?.();
+      processTreeKillMock.releaseUnknown = undefined;
+    },
+  );
+
   it.runIf(process.platform === 'win32').each([
     'close_then_unknown',
     'close_then_reject',
@@ -2822,7 +3279,7 @@ describe('ASRT workspace shell adapter', () => {
       const marker = path.join(poisonDirectory, 'foreign-profile-owner.json');
       await mkdir(poisonDirectory, { recursive: true });
       await writeFile(marker, JSON.stringify({
-        version: 2,
+        version: 1,
         state: 'active',
         holderPid: holder.pid,
         holderProcessStartIdentity: holderIdentity,
@@ -2836,18 +3293,17 @@ describe('ASRT workspace shell adapter', () => {
         cwd: root,
         filesystem: { allowRead: [], allowWrite: [] },
       });
-
       try {
         await rm(marker, { force: true });
         await expect(run()).resolves.toMatchObject({ status: 'completed', exitCode: 0 });
         await writeFile(marker, JSON.stringify({
-          version: 2,
+          version: 1,
           state: 'active',
           holderPid: holder.pid,
           holderProcessStartIdentity: holderIdentity,
           windowsBootIdentity: processIdentityMock.windowsBootIdentity,
         }), 'utf8');
-        await expect(run()).rejects.toThrow('unconfirmed Windows sandbox');
+        await expect(run()).rejects.toThrow(/sandbox owner.*active/i);
         await expect(stat(marker)).resolves.toBeDefined();
         expect(capturedBrokerRequests).toHaveLength(1);
 
@@ -2863,15 +3319,174 @@ describe('ASRT workspace shell adapter', () => {
   );
 
   it.runIf(process.platform === 'win32')(
-    'ignores an in-progress ACL marker write until its atomic rename',
+    'rejects an active sandbox owner from another SDK module copy in the same process',
     async () => {
+      const holderIdentity = readProcessStartIdentity(process.pid);
+      if (holderIdentity === undefined) throw new Error('current process identity missing');
       const poisonDirectory = path.join(
         path.resolve(process.env.KODAX_HOME!),
         'sandbox-runtime',
         'acl-poison',
       );
+      const marker = path.join(poisonDirectory, 'same-process-module-owner.json');
       await mkdir(poisonDirectory, { recursive: true });
-      await writeFile(path.join(poisonDirectory, 'owner-in-progress.tmp'), '{', 'utf8');
+      await writeFile(marker, JSON.stringify({
+        version: 1,
+        state: 'active',
+        holderPid: process.pid,
+        holderProcessStartIdentity: holderIdentity,
+        windowsBootIdentity: processIdentityMock.windowsBootIdentity,
+      }), 'utf8');
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-sdk-same-process-owner-'));
+      tempRoots.push(root);
+
+      try {
+        await expect(runKodaXSandboxed({
+          command: process.execPath,
+          args: ['--version'],
+          cwd: root,
+          filesystem: { allowRead: [], allowWrite: [] },
+        })).rejects.toThrow(/sandbox owner.*active/i);
+        expect(capturedBrokerRequests).toHaveLength(0);
+
+        await rm(marker, { force: true });
+        await expect(runKodaXSandboxed({
+          command: process.execPath,
+          args: ['--version'],
+          cwd: root,
+          filesystem: { allowRead: [], allowWrite: [] },
+        })).resolves.toMatchObject({ status: 'completed', exitCode: 0 });
+      } finally {
+        await rm(marker, { force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'coordinates one Windows sandbox SID across different KODAX_HOME values',
+    async () => {
+      const actualChildProcess = await vi.importActual<typeof import('node:child_process')>(
+        'node:child_process',
+      );
+      const holder = actualChildProcess.spawn(process.execPath, [
+        '-e',
+        'process.stdout.write("ready\\n");setInterval(()=>{},1000)',
+      ], {
+        stdio: ['ignore', 'pipe', 'ignore'],
+        windowsHide: true,
+      });
+      await once(holder.stdout!, 'data');
+      if (holder.pid === undefined) throw new Error('active marker holder PID missing');
+      const holderIdentity = readProcessStartIdentity(holder.pid);
+      if (holderIdentity === undefined) throw new Error('active marker holder identity missing');
+      const poisonDirectory = path.join(
+        path.resolve(process.env.ProgramData!),
+        'KodaX',
+        'sandbox-runtime',
+        'acl-poison',
+      );
+      const marker = path.join(poisonDirectory, 'different-home-owner.json');
+      await mkdir(poisonDirectory, { recursive: true });
+      await writeFile(marker, JSON.stringify({
+        version: 1,
+        state: 'active',
+        holderPid: holder.pid,
+        holderProcessStartIdentity: holderIdentity,
+        windowsBootIdentity: processIdentityMock.windowsBootIdentity,
+      }), 'utf8');
+      const secondHome = path.join(path.dirname(process.env.KODAX_HOME!), 'second-home');
+      vi.stubEnv('KODAX_HOME', secondHome);
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-sdk-different-home-owner-'));
+      tempRoots.push(root);
+
+      try {
+        await expect(runKodaXSandboxed({
+          command: process.execPath,
+          args: ['--version'],
+          cwd: root,
+          filesystem: { allowRead: [], allowWrite: [] },
+        })).rejects.toThrow(/sandbox owner.*active/i);
+        expect(capturedBrokerRequests).toHaveLength(0);
+      } finally {
+        const holderClosed = once(holder, 'close');
+        holder.kill('SIGKILL');
+        await holderClosed;
+        await rm(marker, { force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'cleans workspace launch artifacts when another module owns the Windows sandbox SID',
+    async () => {
+      const holderIdentity = readProcessStartIdentity(process.pid);
+      if (holderIdentity === undefined) throw new Error('current process identity missing');
+      const poisonDirectory = path.join(
+        path.resolve(process.env.ProgramData!),
+        'KodaX',
+        'sandbox-runtime',
+        'acl-poison',
+      );
+      const marker = path.join(poisonDirectory, 'module-owner-before-workspace.json');
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-workspace-owner-contention-'));
+      tempRoots.push(root);
+      const shellTempRoot = path.join(
+        os.tmpdir(),
+        'kodax-sandbox',
+        createHash('sha256').update(path.resolve(root).toLowerCase()).digest('hex').slice(0, 16),
+      );
+      const sandbox = createAsrtShellSandbox({
+        workspaceRoot: root,
+        shouldSandbox: () => true,
+        failClosed: true,
+      });
+      await doctorSandboxRuntime({ refresh: true });
+      recoveryLockMock.calls = 0;
+      recoveryLockMock.beforeOperation = async () => {
+        if (recoveryLockMock.calls !== 3) return;
+        recoveryLockMock.beforeOperation = undefined;
+        await mkdir(poisonDirectory, { recursive: true });
+        await writeFile(marker, JSON.stringify({
+          version: 1,
+          state: 'active',
+          holderPid: process.pid,
+          holderProcessStartIdentity: holderIdentity,
+          windowsBootIdentity: processIdentityMock.windowsBootIdentity,
+        }), 'utf8');
+      };
+
+      try {
+        await expect(sandbox.prepare({
+          toolCallId: 'bash-module-owner-contention',
+          toolInput: { command: 'node --version' },
+          command: 'node --version',
+          executable: process.execPath,
+          args: ['--version'],
+          cwd: root,
+          env: process.env,
+        })).rejects.toThrow(/sandbox owner.*active/i);
+        expect(capturedWorkspaceSessionConfigs).toHaveLength(0);
+        await expect(readdir(shellTempRoot)).resolves.toEqual([]);
+        const controlDirectory = path.join(path.resolve(process.env.KODAX_HOME!), 'sandbox-runtime');
+        await expect(readdir(controlDirectory)).resolves.not.toEqual(
+          expect.arrayContaining([expect.stringMatching(/^workspace-.*\.json$/)]),
+        );
+      } finally {
+        await rm(marker, { force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'ignores a partial marker in the backward-compatible staging directory',
+    async () => {
+      const stagingDirectory = path.join(
+        path.resolve(process.env.KODAX_HOME!),
+        'sandbox-runtime',
+        'acl-poison-staging',
+      );
+      await mkdir(stagingDirectory, { recursive: true });
+      await writeFile(path.join(stagingDirectory, 'owner-in-progress.tmp'), '{', 'utf8');
       const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-sdk-partial-marker-'));
       tempRoots.push(root);
 
@@ -2881,6 +3496,7 @@ describe('ASRT workspace shell adapter', () => {
         cwd: root,
         filesystem: { allowRead: [], allowWrite: [] },
       })).resolves.toMatchObject({ status: 'completed', exitCode: 0 });
+      await expect(readdir(stagingDirectory)).resolves.toEqual(['owner-in-progress.tmp']);
     },
   );
 
@@ -2904,7 +3520,7 @@ describe('ASRT workspace shell adapter', () => {
         filesystem: { allowRead: [], allowWrite: [] },
       });
 
-      await expect(run()).rejects.toThrow('marker is unreadable');
+      await expect(run()).rejects.toThrow('acl recover --force --json');
       await rm(marker, { force: true });
       await expect(run()).rejects.toThrow('ACL cleanup was not confirmed');
       expect(capturedBrokerRequests).toHaveLength(0);
@@ -2919,7 +3535,8 @@ describe('ASRT workspace shell adapter', () => {
         'node:child_process',
       );
       const lockFile = path.join(
-        path.resolve(process.env.KODAX_HOME!),
+        path.resolve(process.env.ProgramData!),
+        'KodaX',
         'sandbox-runtime',
         'acl-recovery.lock',
       );
@@ -2948,6 +3565,9 @@ describe('ASRT workspace shell adapter', () => {
         cwd: root,
         filesystem: { allowRead: [], allowWrite: [] },
       });
+      const recoveriesBeforeRelease = capturedSyncSpawns.filter((spawn) => (
+        spawn.args.includes('acl') && spawn.args.includes('recover')
+      )).length;
 
       try {
         const premature = await Promise.race([
@@ -2955,6 +3575,10 @@ describe('ASRT workspace shell adapter', () => {
           new Promise<'pending'>((resolve) => setTimeout(() => resolve('pending'), 100)),
         ]);
         expect(premature).toBe('pending');
+        expect(capturedSyncSpawns.filter((spawn) => (
+          spawn.args.includes('acl') && spawn.args.includes('recover')
+        ))).toHaveLength(recoveriesBeforeRelease);
+        expect(capturedBrokerRequests).toHaveLength(0);
         holder.stdin!.end('release');
         await expect(running).resolves.toMatchObject({ status: 'completed', exitCode: 0 });
         await holderClosed;
@@ -3082,7 +3706,7 @@ describe('ASRT workspace shell adapter', () => {
       await resetAsrtWorkspaceSessionsForTest({ preserveAclPoison: true });
       processTreeKillMock.outcome = 'actual';
       stubbornBroker.mode = 'none';
-      processIdentityMock.windowsBootIdentity = 'windows-boot-b';
+      processIdentityMock.windowsBootIdentity = 'windows-boot-200';
 
       await expect(run()).resolves.toMatchObject({ status: 'completed', exitCode: 0 });
     },
@@ -3111,7 +3735,239 @@ describe('ASRT workspace shell adapter', () => {
       processTreeKillMock.outcome = 'actual';
       stubbornBroker.mode = 'none';
 
-      await expect(run()).rejects.toThrow('acl recover --force --json');
+      await expect(run()).rejects.toThrow('no verifiable Windows boot identity');
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'reports a legacy ACL poison marker through doctor without requesting sandbox setup',
+    async () => {
+      const poisonDirectory = path.join(
+        path.resolve(process.env.KODAX_HOME!),
+        'sandbox-runtime',
+        'acl-poison',
+      );
+      await mkdir(poisonDirectory, { recursive: true });
+      await writeFile(
+        path.join(poisonDirectory, 'legacy-owner.json'),
+        JSON.stringify({ version: 1 }),
+        'utf8',
+      );
+
+      const doctor = await doctorSandboxRuntime({ refresh: true });
+
+      expect(doctor.ready).toBe(false);
+      expect(doctor.setupRequired).toBe(false);
+      expect(doctor.diagnostics.join('\n')).toContain('acl recover --force --json');
+
+      const setup = await prepareSandboxRuntimeForSetup();
+      expect(setup).toMatchObject({ status: 'unavailable', attempted: false });
+      expect(setup.guidance.join('\n')).toContain('acl recover --force --json');
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'reports a corrupt ACL poison marker with actionable recovery guidance',
+    async () => {
+      const poisonDirectory = path.join(
+        path.resolve(process.env.KODAX_HOME!),
+        'sandbox-runtime',
+        'acl-poison',
+      );
+      await mkdir(poisonDirectory, { recursive: true });
+      await writeFile(path.join(poisonDirectory, 'corrupt-owner.json'), '{', 'utf8');
+
+      const doctor = await doctorSandboxRuntime({ refresh: true });
+
+      expect(doctor.ready).toBe(false);
+      expect(doctor.diagnostics.join('\n')).toContain('acl recover --force --json');
+      const setup = await prepareSandboxRuntimeForSetup();
+      expect(setup).toMatchObject({ status: 'unavailable', attempted: false });
+      expect(setup.guidance.join('\n')).toContain('acl recover --force --json');
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'does not repair missing setup while a legacy ACL poison marker is unresolved',
+    async () => {
+      const poisonDirectory = path.join(
+        path.resolve(process.env.KODAX_HOME!),
+        'sandbox-runtime',
+        'acl-poison',
+      );
+      await mkdir(poisonDirectory, { recursive: true });
+      await writeFile(
+        path.join(poisonDirectory, 'legacy-owner.json'),
+        JSON.stringify({ version: 1 }),
+        'utf8',
+      );
+      windowsSandboxMock.guardReady = false;
+
+      const setup = await prepareSandboxRuntimeForSetup();
+
+      expect(setup).toMatchObject({ status: 'unavailable', attempted: false });
+      expect(setup.guidance.join('\n')).toContain('acl recover --force --json');
+      expect(windowsSandboxMock.guardReady).toBe(false);
+      expect(windowsSandboxMock.installCalls).toBe(0);
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'rechecks ACL poison under the recovery lock before mutating sandbox setup',
+    async () => {
+      const poisonDirectory = path.join(
+        path.resolve(process.env.KODAX_HOME!),
+        'sandbox-runtime',
+        'acl-poison',
+      );
+      windowsSandboxMock.guardReady = false;
+      recoveryLockMock.beforeOperation = async () => {
+        recoveryLockMock.beforeOperation = undefined;
+        await mkdir(poisonDirectory, { recursive: true });
+        await writeFile(
+          path.join(poisonDirectory, 'concurrent-legacy-owner.json'),
+          JSON.stringify({ version: 1 }),
+          'utf8',
+        );
+      };
+
+      const setup = await prepareSandboxRuntimeForSetup();
+
+      expect(setup.status).toBe('unavailable');
+      expect(setup.guidance.join('\n')).toContain('acl recover --force --json');
+      expect(windowsSandboxMock.guardReady).toBe(false);
+      expect(windowsSandboxMock.installCalls).toBe(0);
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'does not mutate sandbox setup while this process has an active workspace owner',
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-setup-active-owner-'));
+      tempRoots.push(root);
+      const sandbox = createAsrtShellSandbox({
+        workspaceRoot: root,
+        shouldSandbox: () => true,
+        failClosed: true,
+      });
+      const active = await sandbox.prepare({
+        toolCallId: 'active-owner-during-setup',
+        toolInput: { command: 'echo active' },
+        command: 'echo active',
+        cwd: root,
+        env: process.env,
+      });
+      if (!active) throw new Error('expected active workspace owner');
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(1);
+      windowsSandboxMock.guardReady = false;
+
+      const setup = await prepareSandboxRuntimeForSetup();
+
+      expect(setup).toMatchObject({ status: 'unavailable', attempted: true });
+      expect(setup.guidance.join('\n')).toContain('sandbox owner is active');
+      expect(windowsSandboxMock.guardReady).toBe(false);
+      expect(windowsSandboxMock.installCalls).toBe(0);
+      await active.cleanup();
+      await shutdownAsrtWorkspaceSessions();
+      expect(await sandbox.prepare({
+        toolCallId: undefined,
+        toolInput: { command: 'echo not-selected' },
+        command: 'echo not-selected',
+        cwd: root,
+        env: process.env,
+      })).toBeUndefined();
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'surfaces legacy ACL recovery guidance through a required workspace shell',
+    async () => {
+      const poisonDirectory = path.join(
+        path.resolve(process.env.KODAX_HOME!),
+        'sandbox-runtime',
+        'acl-poison',
+      );
+      await mkdir(poisonDirectory, { recursive: true });
+      await writeFile(
+        path.join(poisonDirectory, 'legacy-owner.json'),
+        JSON.stringify({ version: 1 }),
+        'utf8',
+      );
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-shell-legacy-poison-'));
+      tempRoots.push(root);
+      const sandbox = createAsrtShellSandbox({
+        workspaceRoot: root,
+        shouldSandbox: () => true,
+        failClosed: true,
+      });
+
+      await expect(sandbox.prepare({
+        toolCallId: 'bash-legacy-acl-poison',
+        toolInput: { command: 'node --version' },
+        command: 'node --version',
+        executable: process.execPath,
+        args: ['--version'],
+        cwd: root,
+        env: process.env,
+      })).rejects.toThrow('acl recover --force --json');
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(0);
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'surfaces a corrupt ACL marker through a required workspace shell',
+    async () => {
+      const poisonDirectory = path.join(
+        path.resolve(process.env.KODAX_HOME!),
+        'sandbox-runtime',
+        'acl-poison',
+      );
+      await mkdir(poisonDirectory, { recursive: true });
+      await writeFile(path.join(poisonDirectory, 'corrupt-owner.json'), '{', 'utf8');
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-shell-corrupt-poison-'));
+      tempRoots.push(root);
+      const sandbox = createAsrtShellSandbox({
+        workspaceRoot: root,
+        shouldSandbox: () => true,
+        failClosed: true,
+      });
+
+      await expect(sandbox.prepare({
+        toolCallId: 'bash-corrupt-acl-poison',
+        toolInput: { command: 'node --version' },
+        command: 'node --version',
+        executable: process.execPath,
+        args: ['--version'],
+        cwd: root,
+        env: process.env,
+      })).rejects.toThrow('acl recover --force --json');
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(0);
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'surfaces a corrupt ACL marker created during owner admission',
+    async () => {
+      const poisonDirectory = path.join(
+        path.resolve(process.env.KODAX_HOME!),
+        'sandbox-runtime',
+        'acl-poison',
+      );
+      recoveryLockMock.beforeOperation = async () => {
+        recoveryLockMock.beforeOperation = undefined;
+        await mkdir(poisonDirectory, { recursive: true });
+        await writeFile(path.join(poisonDirectory, 'concurrent-corrupt-owner.json'), '{', 'utf8');
+      };
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-sdk-concurrent-corrupt-'));
+      tempRoots.push(root);
+
+      await expect(runKodaXSandboxed({
+        command: process.execPath,
+        args: ['--version'],
+        cwd: root,
+        filesystem: { allowRead: [], allowWrite: [] },
+      })).rejects.toThrow('acl recover --force --json');
+      expect(capturedBrokerRequests).toHaveLength(0);
     },
   );
 
@@ -3135,7 +3991,10 @@ describe('ASRT workspace shell adapter', () => {
         mode: 'allowlist',
         origins: ['https://api.example.com'],
       },
-      env: { KODAX_SDK_SANDBOX_TEST: '1' },
+      env: {
+        KODAX_SDK_SANDBOX_TEST: '1',
+        ...(process.platform === 'win32' ? { Path: 'sdk-command-path' } : {}),
+      },
       timeoutMs: 5_000,
       maxOutputBytes: 4_096,
     })).resolves.toEqual({
@@ -3202,6 +4061,12 @@ describe('ASRT workspace shell adapter', () => {
     expect(request.endpoints).toEqual([{ host: 'api.example.com', port: 443 }]);
     expect(request.allowAllNetwork).toBe(false);
     expect(request.env.KODAX_SDK_SANDBOX_TEST).toBe('1');
+    if (process.platform === 'win32') {
+      const environmentNames = Object.keys(request.env).map((name) => name.toLowerCase());
+      expect(new Set(environmentNames).size).toBe(environmentNames.length);
+      expect(Object.entries(request.env).filter(([name]) => name.toLowerCase() === 'path'))
+        .toEqual([['Path', 'sdk-command-path']]);
+    }
   });
 
   it('fails a standalone SDK run when sandbox target launch is not attested', async () => {
@@ -3584,6 +4449,7 @@ describe('ASRT Skill-script adapter', () => {
       );
       if (process.platform === 'win32') {
         expect(runnerDirectory).toBeDefined();
+        expect(request.config.filesystem.allowRead).toContain(path.dirname(process.execPath));
         expect(request.config.filesystem.denyWrite).toEqual([]);
         expect(request.config.windows?.srtWin?.path).toBe(
           path.join(runnerDirectory!, 'srt-win.exe'),
@@ -3886,8 +4752,9 @@ describe('ASRT Skill-script adapter', () => {
       },
       command: process.execPath,
       args: exactArgs,
+      windowsVerbatimArguments: true,
       cwd: root,
-      env: {},
+      env: { PATH: 'command-path', PATHEXT: '.COM;.EXE;.CMD' },
       endpoints: [],
       bootstrapCommand: process.execPath,
     }), 'utf8');
@@ -3899,11 +4766,46 @@ describe('ASRT Skill-script adapter', () => {
     expect(JSON.parse(Buffer.from(payload, 'base64').toString('utf8'))).toMatchObject({
       command: process.execPath,
       args: exactArgs,
+      windowsVerbatimArguments: true,
       cwd: root,
       targetStartedMarker: expect.stringContaining('KODAX_ASRT_TARGET_STARTED'),
     });
     expect(wrapped).not.toContain('%KODAX_ENV_PROBE%');
     expect(wrapped).not.toContain('a&b');
+    const spawned = capturedSpawnArgv.at(-1) ?? [];
+    const injectedEnvironment = spawned.flatMap((value, index) => (
+      value === '--env' ? [spawned[index + 1] ?? ''] : []
+    ));
+    expect(injectedEnvironment.filter((value) => /^path=/i.test(value)))
+      .toEqual(['PATH=command-path']);
+    expect(injectedEnvironment.filter((value) => /^pathext=/i.test(value)))
+      .toEqual(['PATHEXT=.COM;.EXE;.CMD']);
+    expect(injectedEnvironment).toContain('WRAPPED_ONLY=yes');
+  });
+
+  it('rejects case-ambiguous Windows child environment names before spawn', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-broker-env-test-'));
+    tempRoots.push(root);
+    const requestFile = path.join(root, 'request.json');
+    await writeFile(requestFile, JSON.stringify({
+      config: {
+        network: {
+          allowedDomains: [], deniedDomains: [], strictAllowlist: true,
+          allowUnixSockets: [], allowAllUnixSockets: false, allowLocalBinding: false,
+        },
+        filesystem: { denyRead: [], allowRead: [], allowWrite: [], denyWrite: [] },
+      },
+      command: process.execPath,
+      args: ['--version'],
+      cwd: root,
+      env: { PATH: 'first', Path: 'second' },
+      endpoints: [],
+      bootstrapCommand: process.execPath,
+    }), 'utf8');
+    const spawnCount = capturedSpawnArgv.length;
+
+    await expect(runAsrtBrokerProcess(requestFile)).resolves.toBe(1);
+    expect(capturedSpawnArgv).toHaveLength(spawnCount);
   });
 
   it.each([

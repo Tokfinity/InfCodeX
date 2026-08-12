@@ -6,6 +6,7 @@ const upgradeMocks = vi.hoisted(() => ({
   acquireProcessLease: vi.fn(),
   enableDaemonOwner: vi.fn(),
   readLockOwner: vi.fn(),
+  waitForShutdown: vi.fn(),
 }));
 
 vi.mock('./runtime-daemon/process.js', async (importOriginal) => {
@@ -24,6 +25,15 @@ vi.mock('./runtime-daemon/state.js', async (importOriginal) => {
     ...actual,
     enableRuntimeDaemonOwner: upgradeMocks.enableDaemonOwner,
     readRuntimeDaemonLockOwner: upgradeMocks.readLockOwner,
+  };
+});
+
+vi.mock('./runtime-daemon/shutdown-verifier.js', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('./runtime-daemon/shutdown-verifier.js')>();
+  return {
+    ...actual,
+    waitForRuntimeDaemonShutdown: upgradeMocks.waitForShutdown,
   };
 });
 
@@ -46,6 +56,17 @@ describe('Runtime daemon capability upgrade', () => {
     upgradeMocks.acquireProcessLease.mockReset();
     upgradeMocks.enableDaemonOwner.mockReset();
     upgradeMocks.readLockOwner.mockReset();
+    upgradeMocks.waitForShutdown.mockReset();
+    upgradeMocks.waitForShutdown.mockResolvedValue({
+      status: 'succeeded',
+      outcome: {
+        version: 1,
+        runtimeId: RUNTIME_ID,
+        pid: 101,
+        status: 'succeeded',
+        completedAt: '2026-07-19T00:00:02.000Z',
+      },
+    });
   });
 
   it('fences and replaces an idle legacy daemon before returning the current runtime', async () => {
@@ -139,6 +160,101 @@ describe('Runtime daemon capability upgrade', () => {
     await runtime.close();
     expect(newClose).toHaveBeenCalled();
   });
+
+  it.skipIf(process.platform !== 'win32')(
+    'replaces an idle 0.7.85 daemon before exposing the repaired sandbox execution chain',
+    async () => {
+      const calls: string[] = [];
+      const oldTransport = createLegacyTransport({
+        preflight: createPreflight(),
+        calls,
+        close: vi.fn(async () => undefined),
+        capabilities: {
+          actorSettlementConvergence: { version: 1 },
+          daemonManagement: { version: 1 },
+          managedRunDurability: { version: 1 },
+          runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
+          runtimeEventCoalescing: { version: 1 },
+          sandboxRuntime: { version: 1, asrtVersion: '0.0.65' },
+          sessionEventJournal: { version: 1 },
+        },
+        onRollback: () => upgradeMocks.readLockOwner.mockReturnValue(undefined),
+      });
+      const newClose = vi.fn(async () => undefined);
+      const oldLease = createLease(oldTransport);
+      upgradeMocks.acquireProcessLease
+        .mockResolvedValueOnce(oldLease)
+        .mockResolvedValueOnce(createLease(createCurrentTransport(calls, newClose)));
+      upgradeMocks.readLockOwner.mockReturnValue({
+        runtimeId: RUNTIME_ID,
+        pid: 101,
+        createdAt: '2026-07-19T00:00:00.000Z',
+        kind: 'daemon',
+      });
+
+      const runtime = await connectKodaXRuntime({
+        autoStart: true,
+        profile: PROFILE,
+        homeDir: path.join('C:', 'kodax-upgrade-test'),
+      });
+
+      expect(runtime.identity.runtimeId).toBe('runtime_current');
+      expect(calls).toEqual([
+        'old:initialize',
+        'old:daemon.management.get',
+        'old:daemon.rollbackToInline',
+        'old:close',
+        'new:initialize',
+      ]);
+      expect(upgradeMocks.waitForShutdown).toHaveBeenCalledWith(expect.objectContaining({
+        configHome: oldLease.paths.configHome,
+        profile: PROFILE,
+        owner: expect.objectContaining({
+          processContainment: 'windows-job',
+          supervisorPid: 102,
+        }),
+      }));
+      await runtime.close();
+      expect(newClose).toHaveBeenCalled();
+    },
+  );
+
+  it.skipIf(process.platform !== 'win32')(
+    'keeps a busy 0.7.85 daemon fenced behind the sandbox v2 upgrade requirement',
+    async () => {
+      const calls: string[] = [];
+      const oldTransport = createLegacyTransport({
+        preflight: createPreflight({ blockers: ['active_runs'], canStop: false }),
+        calls,
+        close: vi.fn(async () => undefined),
+        capabilities: {
+          actorSettlementConvergence: { version: 1 },
+          daemonManagement: { version: 1 },
+          managedRunDurability: { version: 1 },
+          runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
+          runtimeEventCoalescing: { version: 1 },
+          sandboxRuntime: { version: 1, asrtVersion: '0.0.65' },
+          sessionEventJournal: { version: 1 },
+        },
+      });
+      upgradeMocks.acquireProcessLease.mockResolvedValueOnce(createLease(oldTransport));
+
+      await expect(connectKodaXRuntime({
+        autoStart: true,
+        profile: PROFILE,
+        homeDir: path.join('C:', 'kodax-upgrade-test'),
+      })).rejects.toMatchObject({
+        code: 'daemon_capability_upgrade_required',
+        capability: 'sandboxRuntime',
+        preflight: { blockers: ['active_runs'], canStop: false },
+      });
+      expect(calls).toEqual([
+        'old:initialize',
+        'old:daemon.management.get',
+        'old:close',
+      ]);
+    },
+  );
 
   it('replaces an idle daemon that lacks Runtime event coalescing', async () => {
     const calls: string[] = [];
@@ -269,7 +385,7 @@ describe('Runtime daemon capability upgrade', () => {
   });
 
   it.skipIf(process.platform !== 'win32')(
-    'attaches an existing daemon without making shutdown verification a session requirement',
+    'requires authoritative shutdown verification for a Windows auto-start daemon',
     async () => {
       const calls: string[] = [];
       const oldTransport = createLegacyTransport({
@@ -279,6 +395,8 @@ describe('Runtime daemon capability upgrade', () => {
         capabilities: {
           managedRunDurability: { version: 1 },
           daemonManagement: { version: 1 },
+          sandboxRuntime: { version: 2 },
+          daemonShutdownVerification: undefined,
           runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
           runtimeEventCoalescing: { version: 1 },
         },
@@ -293,15 +411,11 @@ describe('Runtime daemon capability upgrade', () => {
         kind: 'daemon',
       });
 
-      const runtime = await connectKodaXRuntime({
+      await expect(connectKodaXRuntime({
         autoStart: true,
         profile: PROFILE,
         homeDir: path.join('C:', 'kodax-upgrade-test'),
-      });
-
-      expect(runtime.identity.runtimeId).toBe(RUNTIME_ID);
-      expect(calls).toEqual(['old:initialize']);
-      await runtime.close();
+      })).rejects.toThrow(/cannot be migrated safely in place/i);
       expect(calls).toEqual(['old:initialize', 'old:close']);
     },
   );
@@ -317,6 +431,8 @@ describe('Runtime daemon capability upgrade', () => {
         capabilities: {
           managedRunDurability: { version: 1 },
           daemonManagement: { version: 1 },
+          sandboxRuntime: { version: 2 },
+          daemonShutdownVerification: undefined,
           runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
           runtimeEventCoalescing: { version: 1 },
         },
@@ -345,6 +461,7 @@ describe('Runtime daemon capability upgrade', () => {
       daemonOrphanExit: 1,
       daemonShutdownVerification: 1,
       managedRunDurability: 1,
+      sandboxRuntime: 2,
       runtimeEventCoalescing: 1,
       sessionEventJournal: 1,
     });
@@ -489,7 +606,7 @@ describe('Runtime daemon capability upgrade', () => {
     expect(upgradeMocks.enableDaemonOwner).not.toHaveBeenCalled();
   });
 
-  it('restores daemon ownership when a stopped legacy daemon does not release its fence', async () => {
+  it('keeps daemon ownership disabled when a stopped Windows daemon does not prove shutdown', async () => {
     const calls: string[] = [];
     const oldTransport = createLegacyTransport({
       preflight: createPreflight(),
@@ -504,6 +621,12 @@ describe('Runtime daemon capability upgrade', () => {
       createdAt: '2026-07-19T00:00:00.000Z',
       kind: 'daemon',
     });
+    if (process.platform === 'win32') {
+      upgradeMocks.waitForShutdown.mockResolvedValueOnce({
+        status: 'unverified',
+        reason: 'daemon_active',
+      });
+    }
 
     await expect(
       connectKodaXRuntime({
@@ -523,7 +646,11 @@ describe('Runtime daemon capability upgrade', () => {
       'old:daemon.rollbackToInline',
       'old:close',
     ]);
-    expect(upgradeMocks.enableDaemonOwner).toHaveBeenCalledWith(oldLease.paths);
+    if (process.platform === 'win32') {
+      expect(upgradeMocks.enableDaemonOwner).not.toHaveBeenCalled();
+    } else {
+      expect(upgradeMocks.enableDaemonOwner).toHaveBeenCalledWith(oldLease.paths);
+    }
   });
 
   it('points recovery failures to the public SDK owner API', async () => {
@@ -583,6 +710,9 @@ function createLegacyTransport(input: {
             actorSettlementConvergence: { version: 1 },
             managedRunDurability: { version: 1 },
             sessionEventJournal: { version: 1 },
+            ...(process.platform === 'win32'
+              ? { daemonShutdownVerification: { version: 1 } }
+              : {}),
             ...(input.capabilities ?? {
               daemonManagement: { version: 1 },
               runtimeAutoModeGuardrail: { version: 1, owner: 'session-runtime' },
@@ -631,6 +761,7 @@ function createCurrentTransport(
       return initializeResult('runtime_current', {
         actorSettlementConvergence: { version: 1 },
         managedRunDurability: { version: 1 },
+        sandboxRuntime: { version: 2 },
         sessionEventJournal: { version: 1 },
         runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
         runtimeEventCoalescing: { version: 1 },
@@ -664,7 +795,7 @@ function initializeResult(
       mode: 'daemon',
       profile: PROFILE,
       startedAt: '2026-07-19T00:00:00.000Z',
-      version: '0.7.73-test',
+      version: runtimeId === RUNTIME_ID ? '0.7.85' : '0.7.86',
       isolation: 'process',
     },
     capabilities,
@@ -687,6 +818,9 @@ function createManagementState(
       pid: 101,
       createdAt: '2026-07-19T00:00:00.000Z',
       kind: 'daemon',
+      ...(process.platform === 'win32'
+        ? { processContainment: 'windows-job' as const, supervisorPid: 102 }
+        : {}),
     },
     preflight,
   };

@@ -239,6 +239,7 @@ import {
   type RuntimeDaemonProcessLease,
 } from "./runtime-daemon/process.js";
 export { waitForRuntimeDaemonShutdown } from "./runtime-daemon/shutdown-verifier.js";
+import { waitForRuntimeDaemonShutdown as verifyRuntimeDaemonShutdown } from "./runtime-daemon/shutdown-verifier.js";
 export type {
   RuntimeDaemonShutdownVerification,
   RuntimeDaemonShutdownVerificationInput,
@@ -712,6 +713,7 @@ export const KODAX_RUNTIME_SDK_CAPABILITIES = Object.freeze({
   daemonOrphanExit: 1,
   daemonShutdownVerification: 1,
   managedRunDurability: 1,
+  sandboxRuntime: 2,
   sessionEventJournal: 1,
   runtimeEventCoalescing: 1,
 } as const);
@@ -769,6 +771,8 @@ export interface RuntimeCapabilityRequirements {
   /** Optional integration failures are isolated, observable, and hot-recoverable. */
   readonly integrationConfigResilience?: 1;
   readonly actorControlPlane?: 1;
+  /** Require the fail-closed Windows sandbox execution chain introduced after 0.7.85. */
+  readonly sandboxRuntime?: 1 | 2;
   /** Runtime owns Auto LLM/rules classification before shared permission brokering. */
   readonly runtimeAutoModeGuardrail?: 1 | 2 | 3 | 4;
 }
@@ -3374,6 +3378,12 @@ export async function createKodaXRuntime(
           ? {
             actorSettlementConvergence: 1 as const,
             managedRunDurability: 1 as const,
+            ...(process.platform === "win32"
+              ? {
+                  daemonShutdownVerification: 1 as const,
+                  sandboxRuntime: 2 as const,
+                }
+              : {}),
             runtimeAutoModeGuardrail: 4 as const,
             runtimeEventCoalescing: 1 as const,
             ...(options.daemonOrphanExitMs !== undefined
@@ -4267,6 +4277,7 @@ function assertRuntimeCapabilities(
     requirements?.runtimeEventCoalescing === undefined &&
     requirements?.integrationConfigResilience === undefined &&
     requirements?.actorControlPlane === undefined &&
+    requirements?.sandboxRuntime === undefined &&
     requirements?.runtimeAutoModeGuardrail === undefined
   )
     return;
@@ -4323,6 +4334,7 @@ function assertRuntimeCapabilities(
     ["runtimeEventCoalescing", requirements.runtimeEventCoalescing],
     ["integrationConfigResilience", requirements.integrationConfigResilience],
     ["actorControlPlane", requirements.actorControlPlane],
+    ["sandboxRuntime", requirements.sandboxRuntime],
     ["runtimeAutoModeGuardrail", requirements.runtimeAutoModeGuardrail],
   ] as const;
   for (const [name, version] of versionedRequirements) {
@@ -4418,6 +4430,21 @@ async function replaceRuntimeDaemonForCapabilityUpgrade(input: {
       input.requiredCapability,
     );
   }
+  if (
+    process.platform === "win32"
+    && !hasVersionedRuntimeCapability(
+      input.capabilities as Record<string, unknown>,
+      "daemonShutdownVerification",
+      1,
+    )
+  ) {
+    throw new RuntimeDaemonCapabilityUpgradeError(
+      "The running Windows daemon predates authoritative process containment. Stop it explicitly before upgrading; it cannot be migrated safely in place.",
+      undefined,
+      undefined,
+      input.requiredCapability,
+    );
+  }
   const runtime = createRuntimeDaemonClient({
     identity: { ...input.identity, mode: "daemon", isolation: "process" },
     transport: input.transport,
@@ -4432,6 +4459,21 @@ async function replaceRuntimeDaemonForCapabilityUpgrade(input: {
   let management: RuntimeDaemonManagementState | undefined;
   try {
     management = await runtime.daemon.inspect();
+    if (
+      process.platform === "win32"
+      && (
+        management.owner.processContainment !== "windows-job"
+        || !Number.isSafeInteger(management.owner.supervisorPid)
+        || management.owner.supervisorPid! <= 0
+      )
+    ) {
+      throw new RuntimeDaemonCapabilityUpgradeError(
+        "The running Windows daemon did not provide an authoritative Job containment owner. Stop it explicitly before upgrading; it cannot be migrated safely in place.",
+        management.preflight,
+        undefined,
+        input.requiredCapability,
+      );
+    }
     if (!management.preflight.canStop) {
       throw new RuntimeDaemonCapabilityUpgradeError(
         `The running daemon needs ${input.requiredCapability} v${input.requiredVersion} but cannot be replaced safely yet: ${management.preflight.blockers.join(", ")}. Finish or cancel that work and retry.`,
@@ -4482,26 +4524,62 @@ async function replaceRuntimeDaemonForCapabilityUpgrade(input: {
     }
   }
 
-  const deadline = Date.now() + input.startupTimeoutMs;
   try {
-    while (
-      readRuntimeDaemonLockOwner(input.lease.paths.lockFile) !== undefined
-    ) {
-      if (Date.now() >= deadline) {
+    if (process.platform === "win32") {
+      if (management === undefined) {
         throw new RuntimeDaemonCapabilityUpgradeError(
-          "The legacy daemon accepted the upgrade stop but did not release its owner fence before timeout. Retry after the daemon exits.",
+          "The legacy Windows daemon stopped without a verifiable owner identity.",
           undefined,
           undefined,
           input.requiredCapability,
         );
       }
-      // This timer must stay referenced: the caller is awaiting a mandatory
-      // owner-policy transition. Unref'ing it lets a short-lived SDK process
-      // exit with an unsettled connectKodaXRuntime() promise, stranding the
-      // profile in inline mode after the legacy daemon has already stopped.
-      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      const verification = await verifyRuntimeDaemonShutdown({
+        configHome: input.lease.paths.configHome,
+        profile: input.lease.paths.profile,
+        owner: management.owner,
+        timeoutMs: input.startupTimeoutMs,
+      });
+      if (verification.status !== "succeeded") {
+        const detail = verification.status === "unverified"
+          ? verification.reason
+          : verification.status;
+        throw new RuntimeDaemonCapabilityUpgradeError(
+          `The legacy Windows daemon accepted the upgrade stop, but its process-tree shutdown was not verified (${detail}). Stop it explicitly and retry.`,
+          undefined,
+          undefined,
+          input.requiredCapability,
+        );
+      }
+    } else {
+      const deadline = Date.now() + input.startupTimeoutMs;
+      while (
+        readRuntimeDaemonLockOwner(input.lease.paths.lockFile) !== undefined
+      ) {
+        if (Date.now() >= deadline) {
+          throw new RuntimeDaemonCapabilityUpgradeError(
+            "The legacy daemon accepted the upgrade stop but did not release its owner fence before timeout. Retry after the daemon exits.",
+            undefined,
+            undefined,
+            input.requiredCapability,
+          );
+        }
+        // This timer must stay referenced: the caller is awaiting a mandatory
+        // owner-policy transition. Unref'ing it lets a short-lived SDK process
+        // exit with an unsettled connectKodaXRuntime() promise, stranding the
+        // profile in inline mode after the legacy daemon has already stopped.
+        await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      }
     }
   } catch (error: unknown) {
+    if (process.platform === "win32") {
+      throw new RuntimeDaemonCapabilityUpgradeError(
+        "The legacy Windows daemon did not prove that its process tree stopped. Daemon ownership remains disabled; stop every legacy KodaX process, then call `enableKodaXDaemonOwner(...)` and retry.",
+        undefined,
+        { cause: error },
+        input.requiredCapability,
+      );
+    }
     try {
       // rollbackToInline changes durable owner policy before shutdown. Restore
       // daemon eligibility even when fence release times out so the documented
@@ -4645,6 +4723,12 @@ async function connectKodaXRuntimeInternal(
           ? {
             actorSettlementConvergence: 1 as const,
             managedRunDurability: 1 as const,
+            ...(process.platform === "win32"
+              ? {
+                  daemonShutdownVerification: 1 as const,
+                  sandboxRuntime: 2 as const,
+                }
+              : {}),
             runtimeAutoModeGuardrail: 4 as const,
             runtimeEventCoalescing: 1 as const,
             ...(options.daemonOrphanExitMs !== undefined
@@ -4675,12 +4759,16 @@ async function connectKodaXRuntimeInternal(
         version: requirements?.runtimeEventCoalescing,
       },
       {
-        name: "daemonOrphanExit",
-        version: requirements?.daemonOrphanExit,
-      },
-      {
         name: "daemonShutdownVerification",
         version: requirements?.daemonShutdownVerification,
+      },
+      {
+        name: "sandboxRuntime",
+        version: requirements?.sandboxRuntime,
+      },
+      {
+        name: "daemonOrphanExit",
+        version: requirements?.daemonOrphanExit,
       },
     ].find(
       (requirement): requirement is { name: string; version: number } =>

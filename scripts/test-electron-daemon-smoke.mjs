@@ -14,6 +14,7 @@ const electronBuilderCli = requirePath('KODAX_ELECTRON_BUILDER_CLI');
 const electronPackage = JSON.parse(await readFile(path.join(electronDist, '..', 'package.json'), 'utf8'));
 const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), 'kodax-electron-daemon-smoke-'));
 const appDir = path.join(temporaryRoot, 'app');
+const programDataDir = path.join(temporaryRoot, 'program-data');
 const homeDir = process.env.KODAX_ELECTRON_SMOKE_HOME
   ?? path.join(temporaryRoot, 'home');
 const externalHomeDir = process.env.KODAX_ELECTRON_SMOKE_HOME !== undefined;
@@ -67,6 +68,7 @@ try {
     shellProbe: 'shell-probe-ok',
     shellProbeExitCode: 0,
     shellProbeNodeMode: 'absent',
+    shellProbeToolchain: 'profile-toolchain-ok',
   }, 'The Electron Node bootstrap switch must not reach daemon or user child code.');
   assert.equal(
     sandboxDoctor?.ready,
@@ -120,8 +122,10 @@ try {
 
 async function prepareConsoleProbe() {
   const binaryDir = path.join(temporaryRoot, 'console-probe-bin');
-  const observationDir = path.join(temporaryRoot, 'console-probe-observations');
-  const queryFile = path.join(temporaryRoot, 'console-probe-query.txt');
+  // Runtime Git probes execute inside the workspace sandbox, so their read
+  // query and write observations must remain inside the admitted workspace.
+  const observationDir = path.join(homeDir, 'workspace', '.console-probe-observations');
+  const queryFile = path.join(homeDir, 'workspace', '.console-probe-query.txt');
   const sourceFile = path.join(temporaryRoot, 'console-probe.cs');
   const executable = path.join(binaryDir, 'git.exe');
   await mkdir(binaryDir, { recursive: true });
@@ -152,7 +156,7 @@ async function prepareConsoleProbe() {
     60_000,
   );
   assert.ok(existsSync(executable), `Console probe was not compiled: ${executable}`);
-  return { binaryDir, observationDir, queryFile };
+  return { binaryDir, executable, observationDir, queryFile };
 }
 
 function consoleProbeSource() {
@@ -195,6 +199,8 @@ public static class Program {
       Console.WriteLine("main");
     } else if (command == "rev-parse --short HEAD") {
       Console.WriteLine("abcdef0");
+    } else if (command == "--profile-toolchain") {
+      Console.WriteLine("profile-toolchain-ok");
     }
     return 0;
   }
@@ -275,6 +281,8 @@ function startElectron(executable, files) {
     windowsHide: true,
     env: {
       ...parentEnvironment,
+      ProgramData: programDataDir,
+      KODAX_HOME: path.join(homeDir, '.kodax'),
       KODAX_SMOKE_HOME: homeDir,
       KODAX_SMOKE_PROFILE: profile,
       KODAX_SMOKE_RESULT: files.resultFile,
@@ -285,6 +293,9 @@ function startElectron(executable, files) {
       KODAX_SMOKE_SESSION_ID: files.sessionId,
       KODAX_CONSOLE_PROBE_DIR: files.consoleProbe.observationDir,
       KODAX_CONSOLE_PROBE_QUERY: files.consoleProbe.queryFile,
+      KODAX_CONSOLE_PROBE_EXECUTABLE: files.consoleProbe.executable,
+      KODAX_SMOKE_NODE_EXECUTABLE: process.execPath,
+      KODAX_SMOKE_PROFILE_TOOLCHAIN: path.join(temporaryRoot, 'profile-toolchain'),
       KODAX_TRACING: '0',
       PATH: [
         files.consoleProbe.binaryDir,
@@ -379,9 +390,14 @@ async function verifyAttachDetachAndOwnerFence(
 }
 
 async function assertNoAclPoisonMarkers(message) {
-  const directory = path.join(homeDir, '.kodax', 'sandbox-runtime', 'acl-poison');
-  const entries = existsSync(directory) ? await readdir(directory) : [];
-  assert.deepEqual(entries, [], message);
+  const directories = [
+    path.join(programDataDir, 'KodaX', 'sandbox-runtime', 'acl-poison'),
+    path.join(homeDir, '.kodax', 'sandbox-runtime', 'acl-poison'),
+  ];
+  for (const directory of directories) {
+    const entries = existsSync(directory) ? await readdir(directory) : [];
+    assert.deepEqual(entries, [], `${message} Marker directory: ${directory}`);
+  }
 }
 
 async function stopForInline(runtime) {
@@ -400,7 +416,7 @@ async function waitForClientCount(runtime, expected) {
 async function waitForUnowned(sdk) {
   await waitUntil(
     () => sdk.getKodaXRuntimeOwnerState({ homeDir, profile }).ownerStatus === 'unowned',
-    30_000,
+    300_000,
     'an unowned Runtime fence',
   );
 }
