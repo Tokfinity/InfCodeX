@@ -219,6 +219,24 @@ describe('learning file lock stale recovery', () => {
     await expect(withLearningFileLock(lockPath, async () => 'acquired')).resolves.toBe('acquired');
   });
 
+  it('reclaims a stale lock when its PID was reused by a different process identity', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-store-lock-reused-pid-'));
+    tempDirs.push(root);
+    const lockPath = path.join(root, 'owner.lock');
+    const staleIdentity = Buffer.from('different-process-start', 'utf8').toString('base64url');
+    await writeFile(
+      lockPath,
+      `${process.pid} 55555555-5555-4555-8555-555555555555 identity=${staleIdentity}\n`,
+      'utf8',
+    );
+    const old = new Date(Date.now() - 60_000);
+    await utimes(lockPath, old, old);
+
+    const { withLearningFileLock } = await import('./store-lock.js');
+    await expect(withLearningFileLock(lockPath, async () => 'acquired', 250))
+      .resolves.toBe('acquired');
+  });
+
   it('treats a Windows access-shaped open failure as contention when the lock exists', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-store-lock-windows-contention-'));
     tempDirs.push(root);

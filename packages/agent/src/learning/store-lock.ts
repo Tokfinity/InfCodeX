@@ -12,12 +12,14 @@ import {
 import { dirname, join } from 'node:path';
 
 import { emitKodaXDiagnostic } from '../diagnostics.js';
+import { readProcessStartIdentity } from '../runtime/process-tree.js';
 
 const LOCK_ACQUIRE_TIMEOUT_MS = 5_000;
 const LOCK_POLL_MS = 10;
 const LOCK_STALE_MS = 30_000;
 const TICKET_NUMBER_WIDTH = 16;
 const LOCK_CLEANUP_ATTEMPTS = 8;
+const currentProcessStartIdentity = readProcessStartIdentity(process.pid);
 
 interface LockTicket {
   readonly queuePath: string;
@@ -116,7 +118,7 @@ async function acquireLock(
 async function createLockTicket(lockPath: string): Promise<LockTicket> {
   const queuePath = `${lockPath}.queue`;
   const token = randomUUID();
-  const raw = `${process.pid} ${token}\n`;
+  const raw = lockOwnerRecord(token);
   const choosingPath = join(queuePath, `choosing-${token}.lock`);
   await mkdir(queuePath, { recursive: true });
   await createOwnerFile(choosingPath, raw);
@@ -225,7 +227,7 @@ async function isAbandonedQueueEntry(entryPath: string): Promise<boolean> {
     const owner = parseOwner(await readFile(entryPath, 'utf8'));
     if (owner?.released === true) return true;
     if (Date.now() - snapshot.mtimeMs <= LOCK_STALE_MS) return false;
-    return owner === undefined || !isProcessAlive(owner.pid);
+    return owner === undefined || !isRecordedOwnerAlive(owner);
   } catch (error) {
     if (isFileError(error, 'ENOENT')) return false;
     if (['EPERM', 'EACCES', 'EBUSY'].some((code) => isFileError(error, code))) return false;
@@ -239,7 +241,7 @@ async function createLock(
   const handle = await open(lockPath, 'wx');
   const token = randomUUID();
   try {
-    await handle.writeFile(`${process.pid} ${token}\n`, 'utf8');
+    await handle.writeFile(lockOwnerRecord(token), 'utf8');
     return { handle, token };
   } catch (error) {
     await handle.close();
@@ -262,7 +264,7 @@ async function observeStaleLock(lockPath: string): Promise<ObservedStaleLock | u
     const explicitlyReleased = owner?.token !== undefined
       && await hasReleaseMarker(lockPath, owner.token);
     if (!explicitlyReleased && Date.now() - snapshot.mtimeMs <= LOCK_STALE_MS) return undefined;
-    return explicitlyReleased || (owner !== undefined && !isProcessAlive(owner.pid))
+    return explicitlyReleased || (owner !== undefined && !isRecordedOwnerAlive(owner))
       ? { raw, mtimeMs: snapshot.mtimeMs, size: snapshot.size }
       : undefined;
   } catch (error) {
@@ -381,16 +383,50 @@ function releaseMarkerPath(lockPath: string, token: string): string {
   return `${lockPath}.${token}.released`;
 }
 
-function parseOwner(
-  raw: string,
-): { readonly pid: number; readonly token?: string; readonly released: boolean } | undefined {
-  const match = /^(\d+)(?: ([0-9a-f-]+))?(?: (released))?\s*$/i.exec(raw);
-  if (!match) return undefined;
-  const pid = Number(match[1]);
+interface LockOwnerRecord {
+  readonly pid: number;
+  readonly token?: string;
+  readonly processStartIdentity?: string;
+  readonly released: boolean;
+}
+
+function lockOwnerRecord(token: string): string {
+  const encodedIdentity = currentProcessStartIdentity === undefined
+    ? ''
+    : ` identity=${Buffer.from(currentProcessStartIdentity).toString('base64url')}`;
+  return `${process.pid} ${token}${encodedIdentity}\n`;
+}
+
+function parseOwner(raw: string): LockOwnerRecord | undefined {
+  const fields = raw.trim().split(/\s+/);
+  const pid = Number(fields.shift());
   if (!Number.isSafeInteger(pid) || pid <= 0) return undefined;
-  return match[2] === undefined
-    ? { pid, released: match[3] !== undefined }
-    : { pid, token: match[2], released: match[3] !== undefined };
+  let token: string | undefined;
+  let processStartIdentity: string | undefined;
+  let released = false;
+  for (const field of fields) {
+    if (/^[0-9a-f-]+$/i.test(field) && token === undefined) {
+      token = field;
+      continue;
+    }
+    if (field.startsWith('identity=') && processStartIdentity === undefined) {
+      const encoded = field.slice('identity='.length);
+      if (!/^[A-Za-z0-9_-]+$/.test(encoded)) return undefined;
+      processStartIdentity = Buffer.from(encoded, 'base64url').toString('utf8');
+      continue;
+    }
+    if (field === 'released' && !released) {
+      released = true;
+      continue;
+    }
+    return undefined;
+  }
+  return {
+    pid,
+    ...(token === undefined ? {} : { token }),
+    ...(processStartIdentity === undefined ? {} : { processStartIdentity }),
+    released,
+  };
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -404,6 +440,13 @@ function isProcessAlive(pid: number): boolean {
 
 function isFileError(error: unknown, code: string): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === code;
+}
+
+function isRecordedOwnerAlive(owner: LockOwnerRecord): boolean {
+  if (!isProcessAlive(owner.pid)) return false;
+  if (owner.processStartIdentity === undefined) return true;
+  const currentIdentity = readProcessStartIdentity(owner.pid);
+  return currentIdentity === undefined || currentIdentity === owner.processStartIdentity;
 }
 
 function isTransientFileContention(error: unknown): boolean {
