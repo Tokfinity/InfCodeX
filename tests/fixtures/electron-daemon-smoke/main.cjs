@@ -197,7 +197,7 @@ import { writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { KodaXBaseProvider } from ${JSON.stringify(llmUrl)};
 import { toolBash } from ${JSON.stringify(codingUrl)};
-import { doctorKodaXSandbox, runKodaXSandboxed, setupKodaXSandbox } from ${JSON.stringify(sandboxUrl)};
+import { doctorKodaXSandbox, runKodaXSandboxed } from ${JSON.stringify(sandboxUrl)};
 
 class WindowsHideSmokeProvider extends KodaXBaseProvider {
   name = 'windows-hide-smoke';
@@ -287,21 +287,6 @@ const shellProbeExitCode =
     : null;
 const shellProbeOutput = shellProbeLines.slice(shellProbeExitIndex + 1);
 let sandboxDoctor = await doctorKodaXSandbox({ refresh: true });
-if (
-  !sandboxDoctor.ready
-  && (
-    (
-      sandboxDoctor.diagnostics.length > 0
-      && sandboxDoctor.diagnostics.every((diagnostic) => diagnostic.includes('[acl_guards_missing]'))
-    )
-    || (
-      sandboxDoctor.setupRequired
-      && process.env.KODAX_ELECTRON_SMOKE_AUTO_SETUP === '1'
-    )
-  )
-) {
-  sandboxDoctor = await setupKodaXSandbox();
-}
 const directSandboxProbe = sandboxDoctor.ready
   ? await runKodaXSandboxed({
       command: process.execPath,

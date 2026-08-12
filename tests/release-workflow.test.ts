@@ -10,7 +10,6 @@ interface WorkflowStep {
   readonly uses?: string;
   readonly id?: string;
   readonly if?: string;
-  readonly env?: Readonly<Record<string, unknown>>;
   readonly with?: Readonly<Record<string, unknown>>;
 }
 
@@ -63,8 +62,8 @@ describe('GitHub release workflow', () => {
       .toBe('npm run test:electron-daemon:built');
     expect(steps.find((step) => step.name === 'Provision Windows sandbox for packaged Electron release gate')?.run)
       .toContain('installWindowsSandbox');
-    expect(steps.find((step) => step.name === 'Packaged Electron daemon release gate')?.env)
-      .toMatchObject({ KODAX_ELECTRON_SMOKE_AUTO_SETUP: '1' });
+    expect(steps.find((step) => step.name === 'Prepare Windows sandbox ACL guards for packaged Electron release gate')?.run)
+      .toBe('node scripts/prepare-windows-electron-sandbox.mjs');
     expect(steps.find((step) => step.name?.startsWith('Build binary'))?.run)
       .toContain('--skip-tsc');
   });
@@ -94,6 +93,7 @@ describe('GitHub release workflow', () => {
       const install = steps.find((step) => step.name === 'Install packaged Electron smoke toolchain');
       const ensureBinary = steps.find((step) => step.name === 'Ensure packaged Electron binary');
       const provision = steps.find((step) => step.name?.startsWith('Provision Windows sandbox'));
+      const prepare = steps.find((step) => step.name?.startsWith('Prepare Windows sandbox'));
       expect(cache).toMatchObject({
         uses: 'actions/cache@v5',
         id: 'electron-smoke-cache',
@@ -102,15 +102,8 @@ describe('GitHub release workflow', () => {
       expect(install?.if).toContain("steps.electron-smoke-cache.outputs.cache-hit != 'true'");
       expect(ensureBinary?.run).toBe('node .electron-smoke/node_modules/electron/install.js');
       expect(provision?.run).toContain('installWindowsSandbox');
+      expect(prepare?.run).toBe('node scripts/prepare-windows-electron-sandbox.mjs');
     }
   });
 
-  it('opts the packaged smoke gate into sandbox setup on fresh Windows runners', () => {
-    const source = readFileSync(resolve('.github/workflows/ci.yml'), 'utf8');
-    const workflow = parse(source) as ReleaseWorkflow;
-    const step = workflow.jobs?.['packaged-electron-daemon']?.steps
-      ?.find((candidate) => candidate.name === 'Packaged Electron daemon gate');
-
-    expect(step?.env).toMatchObject({ KODAX_ELECTRON_SMOKE_AUTO_SETUP: '1' });
-  });
 });

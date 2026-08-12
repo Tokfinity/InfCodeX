@@ -199,12 +199,17 @@ jobs:
           const result = installWindowsSandbox();
           if (result.cancelled || !result.user.provisioned) throw new Error('Windows sandbox provisioning did not complete.');"
 
+      - name: Build packaged Electron gate inputs
+        run: npm run build
+
+      - name: Prepare Windows sandbox ACL guards for packaged Electron gate
+        run: node scripts/prepare-windows-electron-sandbox.mjs
+
       - name: Packaged Electron daemon gate
         env:
           KODAX_ELECTRON_DIST: ${{ github.workspace }}\.electron-smoke\node_modules\electron\dist
           KODAX_ELECTRON_BUILDER_CLI: ${{ github.workspace }}\.electron-smoke\node_modules\electron-builder\out\cli\cli.js
-          KODAX_ELECTRON_SMOKE_AUTO_SETUP: '1'
-        run: npm run test:electron-daemon
+        run: node scripts/test-electron-daemon-smoke.mjs
 
   shell-contract-windows:
     name: shell execution contract (Windows)

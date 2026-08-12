@@ -121,12 +121,15 @@ jobs:
         if: steps.filter.outputs.skip == 'false'
         run: npm run build
 
+      - name: Prepare Windows sandbox ACL guards for packaged Electron release gate
+        if: steps.filter.outputs.skip == 'false' && matrix.target == 'win-x64'
+        run: node scripts/prepare-windows-electron-sandbox.mjs
+
       - name: Packaged Electron daemon release gate
         if: steps.filter.outputs.skip == 'false' && matrix.target == 'win-x64'
         env:
           KODAX_ELECTRON_DIST: ${{ github.workspace }}\.electron-smoke\node_modules\electron\dist
           KODAX_ELECTRON_BUILDER_CLI: ${{ github.workspace }}\.electron-smoke\node_modules\electron-builder\out\cli\cli.js
-          KODAX_ELECTRON_SMOKE_AUTO_SETUP: '1'
         run: npm run test:electron-daemon:built
 
       - name: Build binary (${{ matrix.target }})
