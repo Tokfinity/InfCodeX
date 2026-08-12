@@ -81,6 +81,66 @@ version smoke is:
 dist/binary/linux-x64/kodax --version
 ```
 
+## v0.7.86 release preparation
+
+Release state: the root package, all four workspace packages, and every
+`package-lock.json` workspace entry must be version `0.7.86`. This release is
+prepared for the `v0.7.86` tag and GitHub Release; npm publication remains a
+separate manual operator step. It is a non-Feature hardening release and
+includes all commits after `v0.7.85`, including:
+
+- atomic recovery of abandoned inline Runtime owner fences (Issue 291), with
+  retryable close failures and fail-closed handling for ambiguous owners;
+- process-start identities in Runtime owner records and learning-file locks,
+  preventing PID reuse from preserving stale ownership;
+- Windows sandbox lifecycle attestation, termination-proof-before-recovery,
+  durable ACL owner markers, cross-profile recovery locking, and no-replay
+  behavior when a Shell effect is not proven drained;
+- explicit aggregation of spawn, lease-release, and sandbox-cleanup failures,
+  with lifecycle safety diagnostics and retained recovery evidence;
+- packaged Electron sandbox probes and regression coverage for all of the above.
+
+These include intentional Runtime, agent, coding, and sandbox system-code
+changes; they are not test-only or release-process changes. Issue 256 remains
+Open: the Worker owner-lease portion needed to prove descendant closure after
+an intermediate parent exits is not included in this release and is explicitly
+rescheduled to `v0.7.87`.
+
+Before tagging, all of the following must be true:
+
+1. version metadata, changelog, README/README_CN, PRD/HLD/DD/ADR, feature
+   tracker, known-issue record, this checklist, public SDK/package guides,
+   `docs/features`, and `kodax_manual` agree on the v0.7.86 contract;
+2. no incomplete Feature or known High release blocker is presented as
+   shipped; Issue 256 remains explicitly Open and outside this release scope;
+3. both the root repository and `docs/features` submodule are clean, and the
+   parent points to a submodule commit reachable from its remote;
+4. the exact release commit passes the deterministic gate:
+
+   ```bash
+   npm ci
+   npm run config:templates:check
+   npm run build:packages
+   npm run build:bundle
+   npm run build:dts
+   npm run test:full
+   npm run test:electron-daemon:built
+   node scripts/release.mjs --pack-only
+   ```
+
+5. focused checks pass for Issue 291, Windows sandbox lifecycle/ACL behavior,
+   Runtime owner recovery, process-start identity locks, `kodax_manual`, and
+   the packaged Electron fixture;
+6. the exact `kodax-ai-kodax-0.7.86.tgz` is hashed, inspected, and installed
+   into an empty consumer that imports the root plus all 12 SDK subpaths;
+7. GitHub `CI` is green for the exact commit on Node 20/22, Unix Runtime
+   socket, Windows Shell Contract, and packaged Electron jobs;
+8. the tag-triggered release workflow is green and the GitHub Release contains
+   all five archives plus `SHA256SUMS`. npm publication is left to the
+   maintainer.
+
+Only after these gates pass may the exact commit be tagged `v0.7.86`.
+
 ## v0.7.85 release preparation
 
 Release state: the root package, all four workspace packages, and every

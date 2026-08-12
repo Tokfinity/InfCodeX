@@ -14,7 +14,7 @@ _Last Updated: 2026-08-12_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
-| 291 | High | Resolved | Crashed inline Runtime owner leaves daemon startup permanently fenced | v0.7.69 owner-policy fencing | Unreleased | 2026-08-11 | 2026-08-11 |
+| 291 | High | Resolved | Crashed inline Runtime owner leaves daemon startup permanently fenced | v0.7.69 owner-policy fencing | v0.7.86 release | 2026-08-11 | 2026-08-11 |
 | 290 | Medium | Resolved | Mixed-case custom provider aliases lose model autocomplete | custom provider model completion | v0.7.85 release | 2026-08-10 | 2026-08-10 |
 | 289 | High | Resolved | Windows workspace sandbox recursively stamped broad home and temp ACLs in the shell timeout | v0.7.85 Agent Home shell hardening | v0.7.85 release | 2026-08-10 | 2026-08-10 |
 | 288 | Medium | Resolved | Repo-intelligence warm Worker retained its peak memory after cache construction | v0.7.41 startup prewarm | v0.7.85 release | 2026-08-10 | 2026-08-10 |
@@ -49,7 +49,7 @@ _Last Updated: 2026-08-12_
 | 259 | Medium | Resolved | REPL startup persists zero-message sessions before the first prompt | v0.7.72 Runtime REPL bridge | v0.7.79 development | 2026-08-02 | 2026-08-02 |
 | 258 | Medium | Resolved | TodoList content and labels can ignore the query and UI locale | v0.7.79 development | v0.7.79 development | 2026-08-01 | 2026-08-01 |
 | 257 | High | Resolved | Legacy compaction copies cannot be safely folded by hosts | legacy compaction/resume persistence | v0.7.79 development | 2026-08-01 | 2026-08-01 |
-| 256 | High | Open | Windows child containment cannot prove descendant closure after an intermediate parent exits | Windows LLM, MCP, daemon-startup, and Worker-owned child processes | v0.7.86 (scheduled) | 2026-08-01 | - |
+| 256 | High | Open | Windows child containment cannot prove descendant closure after an intermediate parent exits | Windows LLM, MCP, daemon-startup, and Worker-owned child processes | v0.7.86 partial mitigation; v0.7.87 closure target | 2026-08-01 | - |
 | 255 | High | Resolved | Runtime teardown and cancellation could report completion across indeterminate lifecycle boundaries | Runtime SDK lifecycle and daemon protocol | v0.7.79 development | 2026-08-01 | 2026-08-01 |
 | 254 | High | Resolved | First v0.7.78 Session reconciliation replays historical messages as new lineage entries | v0.7.78 lineage reconciliation | v0.7.79 development | 2026-07-31 | 2026-07-31 |
 | 253 | Medium | Resolved | Parallel quality-strategy admissions conflict on unrelated Actor progress | v0.7.77 quality-strategy admission | v0.7.79 development | 2026-07-31 | 2026-07-31 |
@@ -2609,7 +2609,7 @@ show duplicates or silently delete real user input.
 - **Priority**: High
 - **Status**: Open
 - **Introduced**: Windows LLM, MCP, daemon-startup, and Worker-owned child processes
-- **Fixed**: v0.7.86 (scheduled)
+- **Fixed**: v0.7.86 (partial mitigation; remaining closure scheduled for v0.7.87)
 - **Created**: 2026-08-01
 - **Resolved**: -
 
@@ -2697,6 +2697,19 @@ optimization, but it does not add the outstanding Worker owner lease required
 to prove descendant closure after an intermediate parent exits. Issue 256
 remains Open and is explicitly rescheduled to v0.7.86; this release makes no
 stronger containment claim.
+
+#### 2026-08-12 v0.7.86 release disposition
+
+The v0.7.86 release adds durable Windows ACL owner markers, serialized recovery
+across Runtime profiles, process-tree termination attestation before ACL
+recovery, and fail-closed no-replay behavior when Shell effects are not proven
+drained. It also adds process-start identity to Runtime and learning locks and
+resolves Issue 291's abandoned-inline-owner recovery boundary.
+
+These slices narrow the observable and per-effect risks but do not add the
+host-issued Worker owner lease required to prove descendant closure after an
+intermediate parent exits. Issue 256 remains Open and its remaining closure
+work is scheduled for v0.7.87.
 
 ### 255: Runtime teardown and cancellation could report completion across indeterminate lifecycle boundaries
 
@@ -12253,13 +12266,13 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 171 (27 Open, 144 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 171 (26 Open, 145 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
 
-### 2026-08-11: Issue 291 resolved in source (Unreleased)
+### 2026-08-12: Issue 291 resolved (v0.7.86)
 - Atomically recovered only provably dead inline owner fences during daemon
   enable and made inline close failures visible and retryable.
 

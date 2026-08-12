@@ -1,9 +1,9 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-08-11
+> Last updated: 2026-08-12
 >
-> Current published baseline: `v0.7.85`
-> (`@kodax-ai/kodax@0.7.85`; npm publication remains manual)
+> Current published baseline: `v0.7.86`
+> (`@kodax-ai/kodax@0.7.86`; npm publication remains manual)
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -20,7 +20,8 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The published package is `@kodax-ai/kodax@0.7.85`. This release establishes
+The published package is `@kodax-ai/kodax@0.7.86`. The v0.7.85 release
+established
 controller-wide bounded Actor progress
 persistence, queue-aware terminal deadlines, root fail-closed fencing, and
 automatic same-owner settlement recovery after an unknown durability boundary.
@@ -41,7 +42,15 @@ durable cleanup outcome, while the `daemonShutdownVerification:1` capability
 lets hosts require it. Legacy daemons are deliberately not upgraded in place
 for this contract. The patch retains v0.7.82's causality and input-admission
 contracts; FEATURE_287 remains planned for v0.7.93 and the Worker owner-lease
-portion of Issue 256 remains scheduled for v0.7.86.
+portion of Issue 256 remains open and is scheduled for v0.7.87.
+
+The v0.7.86 hardening adds atomic abandoned-inline-owner recovery, process-start
+identity records for Runtime and learning locks, and a Windows sandbox owner
+protocol. Sandbox effects acquire one durable owner marker per KodaX home,
+serialize recovery across Runtime profiles, wait for process-tree termination
+proof before ACL recovery, and fence later filesystem effects when attestation
+is missing. Spawn, lease-release, and cleanup failures are preserved together
+as lifecycle safety errors instead of being collapsed or triggering a replay.
 
 The same release implements Session-scoped event journals and cursor-bound
 replay, the F289/F290 Memory review and lesson pipelines, and F292's

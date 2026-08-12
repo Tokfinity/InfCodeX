@@ -6,6 +6,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+No changes yet.
+
+---
+
+## [0.7.86] - 2026-08-12
+
+> Git tag and GitHub Release are created by the release workflow. npm
+> publication remains a separate manual operator step.
+
 ### Fixed
 
 - Packaged Electron hosts on Windows now keep Electron's Node bootstrap mode
@@ -14,12 +23,19 @@ All notable changes to this project will be documented in this file.
   workspace sessions are retired, stale ACLs are recovered before startup and
   after each sandbox owner exits, and an execution with missing attestation is
   reported without replaying a possibly side-effecting command.
-- `enableKodaXDaemonOwner()` now atomically recovers only a provably abandoned
-  inline owner fence before restoring daemon policy. Live, unreadable,
-  legacy-kind, daemon-kind, and unverifiable owners remain fail-closed.
-- Runtime owner records now retain an OS process-start identity to distinguish
-  stale locks from PID reuse, and inline-owner `close()` reports a failed
-  release without making the handle impossible to retry.
+- Sandbox stop now waits for process-tree termination proof before ACL recovery;
+  undrained Shell effects and spawn/cleanup failure combinations are reported as
+  lifecycle safety errors. Windows ACL owner markers enforce one active sandbox
+  owner per KodaX home, and crash recovery is serialized across Runtime profiles.
+- Inline Runtime owner recovery now removes only a provably abandoned inline
+  owner fence before restoring daemon policy. Live, unreadable, legacy-kind,
+  daemon-kind, and unverifiable owners remain fail-closed, while a failed
+  inline-owner release remains retryable.
+- Runtime owner records and learning-file locks now retain an OS process-start
+  identity, so a reused PID cannot keep stale ownership alive.
+- Windows sandbox lifecycle failures now wait for termination proof, preserve
+  cleanup evidence, fence later filesystem effects, and never replay a command
+  whose effect process was not proven drained.
 
 ---
 

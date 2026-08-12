@@ -117,7 +117,7 @@ already-aborted signal before starting further work.
 Windows process-tree cleanup now identity-checks observed roots and descendants
 and returns an indeterminate outcome when evidence is incomplete. Snapshot
 ancestry is not kernel containment, however; Issue 256 remains open. The
-remaining Worker owner-lease boundary is scheduled for v0.7.86; v0.7.85's
+remaining Worker owner-lease boundary is scheduled for v0.7.87; v0.7.85's
 daemon/per-effect Job containment does not claim descendant closure after an
 intermediate parent exits.
 
@@ -128,7 +128,11 @@ kernel boundary instead of synchronous per-child tree hooks. The SDK's
 `waitForRuntimeDaemonShutdown()` and `daemonShutdownVerification:1` make the
 durable cleanup plus daemon/supervisor exits explicit. Legacy uncontained
 daemons remain fail-closed and must be relaunched; Worker owner leasing for the
-rest of Issue 256 remains open and is scheduled for v0.7.86.
+rest of Issue 256 remains open and is scheduled for v0.7.87.
+
+The v0.7.86 release adds process-start identities to Runtime owner and learning
+lock records, so PID reuse cannot preserve stale ownership. Abandoned inline
+owner recovery remains atomic and ambiguous owners remain fail-closed.
 
 The v0.7.84 release adds Issue 282 settlement recovery. Agent progress
 persistence is bounded to one in-flight write plus one latest replacement;

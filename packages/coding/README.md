@@ -103,7 +103,7 @@ and both daemon and supervisor exit, while `daemonShutdownVerification:1`
 allows hosts to require the contract. Legacy daemons are not silently upgraded
 in place. `kodax_manual` carries the same shutdown and migration rules; the
 remaining Worker owner-lease portion of Issue 256 stays open and is scheduled
-for v0.7.86.
+for v0.7.87.
 
 The v0.7.84 release carries the Issue 282 Actor settlement-recovery hardening:
 progress persistence is bounded to one in-flight write plus one latest
@@ -120,6 +120,13 @@ without replaying complete event journals unless queued input requires it; the
 semantic repo-intelligence Worker retires after its idle warm-cache window.
 These are intentional coding/Runtime system-code changes covered by the
 release regression guides.
+
+The v0.7.86 release hardens Windows sandbox lifecycle handling: ACL owner
+markers are durable and cross-profile recovery is serialized; stop waits for
+termination proof before ACL recovery; combined cleanup failures remain
+observable; and a Shell command is never replayed when its effect process tree
+was not proven drained. The remaining Worker owner-lease portion of Issue 256
+is still open and scheduled for v0.7.87.
 
 ## 安装 / 导入
 

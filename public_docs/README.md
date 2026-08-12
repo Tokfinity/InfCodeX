@@ -2,10 +2,13 @@
 
 Public documentation for KodaX users and SDK integrators.
 
-The current release is `v0.7.85`. Its SDK guidance covers Session-scoped
+The current release is `v0.7.86`. Its SDK guidance covers atomic Runtime owner
+recovery, process-start identity locks, Windows sandbox termination attestation,
+and durable ACL owner markers, in addition to the v0.7.85 Session-scoped
 Runtime Event Journals, the `sessionEventJournal:1` daemon contract,
 conversation-first Memory management, the additive experimental Memory
-management facade, and the v0.7.85 startup/Worker lifecycle boundaries.
+management facade, and the startup/Worker lifecycle boundaries. Issue 256's
+remaining Worker owner-lease boundary is still open and scheduled for v0.7.87.
 
 ## Getting Started
 

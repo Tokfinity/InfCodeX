@@ -1,9 +1,9 @@
 # KodaX High-Level Design
 
-> Last updated: 2026-08-11
+> Last updated: 2026-08-12
 >
-> Current published baseline: `v0.7.85`
-> (`@kodax-ai/kodax@0.7.85`; npm publication remains manual)
+> Current published baseline: `v0.7.86`
+> (`@kodax-ai/kodax@0.7.86`; npm publication remains manual)
 >
 > This HLD is intentionally current-state only. The old pre-v0.7.43
 > chain/harness model has been removed from this active design document because
@@ -94,6 +94,15 @@ reviewable. F289/F290 drain and lesson pipelines are bounded and observable;
 the experimental SDK adds only the management facade supported by the supplied
 controller.
 
+The v0.7.86 hardening layer makes Runtime owner recovery atomic and
+fail-closed: inline fences are removed only when process identity is proven
+dead, and owner/learning locks carry an OS process-start identity so PID reuse
+cannot preserve stale ownership. Windows sandbox effects now require a
+termination proof before ACL recovery; durable owner markers and a shared
+recovery lock serialize one active sandbox owner per KodaX home across Runtime
+profiles. Missing termination proof fences later filesystem effects and never
+replays a possibly side-effecting command.
+
 ## 2. Layering
 
 ```text
@@ -176,9 +185,10 @@ metafile.
 Windows descendant cleanup is identity-checked and exposes observable
 uncertainty instead of bare-PID success. Its current Toolhelp/CIM snapshot model
 is still observation rather than containment: a descendant can become
-unreachable after an intermediate parent exits. Issue 256 is scheduled for
-v0.7.84, when spawn-time Job Object assignment and an independently
-invalidatable Worker owner lease provide the missing closure guarantee.
+ unreachable after an intermediate parent exits. Issue 256 is scheduled for
+v0.7.87, when the remaining host-issued Worker owner lease is targeted for the
+missing closure guarantee. The v0.7.86 daemon/per-effect Job and sandbox owner
+attestation slices narrow the risk but do not close that Worker-owned boundary.
 
 The same published worker preserves Sidecar terminal meaning end to end:
 optional post-completion offers remain successful, required clarification can

@@ -184,6 +184,16 @@ describe('FEATURE_218 manual registry', () => {
     expect(sdk).toContain('MemoryManagementAgent');
   });
 
+  it('documents the v0.7.86 ownership and sandbox lifecycle boundaries', () => {
+    const sdk = resolveKodaXManual({ topic: 'sdk' }).content;
+
+    expect(sdk).toContain('Since v0.7.86');
+    expect(sdk).toContain('process-start identity');
+    expect(sdk).toContain('termination proof before ACL recovery');
+    expect(sdk).toContain('never replays the command');
+    expect(sdk).toContain('scheduled for v0.7.87');
+  });
+
   it('documents the v0.7.78 evidence-gated background Skill learning boundary', () => {
     const content = resolveKodaXManual({ topic: 'skills' }).content;
 

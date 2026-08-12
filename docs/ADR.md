@@ -1,6 +1,16 @@
 # KodaX Architecture Decision Records
 
-> Last updated: 2026-08-11
+> Last updated: 2026-08-12
+>
+> **v0.7.86 release addendum:** Runtime owner recovery is atomic and
+> fail-closed: only a provably abandoned inline owner fence may be removed,
+> and Runtime/learning lock records carry process-start identity to prevent PID
+> reuse from preserving stale ownership. Windows sandbox effects wait for
+> termination proof before ACL recovery, serialize durable owner markers across
+> Runtime profiles, and fence later filesystem effects when attestation is
+> missing. Lifecycle failures remain observable and are never replayed.
+> Issue 256 remains open; the Worker owner-lease portion is scheduled for
+> v0.7.87.
 >
 > **v0.7.85 release addendum:** the Runtime event authority is now one
 > journal per Session, with `{ sessionId, journalEpoch, seq }` cursors and
@@ -13,7 +23,7 @@
 > the experimental SDK. Terminal startup trusts authoritative terminal status
 > without replaying complete journals unless queued input needs reconciliation;
 > idle semantic Workers retire after their warm-cache window. Issue 256 remains
-> open and its Worker owner-lease portion is scheduled for v0.7.86.
+> open and its Worker owner-lease portion is scheduled for v0.7.87.
 >
 > **v0.7.85 Issue 282 convergence addendum:** progress batching is owned by one
 > Actor controller tree, and terminal persistence receives its own ambiguity

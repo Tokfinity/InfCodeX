@@ -1,9 +1,9 @@
 # KodaX Product Requirements
 
-> Last updated: 2026-08-11
+> Last updated: 2026-08-12
 >
-> Current implementation baseline: `v0.7.85` release
-> (`@kodax-ai/kodax@0.7.85` workspace package; npm publication remains manual)
+> Current implementation baseline: `v0.7.86` release
+> (`@kodax-ai/kodax@0.7.86` workspace package; npm publication remains manual)
 >
 > This document describes the current product. Historical pre-v0.7.43
 > chain/harness designs have been removed from this current PRD because they no
@@ -29,7 +29,8 @@ before daemon application code runs. The daemon is placed in a kill-on-close Job
 Object, and shutdown is considered verified only after the durable cleanup
 outcome, daemon exit, and containment-supervisor exit are all observed. The
 broader Worker owner-lease boundary tracked by Issue 256 remains planned for
-v0.7.86; the v0.7.85 daemon and per-effect Job boundaries do not claim to close
+v0.7.87; the v0.7.86 daemon, per-effect Job, ACL-owner, and termination-
+attestation boundaries do not claim to close
 that remaining Worker-owned descendant gap.
 
 The v0.7.84 Runtime also bounds Agent progress persistence to one in-flight
@@ -43,6 +44,11 @@ lesson/verdict production, and the additive `MemoryManagementAgent` SDK facade.
 It also carries Agent Home and learned-root guardrails, terminal startup replay
 avoidance, idle repo-intelligence Worker retirement, and the corresponding
 cross-layer regression coverage.
+
+The v0.7.86 hardening baseline adds atomic abandoned-inline-owner recovery,
+process-start identity checks for ownership locks, Windows sandbox termination
+attestation, durable ACL owner markers, cross-profile recovery serialization,
+and fail-closed no-replay behavior when Shell effects are not proven drained.
 
 ## 2. Target Users
 

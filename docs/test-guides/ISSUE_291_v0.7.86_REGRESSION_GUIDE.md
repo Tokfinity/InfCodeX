@@ -1,4 +1,6 @@
-# Issue 291 — Inline Owner Crash Recovery Regression Guide
+# Issue 291 — v0.7.86 Inline Owner Crash Recovery Regression Guide
+
+> Release: `v0.7.86`
 
 ## Automated gates
 

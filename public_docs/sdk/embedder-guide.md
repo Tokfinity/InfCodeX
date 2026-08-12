@@ -2683,7 +2683,7 @@ relaunch it before requiring the capability. The CLI's `kodax daemon stop
 --json` follows the same daemon-plus-supervisor boundary.
 
 The daemon-owned slice does not close the Worker-owned child lifetime gap in
-Issue 256; that owner-lease work remains open and is scheduled for v0.7.86. Worker and
+Issue 256; that owner-lease work remains open and is scheduled for v0.7.87. Worker and
 executor cleanup still use identity-checked evidence and fail closed when a
 descendant cannot be proven gone.
 
@@ -2722,6 +2722,20 @@ supplied controller supports it. Terminal Runs with authoritative status and
 no queued interrupt input are restored at startup without replaying complete
 event journals. The semantic repo-intelligence Worker retires after its idle
 warm-cache window, while later cache misses start a fresh Worker.
+
+### v0.7.86 Runtime ownership and sandbox lifecycle boundaries
+
+The v0.7.86 SDK hardens ownership and sandbox cleanup without weakening the
+fail-closed contract. Inline daemon-enable recovery removes only a provably
+abandoned inline owner fence; live, malformed, legacy, and ambiguous owners
+remain untouched. Runtime owner and learning-file lock records include an OS
+process-start identity, so PID reuse cannot preserve stale ownership.
+
+On Windows, sandbox ACL owner markers are durable and recovery is serialized
+across Runtime profiles. A sandbox stop waits for process-tree termination proof
+before ACL recovery. Missing attestation fences later filesystem effects and
+does not replay the command; spawn, lease-release, and cleanup failures remain
+combined in the lifecycle diagnostic for operator recovery.
 
 `homeDir` and `KODAX_HOME` deliberately name different levels. Runtime SDK and
 CLI daemon `--home` accept the **base directory that contains `.kodax`**;

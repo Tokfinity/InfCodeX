@@ -11,8 +11,8 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.85` (Git tag / GitHub Release) |
-| Current package version | `@kodax-ai/kodax@0.7.85` release (npm publication remains manual) |
+| Current released version | `v0.7.86` (Git tag / GitHub Release) |
+| Current package version | `@kodax-ai/kodax@0.7.86` release (npm publication remains manual) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `76` |
 | InProgress | `1` |
@@ -28,7 +28,7 @@
 |---|---:|---|---|
 | Completed | 53 | `292, 291, 290, 289, 286, 284, 281, 277, 276, 263, 275, 274, 273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `292`, `291`, `290`, and `289` shipped in v0.7.85; `286`, `284`, and `281` shipped in v0.7.79. npm publication remains manual. |
 | InProgress | 1 | `225` | `225` remains the bounded v0.8.15 cleanup (moved from v0.7.105 on 2026-08-08). |
-| Planned, near-term | 0 | `-` | `v0.7.85` release scope is complete; remaining open work is tracked as issues or later roadmap features. |
+| Planned, near-term | 0 | `-` | `v0.7.86` release scope is complete; remaining open work is tracked as issues or later roadmap features. |
 | Planned, 0.8.x | 10 | `278, 279, 282, 283, 285, 280, 287, 288, 265, 105` | `v0.8.0` -> `v0.8.1` -> `v0.8.3` -> `v0.8.4` -> `v0.8.5` -> `v0.8.10` -> `v0.8.15` |
 | Planned, 0.9.x | 6 | `007, 030, 093, 113, 139, 262` | `v0.9.0` -> `v0.9.5` -> `v0.9.7` -> `v0.9.25` |
 | Reviewed out, 2026-07-12 | 6 | `244, 231, 235, 238, 232, 108` | Shelved, deferred, absorbed, or cancelled after the post-v0.7.70 roadmap review; F105 was restored by the 2026-07-29 MoA redesign. |
@@ -540,6 +540,21 @@ The completed F281 human verification is
 [FEATURE_281_v0.7.79_TEST_GUIDE](test-guides/FEATURE_281_v0.7.79_TEST_GUIDE.md).
 The completed F284 Qwen Token Plan verification is
 [FEATURE_284_v0.7.79_TEST_GUIDE](test-guides/FEATURE_284_v0.7.79_TEST_GUIDE.md).
+
+---
+
+## v0.7.86 Release Record
+
+`v0.7.86` is a non-Feature Runtime and Windows sandbox hardening release. It
+adds atomic abandoned-inline-owner recovery, process-start identity records for
+Runtime and learning locks, durable Windows ACL owner markers, cross-profile
+recovery serialization, termination-proof-before-ACL-recovery, combined
+lifecycle diagnostics, and fail-closed no-replay behavior when Shell effects
+are not proven drained. Issue 291 is resolved by the inline-owner recovery
+slice. Issue 256 remains Open: its Worker owner-lease portion is not included
+and is scheduled for `v0.7.87`.
+
+The release checklist is [docs/release.md](release.md#v0786-release-preparation).
 
 ---
 

@@ -656,6 +656,16 @@ changes. Issue 256's remaining Worker owner-lease boundary is still open and
 is scheduled for v0.7.86; this release does not claim descendant-closure proof
 for that unresolved portion. See the [v0.7.85 release checklist](docs/release.md#v0785-release-preparation).
 
+**v0.7.86 hardening release:** this patch release adds atomic recovery for
+abandoned inline Runtime owners, process-start identity checks for Runtime and
+learning locks, and Windows sandbox lifecycle attestation. Sandbox ACL owner
+markers are durable and serialized across Runtime profiles; stop waits for
+termination proof before ACL recovery, preserves combined cleanup failures, and
+fences later filesystem effects instead of replaying a command whose process
+tree was not proven drained. Issue 256's remaining Worker owner-lease boundary
+stays open and is scheduled for v0.7.87. See the
+[v0.7.86 release checklist](docs/release.md#v0786-release-preparation).
+
 The v0.7.77 release also adds an opt-in, host-configurable Shell Execution Contract.
 Runtime Session settings or an individual Run can select `pwsh`, Windows
 PowerShell, `cmd`, `bash`, `zsh`, or an explicit Git Bash executable; KodaX
