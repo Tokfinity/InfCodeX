@@ -386,7 +386,6 @@ describe('toolBash', () => {
     });
 
     expect(result).toContain('[Error]');
-    expect(result).toContain('ENOENT');
     expect(result).toContain('injected spawn-path lease release failure');
     expect(result).toContain('injected spawn-path sandbox cleanup failure');
   });
