@@ -1263,25 +1263,42 @@ describe('toolBash', () => {
     const controller = new AbortController();
     const command = 'node -e "process.stdout.write(\'partial-stdout\\n\'); process.stderr.write(\'partial-stderr\\n\'); setTimeout(() => console.log(\'ready-to-abort\'), 150); setInterval(() => {}, 1000)"';
     let aborted = false;
+    const recoveryPaths: string[] = [];
 
-    const result = await toolBash({ command, timeout: 60 }, {
-      backups: new Map(),
-      executionCwd: tempDir,
-      abortSignal: controller.signal,
-      reportToolProgress: (progress) => {
-        if (!aborted && progress.includes('ready-to-abort')) {
-          aborted = true;
-          controller.abort();
-        }
-      },
-    });
+    try {
+      const result = await toolBash({ command, timeout: 60 }, {
+        backups: new Map(),
+        executionCwd: tempDir,
+        abortSignal: controller.signal,
+        reportToolProgress: (progress) => {
+          if (!aborted && progress.includes('ready-to-abort')) {
+            aborted = true;
+            controller.abort();
+          }
+        },
+      });
 
-    expect(aborted).toBe(true);
-    expect(result).toContain('[Cancelled] Operation cancelled by user');
-    expect(result).toContain('Partial output:');
-    expect(result).toContain('partial-stdout');
-    expect(result).toContain('[stderr]');
-    expect(result).toContain('partial-stderr');
+      expect(aborted).toBe(true);
+      expect(result).toContain('[Cancelled] Operation cancelled by user');
+      if (result.includes('Partial output:')) {
+        expect(result).toContain('partial-stdout');
+        expect(result).toContain('[stderr]');
+        expect(result).toContain('partial-stderr');
+        return;
+      }
+
+      expect(result).toContain('KODAX_CAPTURE_INCOMPLETE');
+      const stdoutPath = parseRecoveryOutputPath(result, 'stdout');
+      const stderrPath = parseRecoveryOutputPath(result, 'stderr');
+      recoveryPaths.push(stdoutPath, stderrPath);
+      await waitForOutputMatch(stdoutPath, /KODAX_CAPTURE_COMPLETE/, 10_000);
+      await waitForOutputMatch(stderrPath, /KODAX_CAPTURE_COMPLETE/, 10_000);
+      expect(await fs.readFile(stdoutPath, 'utf-8')).toContain('partial-stdout');
+      expect(await fs.readFile(stderrPath, 'utf-8')).toContain('partial-stderr');
+    } finally {
+      controller.abort();
+      await Promise.all(recoveryPaths.map((filePath) => fs.rm(filePath, { force: true })));
+    }
   });
 
   it('waits for a cancelled command to release its execution cwd before returning', async () => {
