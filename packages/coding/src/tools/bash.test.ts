@@ -8,6 +8,25 @@ import type { KodaXShellSandbox } from '../types.js';
 import { toolBash } from './bash.js';
 import { withFileMutation } from './_internal/file-mutation-queue.js';
 
+const windowsEffectJobMock = vi.hoisted(() => ({
+  drainFailure: undefined as Error | undefined,
+}));
+
+vi.mock('@kodax-ai/agent', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@kodax-ai/agent')>();
+  return {
+    ...actual,
+    containWindowsEffectProcess: async (pid: number) => {
+      if (windowsEffectJobMock.drainFailure === undefined) {
+        return actual.containWindowsEffectProcess(pid);
+      }
+      const drained = Promise.reject(windowsEffectJobMock.drainFailure);
+      void drained.catch(() => undefined);
+      return { supervisorPid: pid, drained };
+    },
+  };
+});
+
 const WINDOWS_PROCESS_TREE_EXIT_WAIT_MS = process.platform === 'win32' ? 30_000 : 15_000;
 const WINDOWS_PROCESS_TREE_TEST_TIMEOUT_MS = process.platform === 'win32' ? 60_000 : 30_000;
 const BACKGROUND_CHILD_MARKER = 'child-pid:';
@@ -136,6 +155,10 @@ async function waitForPidExit(
 }
 
 describe('toolBash', () => {
+  afterEach(() => {
+    windowsEffectJobMock.drainFailure = undefined;
+  });
+
   it('executes an admitted command through the runtime-owned shell sandbox', async () => {
     const cleanup = vi.fn(async () => ({
       version: 1 as const,
@@ -270,6 +293,102 @@ describe('toolBash', () => {
     expect(result).toContain('injected effect lease release failure');
     expect(result).toContain('target-ran-once');
     expect(result).not.toContain('output post-processing failed');
+  });
+
+  it.runIf(process.platform === 'win32')(
+    'reports an explicit lifecycle safety error when a foreground effect Job is not drained',
+    async () => {
+      windowsEffectJobMock.drainFailure = new Error('injected foreground Job drain failure');
+      const result = await toolBash({ command: 'foreground-undrained' }, {
+        backups: new Map(),
+        toolCallId: 'bash-foreground-undrained',
+        shellSandbox: {
+          failClosed: true,
+          prepare: async () => ({
+            executable: process.execPath,
+            args: ['-e', "process.stdout.write('ran-once')"],
+            env: process.env,
+            fileSystemEffectLease: {
+              bindEffectProcess: async () => undefined,
+              finishEffectProcess: async () => undefined,
+              release: async () => undefined,
+            },
+            cleanup: async () => undefined,
+          }),
+        },
+      });
+
+      expect(result).toContain('[Error] Required OS sandbox execution could not be verified');
+      expect(result).toContain('process tree termination was not confirmed');
+      expect(result).toContain('ran-once');
+      expect(result).not.toContain('Exit: 0');
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'records an explicit lifecycle safety error when a background effect Job is not drained',
+    async () => {
+      windowsEffectJobMock.drainFailure = new Error('injected background Job drain failure');
+      const result = await toolBash({
+        command: 'background-undrained',
+        run_in_background: true,
+      }, {
+        backups: new Map(),
+        toolCallId: 'bash-background-undrained',
+        shellSandbox: {
+          failClosed: true,
+          prepare: async () => ({
+            executable: process.execPath,
+            args: ['-e', "process.stdout.write('ran-once')"],
+            env: process.env,
+            fileSystemEffectLease: {
+              bindEffectProcess: async () => undefined,
+              finishEffectProcess: async () => undefined,
+              release: async () => undefined,
+            },
+            cleanup: async () => undefined,
+          }),
+        },
+      });
+      const outputPath = parseBackgroundOutputPath(result);
+      await waitForOutputMatch(outputPath, /Required OS sandbox execution could not be verified/);
+      const output = await fs.readFile(outputPath, 'utf8');
+
+      expect(output).toContain('process tree termination was not confirmed');
+      expect(output).toContain('ran-once');
+      expect(output).not.toContain('[Exit: 0]');
+      await fs.rm(outputPath, { force: true });
+    },
+  );
+
+  it('merges spawn, lease-release, and sandbox-cleanup failures when no PID was assigned', async () => {
+    const result = await toolBash({ command: 'spawn-error-with-cleanup-errors' }, {
+      backups: new Map(),
+      toolCallId: 'bash-spawn-error-with-cleanup-errors',
+      shellSandbox: {
+        failClosed: true,
+        prepare: async () => ({
+          executable: path.join(tempDir, 'missing-shell-executable'),
+          args: [],
+          env: process.env,
+          fileSystemEffectLease: {
+            bindEffectProcess: async () => undefined,
+            finishEffectProcess: async () => undefined,
+            release: async () => {
+              throw new Error('injected spawn-path lease release failure');
+            },
+          },
+          cleanup: async () => {
+            throw new Error('injected spawn-path sandbox cleanup failure');
+          },
+        }),
+      },
+    });
+
+    expect(result).toContain('[Error]');
+    expect(result).toContain('ENOENT');
+    expect(result).toContain('injected spawn-path lease release failure');
+    expect(result).toContain('injected spawn-path sandbox cleanup failure');
   });
 
   it('surfaces sandbox cleanup failure when the filesystem-effect lease cannot be acquired', async () => {

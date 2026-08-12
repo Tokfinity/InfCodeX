@@ -80,6 +80,18 @@ interface ForegroundOutputRecovery {
   readonly stderr: StreamRecovery;
 }
 
+function sandboxLifecycleErrorDetail(error: unknown): string {
+  if (error instanceof AggregateError) {
+    const details = error.errors.map(sandboxLifecycleErrorDetail).filter(Boolean);
+    return [error.message, ...details].join(': ');
+  }
+  if (error instanceof Error) {
+    const cause = error.cause === undefined ? '' : `: ${sandboxLifecycleErrorDetail(error.cause)}`;
+    return `${error.message}${cause}`;
+  }
+  return String(error);
+}
+
 function gatedShellInvocation(
   executable: string,
   args: readonly string[],
@@ -449,7 +461,12 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
     try {
       await sandboxCleanup;
     } catch (error: unknown) {
-      sandboxCleanupError ??= error;
+      sandboxCleanupError = sandboxCleanupError === undefined
+        ? error
+        : new AggregateError(
+            [sandboxCleanupError, error],
+            'Multiple required OS sandbox cleanup operations failed.',
+          );
       emitKodaXDiagnostic({
         source: 'coding:bash-sandbox',
         level: 'warn',
@@ -461,9 +478,7 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
   };
   const withSandboxCleanupFailure = (result: string): string => {
     if (sandboxCleanupError === undefined) return result;
-    const detail = sandboxCleanupError instanceof Error
-      ? sandboxCleanupError.message
-      : String(sandboxCleanupError);
+    const detail = sandboxLifecycleErrorDetail(sandboxCleanupError);
     return `${result}\n[Error] Required OS sandbox cleanup failed: ${detail}`;
   };
   if (ctx.abortSignal?.aborted) {
@@ -693,6 +708,10 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
       }
     }
     if (!drained) {
+      recordEffectLifecycleFailure(new Error(
+        'Shell effect process tree termination was not confirmed; '
+        + 'later filesystem effects remain fenced.',
+      ));
       await cleanupSandbox(
         mutationProcessBindingFailed ? 'not_started' : 'started_or_unknown',
       );
@@ -811,9 +830,7 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
     };
     const backgroundSandboxFailure = (): string | undefined => {
       if (sandboxCleanupError === undefined) return undefined;
-      const detail = sandboxCleanupError instanceof Error
-        ? sandboxCleanupError.message
-        : String(sandboxCleanupError);
+      const detail = sandboxLifecycleErrorDetail(sandboxCleanupError);
       return `\n[Error] Required OS sandbox execution could not be verified: ${detail}\n`
         + '[Safety] The command was not retried because it may have started.\n';
     };
@@ -1048,9 +1065,7 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
         lifecycleWarnings.push('[warn] Process tree was not proven drained; later filesystem effects remain fenced.');
       }
       if (sandboxCleanupError !== undefined) {
-        const detail = sandboxCleanupError instanceof Error
-          ? sandboxCleanupError.message
-          : String(sandboxCleanupError);
+        const detail = sandboxLifecycleErrorDetail(sandboxCleanupError);
         lifecycleWarnings.push(`[warn] Required OS sandbox cleanup failed: ${detail}`);
       }
 
@@ -1217,9 +1232,7 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
             return;
           }
           if (sandboxCleanupError !== undefined) {
-            const detail = sandboxCleanupError instanceof Error
-              ? sandboxCleanupError.message
-              : String(sandboxCleanupError);
+            const detail = sandboxLifecycleErrorDetail(sandboxCleanupError);
             let capturedProcessOutput = '';
             try {
               capturedProcessOutput = decodePartialOutput();
@@ -1338,7 +1351,9 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
         // as a spawn error on some platforms.
         const gotchaHints = detectWindowsCmdGotchas(command, usesWindowsCmd);
         const gotchaNote = gotchaHints.length > 0 ? `\n${gotchaHints.join('\n')}` : '';
-        settle(`Command: ${command}\n[Error] ${error.message}${gotchaNote}`);
+        settle(withSandboxCleanupFailure(
+          `Command: ${command}\n[Error] ${error.message}${gotchaNote}`,
+        ));
       })().catch((cleanupError: unknown) => {
         const message = cleanupError instanceof Error
           ? cleanupError.message
