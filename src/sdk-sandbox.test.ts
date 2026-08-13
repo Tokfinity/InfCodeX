@@ -11,7 +11,7 @@ describe('@kodax-ai/kodax/sandbox public surface', () => {
   it('exposes generic containment independently from Auto[LLM]', () => {
     const capability = getKodaXSandboxCapability();
     expect(capability).toMatchObject({
-      version: 2,
+      version: 3,
       asrtVersion: KODAX_ASRT_VERSION,
       genericCommandExecution: true,
       ordinaryCallsTriggerSetup: false,
