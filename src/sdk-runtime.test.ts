@@ -16101,7 +16101,7 @@ describe("createKodaXRuntime", () => {
     }
   });
 
-  it("sandboxes shared Runtime Bash outside Auto mode without requiring an Auto admission", async () => {
+  it("prefers shared Runtime Bash outside Auto mode and preserves caller fallback", async () => {
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
     const projectRoot = path.join(tempRoot, "accept-edits-project");
     await fs.mkdir(projectRoot, { recursive: true });
@@ -16135,38 +16135,49 @@ describe("createKodaXRuntime", () => {
       },
     });
     if (!runOptions) throw new Error("expected Runtime run options");
+    let invocation: Awaited<ReturnType<KodaXShellSandbox["prepare"]>>;
+    try {
+      const { getAgentConfigHome } = await import("@kodax-ai/agent");
+      const protectedRead = runOptions.events?.beforeToolExecute?.(
+        "bash",
+        { command: `type "${path.join(getAgentConfigHome(), "config.json")}"` },
+        { sessionId: session.id, toolId: "bash_protected_read" },
+      );
+      await flushMicrotasks();
+      const [pendingRead] = await runtime.permissions.listPending({ runId: handle.runId });
+      expect(pendingRead).toMatchObject({ toolName: "bash" });
+      if (!pendingRead) throw new Error("expected protected-read approval");
+      await runtime.permissions.respond(pendingRead.id, { type: "allow_once" });
+      await expect(protectedRead).resolves.toBe(true);
 
-    const { getAgentConfigHome } = await import("@kodax-ai/agent");
-    const protectedRead = runOptions.events?.beforeToolExecute?.(
-      "bash",
-      { command: `type "${path.join(getAgentConfigHome(), "config.json")}"` },
-      { sessionId: session.id, toolId: "bash_protected_read" },
-    );
-    await flushMicrotasks();
-    const [pendingRead] = await runtime.permissions.listPending({ runId: handle.runId });
-    expect(pendingRead).toMatchObject({ toolName: "bash" });
-    if (!pendingRead) throw new Error("expected protected-read approval");
-    await runtime.permissions.respond(pendingRead.id, { type: "allow_once" });
-    await expect(protectedRead).resolves.toBe(true);
+      const observations: KodaXToolSandboxObservationUpdate[] = [];
+      invocation = await runOptions.context?.shellSandbox?.prepare({
+        toolCallId: "bash_accept_edits",
+        toolInput: { command: "git status --short" },
+        command: "git status --short",
+        cwd: projectRoot,
+        env: process.env,
+        reportObservation: (observation) => observations.push(observation),
+      });
 
-    const observations: KodaXToolSandboxObservationUpdate[] = [];
-    const invocation = await runOptions.context?.shellSandbox?.prepare({
-      toolCallId: "bash_accept_edits",
-      toolInput: { command: "git status --short" },
-      command: "git status --short",
-      cwd: projectRoot,
-      env: process.env,
-      reportObservation: (observation) => observations.push(observation),
-    });
-
-    expect(callerPrepare).not.toHaveBeenCalled();
-    expect(runOptions.context?.shellSandbox?.processTreeContainment).toBe(
-      process.platform === "linux" ? "root-exit-drains" : undefined,
-    );
-    expect(observations.at(-1)?.state).not.toBe("not_selected");
-    await invocation?.cleanup();
-    await runtime.runs.abort(handle.runId);
-    await runtime.close();
+      if (invocation === undefined) {
+        expect(callerPrepare).toHaveBeenCalledTimes(1);
+        expect(observations.at(-1)).toMatchObject({
+          state: "fallback",
+          execution: "normal_permission_policy",
+        });
+      } else {
+        expect(callerPrepare).not.toHaveBeenCalled();
+        expect(observations.at(-1)?.state).not.toBe("not_selected");
+      }
+      expect(runOptions.context?.shellSandbox?.processTreeContainment).toBe(
+        process.platform === "linux" ? "root-exit-drains" : undefined,
+      );
+    } finally {
+      await invocation?.cleanup();
+      await runtime.runs.abort(handle.runId);
+      await runtime.close();
+    }
   });
 
   it.runIf(process.platform === "win32")(
