@@ -666,7 +666,13 @@ tree was not proven drained. POSIX workspace sessions apply the same
 fail-closed replacement rule when process-tree cleanup is unconfirmed. Windows
 workspace Shell calls also preserve the case-insensitive `PATH`/`Path` contract,
 derive bounded PATH/executable read grants, and carry quoted `cmd.exe` arguments
-through the broker without re-parsing. Issue
+through the broker without re-parsing. Commands with the same canonical
+workspace, Agent Home, filesystem, toolchain, and network policy can share one
+Windows sandbox policy group across KodaX processes. An incompatible policy or
+pre-start sandbox infrastructure failure returns the already-authorized command
+to normal permission execution; a command that started or may have started is
+never replayed. Runtime sandbox capability v3 fences upgrades from older daemon
+policy revisions. Issue
 256's remaining Worker owner-lease boundary
 stays open and is scheduled for v0.7.87. See the
 [v0.7.86 release checklist](docs/release.md#v0786-release-preparation).

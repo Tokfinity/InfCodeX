@@ -6,6 +6,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+---
+
+## [0.7.86] - 2026-08-13
+
+> Git tag and GitHub Release are created by the release workflow. npm
+> publication remains a separate manual operator step.
+
 ### Fixed
 
 - Windows sandbox doctor and required Shell calls now surface actionable ACL
@@ -45,7 +52,7 @@ All notable changes to this project will be documented in this file.
 - Windows Shell sessions now share one ACL policy group when their normalized
   workspace, Agent Home access, additional filesystem permissions, toolchain
   scopes, and network policy are identical. Compatible commands can run in
-  parallel across independent KodaX processes; the last local member confirms
+  parallel across independent KodaX processes; the last policy-group member confirms
   reset before releasing its owner. Different policies fall back immediately
   to the already-authorized ordinary execution path instead of blocking on a
   machine-wide sandbox fence. Preparation failures use the same fallback, while
@@ -61,26 +68,17 @@ All notable changes to this project will be documented in this file.
   through a profile-added junction toolchain, resolves the packaged Node binary
   through its version-manager ancestry, exercises a quoted `cmd.exe` path, and
   keeps its probe I/O inside the admitted workspace.
-
----
-
-## [0.7.86] - 2026-08-12
-
-> Git tag and GitHub Release are created by the release workflow. npm
-> publication remains a separate manual operator step.
-
-### Fixed
-
 - Packaged Electron hosts on Windows now keep Electron's Node bootstrap mode
   across the internal filesystem-effect gate without leaking it to user
   commands. Sandbox readiness uses KodaX's staged runner outside ASAR, failed
   workspace sessions are retired, stale ACLs are recovered before startup and
-  after each sandbox owner exits, and an execution with missing attestation is
-  reported without replaying a possibly side-effecting command.
+  after the last compatible sandbox owner exits, and an execution with missing
+  attestation is reported without replaying a possibly side-effecting command.
 - Sandbox stop now waits for process-tree termination proof before ACL recovery;
   undrained Shell effects and spawn/cleanup failure combinations are reported as
-  lifecycle safety errors. Windows ACL owner markers enforce one active sandbox
-  owner per KodaX home, and crash recovery is serialized across Runtime profiles.
+  lifecycle safety errors. Windows ACL owner markers admit only an exact shared
+  policy group for the machine sandbox identity, and crash recovery is serialized
+  across Runtime profiles.
 - Inline Runtime owner recovery now removes only a provably abandoned inline
   owner fence before restoring daemon policy. Live, unreadable, legacy-kind,
   daemon-kind, and unverifiable owners remain fail-closed, while a failed

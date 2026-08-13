@@ -63,8 +63,14 @@ verbatim-argument contract, so quoted paths and profile-managed executables are
 not re-parsed by an intermediate broker.
 
 The packaged Electron and Runtime smoke paths exercise this behavior. A missing
-or unprovable sandbox lifecycle attestation remains fail-closed; KodaX does not
-retry a command that may already have started.
+or unprovable sandbox lifecycle attestation after target start remains
+fail-closed; KodaX does not retry a command that may already have started.
+Commands with the same canonical workspace, Agent Home, additional filesystem,
+toolchain, and network policy can share one Windows policy group across KodaX
+processes. An incompatible policy or sandbox infrastructure failure before
+target start returns the already-authorized command to normal permission
+execution. Runtime sandbox capability v3 prevents an older daemon policy from
+being reused silently.
 
 ## SDK sandbox
 

@@ -2745,8 +2745,14 @@ Windows workspace Shell execution also preserves case-insensitive `PATH`/`Path`
 and `PATHEXT` values through both Runtime broker layers. Read grants are derived
 from the final shell PATH and executable, including only bounded junction
 ancestors for profile-managed toolchains. The `cmd.exe` verbatim-argument
-contract is retained for quoted paths and executable lookup; a missing lifecycle
-attestation remains fail-closed and is never repaired by replaying the command.
+contract is retained for quoted paths and executable lookup. Exact workspace,
+Agent Home, additional-filesystem, toolchain, and network policies form a
+cross-process Windows policy group; compatible owners join without global ACL
+recovery and only the last owner recovers. Incompatible policy or pre-start
+infrastructure failure returns to the already-authorized normal permission path.
+A missing lifecycle attestation after target start remains fail-closed and is
+never repaired by replaying the command. Runtime sandbox capability v3 prevents
+an older daemon policy from being reused silently.
 
 `homeDir` and `KODAX_HOME` deliberately name different levels. Runtime SDK and
 CLI daemon `--home` accept the **base directory that contains `.kodax`**;
@@ -5755,10 +5761,11 @@ unsandboxed script. Embedded and daemon Runtime capability metadata expose
 `sandboxRuntime` with the platform backend, ASRT version, supported control
 dimensions, elevation behavior, and fallback semantics.
 
-Local workspace commands reuse prepared ASRT state per canonical workspace, but
-Windows still serializes one command scope at a time and confirms the previous
-owner's ACL reset before switching PATH grants. Per-command target attestation
-and fallback remain independent. A cold first command may still wait for
+Local workspace commands reuse prepared ASRT state per canonical workspace. On
+Windows, commands with the same complete effective policy can share one policy
+group across processes; incompatible policies use the already-authorized normal
+permission path, and the final compatible owner confirms ACL reset. Per-command
+target attestation and fallback remain independent. A cold first command may still wait for
 platform initialization, while later commands reuse the prepared state. Abort
 signals and the command deadline cover that prepare wait; a cancelled/timed-out
 prepare never starts the target or changes to the ordinary fallback path.

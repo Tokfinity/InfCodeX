@@ -125,8 +125,12 @@ The v0.7.86 release hardens Windows sandbox lifecycle handling: ACL owner
 markers are durable and cross-profile recovery is serialized; stop waits for
 termination proof before ACL recovery; combined cleanup failures remain
 observable; and a Shell command is never replayed when its effect process tree
-was not proven drained. The remaining Worker owner-lease portion of Issue 256
-is still open and scheduled for v0.7.87.
+was not proven drained. Exact Windows workspace, Agent Home, filesystem,
+toolchain, and network policies form a cross-process policy group; compatible
+owners share it until the last owner performs ACL recovery, while incompatible
+or pre-start-unavailable containment returns to the already-authorized normal
+permission path. The remaining Worker owner-lease portion of Issue 256 is still
+open and scheduled for v0.7.87.
 
 ## 安装 / 导入
 

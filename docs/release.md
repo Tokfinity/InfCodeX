@@ -100,6 +100,13 @@ includes all commits after `v0.7.85`, including:
   `PATH`/`Path` environment contract, derives bounded read grants from the
   final shell PATH and executable, and carries quoted `cmd.exe` arguments
   through both broker layers without re-parsing them;
+- exact Windows workspace, Agent Home, additional-filesystem, toolchain, and
+  network policies now form a cross-process policy group. Compatible owners
+  join without global ACL recovery and only the last owner performs recovery;
+  incompatible policy or pre-start infrastructure failures return to the
+  already-authorized normal permission path, while started/unknown commands
+  are never replayed. Runtime sandbox capability v3 fences older daemon policy
+  revisions;
 - POSIX workspace-session safety latching, so an unconfirmed process-tree or
   cleanup failure blocks replacement sandbox sessions instead of allowing a
   stale owner to race a new one;
