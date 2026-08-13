@@ -333,9 +333,11 @@ vi.mock('node:child_process', async (importOriginal) => {
       });
       const requestFile = Array.isArray(argsOrOptions) ? argsOrOptions.at(-1) : undefined;
       const workspaceSession = Array.isArray(argsOrOptions)
-        && typeof requestFile === 'string'
-        && path.basename(requestFile).startsWith('workspace-')
-        && requestFile.endsWith('.json');
+        && argsOrOptions.some((arg) => {
+          const basename = path.basename(arg);
+          return arg === '__asrt-workspace-session'
+            || /^sandbox-workspace-session(?:-entry)?\.(?:js|ts)$/.test(basename);
+        });
       if (workspaceSession) {
         if (typeof requestFile === 'string') {
           const init = JSON.parse(readFileSync(requestFile, 'utf8')) as {
@@ -815,7 +817,7 @@ describe('ASRT workspace shell adapter', () => {
       if (importIndex >= 0) {
         expect(sessions[0]![importIndex + 1]).toMatch(/^file:\/\//);
       }
-    });
+    }, { timeout: 5_000 });
   });
 
   it('falls back without initializing ACLs while an ordinary filesystem effect is active', async () => {
