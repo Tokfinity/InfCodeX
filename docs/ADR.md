@@ -56,27 +56,24 @@
 > lifecycle mutation returns to the record's owning store. The legacy public
 > `expectedScope` spelling remains accepted alongside optional multi-scope
 > configuration.
-> Model-issued opaque shell execution requires a fail-closed OS sandbox with
-> authoritative process-tree containment. Runtime provides Linux PID-namespace
-> containment and a Windows per-effect Job in every permission mode. macOS and
-> legacy custom adapters that do not declare the optional containment capability
-> fail closed for opaque Bash while retaining completely modeled exact commands.
-> The coding entry installs this boundary independently of
-> Auto guardrails; standalone callers without an adapter retain only completely
-> modeled exact shell commands. Windows grants verified ordinary children, not
+> Shell authorization is authoritative and OS containment is attempted first.
+> Infrastructure failure or policy contention before target start returns an
+> already-authorized call to normal permission execution. Once target start is
+> committed or unknown, the execution layer never replays it; the main model may
+> reason about the result and submit a new call. Runtime provides Linux
+> PID-namespace containment and a Windows per-effect Job when selected. Windows
+> grants verified ordinary children, not
 > the Agent Home directory object, preserving child writes without granting
 > whole-root deletion. Shell effects and privileged direct-file sinks use a
 > cross-process category lease so neither can overlap the other's canonical
 > path validation/write window; same-category work remains concurrent.
-> Windows ACL reuse distinguishes automatic-safe scope from review-only scope.
-> The eagerly warmed session grants only the workspace and a disposable,
-> per-session temp directory. Automatic-safe Agent Home access reuses one of at
-> most eight sessions keyed by the exact canonical read/write roots, and cache
-> eviction waits for ACL reset before admitting a replacement. Review-only
-> access is one-shot and holds the cross-process filesystem-effect fence from
-> before ACL initialization until reset completes because the Windows backend
-> uses a shared restricted-user SID. Existing
-> targets are granted directly and creates use the nearest existing safe parent;
+> Windows ACL reuse is keyed by the complete effective policy: workspace,
+> Agent Home access, additional filesystem roots, toolchain closure, temp scope,
+> and network policy. Equal policies may share the restricted-user safety domain
+> across Runtime processes; an incompatible owner returns to normal permission
+> execution. Setup/reset remains coordinated across processes. Existing
+> existing targets are granted directly. A reviewed missing external target that cannot
+> be represented without broadening its parent grant uses normal permission execution;
 > the root object, escaping links, and host control trees are revalidated before
 > the ACL is built. Windows setup idempotently installs persistent read guards
 > for the dedicated sandbox SID on existing sensitive roots. Process startup

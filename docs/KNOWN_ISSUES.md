@@ -292,21 +292,15 @@ parallel model calls accumulated that cost into the 60/117/177-second staircase.
 
 #### Resolution
 
-- Runtime starts the lean fail-closed workspace session in the background when
-  Run options are built, instead of making the first Bash call begin cold setup.
-- The eager Windows session no longer grants every Agent Home child. Permission
-  review supplies exact Agent Home read/write targets, and KodaX reuses a
-  session keyed by that minimal scope. Existing files are granted directly;
-  creation uses the nearest existing safe parent. Root, escaping-link, Runtime,
-  processes, Learned, and sandbox-control write scopes are rejected again at
-  this OS boundary. Ordinary repository commands stay on the lean session.
-  Automatic-safe scopes use a bounded eight-entry cache and finish reset before
-  replacement. Review-only scopes are one-shot and hold the exclusive
-  cross-process shell-effect fence from before ACL initialization through reset,
-  so the shared Windows SID cannot leak a reviewed grant to a concurrent shell.
-- Windows shell `TEMP`, `TMP`, and `TMPDIR` now point to a new disposable
-  per-session directory. KodaX removes it after session exit and never reuses an
-  accumulating temp tree.
+- Runtime attempts a policy-keyed sandbox only after authorization. Equal
+  workspace, Agent Home, additional filesystem, toolchain, temp, and network
+  policies may share concurrently; incompatible or unavailable containment
+  returns to ordinary permission execution before target start. Existing
+  external targets are granted directly, while missing targets that would need
+  a broader parent grant use the fallback path. Root, escaping-link, Runtime,
+  processes, Learned, and sandbox-control mutations remain hard-denied.
+- Windows shell `TEMP`, `TMP`, and `TMPDIR` point to a disposable session child
+  under the bounded policy temp root. KodaX removes the child after session exit.
 - `kodax sandbox setup` now installs idempotent persistent read guards for the
   dedicated `srt-sandbox` SID on existing sensitive roots. This is the only path
   allowed to pay Windows inheritance migration cost. Startup performs a bounded
@@ -467,10 +461,10 @@ the complete home could be mutated or deleted without approval.
 - Auto[LLM] classifier approval and Auto[Rules] user approval cannot override
   the Agent Home root/Runtime shell hard gate. Sensitive configuration remains
   reviewable rather than becoming an execution-layer hard denial.
-- The coding entry applies the hard shell boundary in every permission mode.
-  Opaque commands require a fail-closed OS sandbox; standalone calls without an
-  adapter are limited to completely modeled exact commands. Runtime supplies
-  fail-closed ASRT for every Run, including Sessions without project metadata.
+- The coding entry applies the narrow catastrophic hard-deny set in every
+  permission mode. Other commands are authorized normally, then attempt ASRT
+  containment first. A pre-start sandbox infrastructure failure falls back to
+  ordinary permission execution; a committed or unknown start is never replayed.
 - Windows sandbox ACLs grant verified ordinary Agent Home children rather than
   the Home object, preserving Agent/session/intermediate writes without granting
   the `DELETE` right that would permit whole-root removal. Broken or escaping

@@ -23,6 +23,7 @@ import {
   realpath,
   rename,
   rm,
+  rmdir,
   stat,
   writeFile,
 } from 'node:fs/promises';
@@ -61,7 +62,6 @@ import {
 } from '@kodax-ai/agent';
 import {
   acquireExclusiveFileSystemEffectLease,
-  type KodaXFileSystemEffectLease,
   KodaXShellSandbox,
   KodaXShellSandboxBackend,
   KodaXShellSandboxObservation,
@@ -133,6 +133,11 @@ export interface AsrtShellAgentHomeAccess {
 export interface AsrtShellSandboxSelection {
   /** Exact Agent Home paths admitted by the host permission review. */
   readonly agentHomeAccess?: AsrtShellAgentHomeAccess;
+  /** Exact non-workspace paths admitted by the same host permission review. */
+  readonly filesystemAccess?: {
+    readonly read: readonly string[];
+    readonly write: readonly string[];
+  };
 }
 
 export interface CreateAsrtShellSandboxInput {
@@ -141,8 +146,6 @@ export interface CreateAsrtShellSandboxInput {
     call: RunnerToolCall,
   ) => boolean | AsrtShellSandboxSelection
     | Promise<boolean | AsrtShellSandboxSelection>;
-  /** Selected calls must fail closed when the OS sandbox cannot be applied. */
-  readonly failClosed?: boolean;
 }
 
 export type KodaXSandboxNetworkPolicy =
@@ -201,7 +204,7 @@ export interface SandboxSetupOutcome {
 }
 
 export interface KodaXSandboxCapability {
-  readonly version: 2;
+  readonly version: 3;
   readonly asrtVersion: string;
   readonly platform: NodeJS.Platform;
   readonly backend: 'windows-restricted-user' | 'macos-seatbelt' | 'linux-bubblewrap' | 'unsupported';
@@ -222,7 +225,7 @@ export function sandboxRuntimeCapability(): KodaXSandboxCapability {
         ? 'linux-bubblewrap'
         : 'unsupported';
   return {
-    version: 2,
+    version: 3,
     asrtVersion: KODAX_ASRT_VERSION,
     platform: process.platform,
     backend,
@@ -644,10 +647,14 @@ const waitForTarget = (target, observation) => {
   let pending = Buffer.alloc(0);
   let diagnostic = Buffer.alloc(0);
   let processError;
+  let wrapperSpawned = false;
   let targetStarted = false;
   let observationWrite = Promise.resolve();
   return new Promise((resolve, reject) => {
     let settled = false;
+    target.once('spawn', () => {
+      wrapperSpawned = true;
+    });
     const finish = (result) => {
       if (settled) return;
       settled = true;
@@ -686,6 +693,7 @@ const waitForTarget = (target, observation) => {
       finish({
         exitCode: signal ? 1 : exitCode ?? 1,
         targetStarted,
+        spawnFailedBeforeSpawn: processError !== undefined && !wrapperSpawned,
         diagnostic: preTarget || processError || undefined,
       });
     });
@@ -715,6 +723,22 @@ const runDirect = async () => {
     child.once('exit', (exitCode, signal) => resolve(signal ? 1 : exitCode ?? 1));
   });
 };
+const runNormalFallback = async () => {
+  if (
+    request.fallbackToNormalExecution !== true
+    || targetStarted
+    || normalFallbackAttempted
+  ) return false;
+  await writeObservation({
+    version: 1,
+    state: 'fallback',
+    reason: 'backend_failed',
+    execution: 'normal_permission_policy',
+  }).catch(() => undefined);
+  normalFallbackAttempted = true;
+  process.exitCode = await runDirect();
+  return true;
+};
 try {
   if (request.wrappedInvocation) {
     const wrapped = request.wrappedInvocation;
@@ -732,10 +756,13 @@ try {
       policyId: 'kodax-workspace-shell-v1',
     });
     targetStarted = result.targetStarted;
-    if (!targetStarted) {
+    const fellBack = result.spawnFailedBeforeSpawn
+      ? await runNormalFallback()
+      : false;
+    if (!targetStarted && !fellBack) {
       process.stderr.write((result.diagnostic || 'Sandbox target launch could not be attested.') + '\n');
     }
-    process.exitCode = targetStarted ? result.exitCode : 1;
+    if (!fellBack) process.exitCode = targetStarted ? result.exitCode : 1;
   } else {
   ({ SandboxManager } = await import(process.argv[1]));
   const bootstrap = request.bootstrapCommand ?? 'node';
@@ -814,10 +841,13 @@ try {
   targetStarted = result.targetStarted;
   try { SandboxManager.cleanupAfterCommand(); } catch {}
   await SandboxManager.reset().catch(() => undefined);
-  if (!targetStarted) {
+  const fellBack = result.spawnFailedBeforeSpawn
+    ? await runNormalFallback()
+    : false;
+  if (!targetStarted && !fellBack) {
     process.stderr.write((result.diagnostic || 'Sandbox target launch could not be attested.') + '\n');
   }
-  process.exitCode = targetStarted ? result.exitCode : 1;
+  if (!fellBack) process.exitCode = targetStarted ? result.exitCode : 1;
   }
 } catch (error) {
   await SandboxManager?.reset().catch(() => undefined);
@@ -828,14 +858,7 @@ try {
     && child === undefined
   ) {
     try {
-      await writeObservation({
-        version: 1,
-        state: 'fallback',
-        reason: 'backend_failed',
-        execution: 'normal_permission_policy',
-      }).catch(() => undefined);
-      normalFallbackAttempted = true;
-      process.exitCode = await runDirect();
+      await runNormalFallback();
     } catch (fallbackError) {
       process.stderr.write((fallbackError instanceof Error ? fallbackError.message : String(fallbackError)) + '\n');
       process.exitCode = 1;
@@ -956,6 +979,7 @@ function requirePreparedWindowsRunner(): PreparedWindowsSandboxRunner {
 interface WindowsSandboxAclPoisonOwner {
   readonly version: 1 | 2;
   readonly state?: 'active' | 'unconfirmed';
+  readonly policyKey?: string;
   readonly holderPid?: number;
   readonly holderProcessStartIdentity?: string;
   readonly pid?: number;
@@ -1020,6 +1044,7 @@ function parseWindowsSandboxAclPoisonOwner(text: string): WindowsSandboxAclPoiso
   if (
     (owner.version !== 1 && owner.version !== 2)
     || (owner.state !== undefined && owner.state !== 'active' && owner.state !== 'unconfirmed')
+    || (owner.policyKey !== undefined && typeof owner.policyKey !== 'string')
     || (owner.holderPid !== undefined && (
       typeof owner.holderPid !== 'number'
       || !Number.isSafeInteger(owner.holderPid)
@@ -1050,6 +1075,7 @@ function parseWindowsSandboxAclPoisonOwner(text: string): WindowsSandboxAclPoiso
     ...(owner.state === 'active' || owner.state === 'unconfirmed'
       ? { state: owner.state }
       : {}),
+    ...(typeof owner.policyKey === 'string' ? { policyKey: owner.policyKey } : {}),
     ...(typeof owner.holderPid === 'number' ? { holderPid: owner.holderPid } : {}),
     ...(typeof owner.holderProcessStartIdentity === 'string'
       ? { holderProcessStartIdentity: owner.holderProcessStartIdentity }
@@ -1164,6 +1190,7 @@ function persistWindowsSandboxAclPoisonOwner(
   pid: number | undefined,
   processStartIdentity: string | undefined,
   state: 'active' | 'unconfirmed' = 'unconfirmed',
+  policyKey?: string,
 ): string | undefined {
   if (process.platform !== 'win32') return undefined;
   const windowsBootIdentity = readWindowsBootIdentity();
@@ -1173,6 +1200,7 @@ function persistWindowsSandboxAclPoisonOwner(
   const payload = JSON.stringify({
     version: 1,
     state,
+    ...(policyKey === undefined ? {} : { policyKey }),
     holderPid: process.pid,
     ...(holderProcessStartIdentity === undefined ? {} : { holderProcessStartIdentity }),
     ...(pid === undefined ? {} : { pid }),
@@ -1221,8 +1249,13 @@ function persistWindowsSandboxAclPoisonOwner(
   return primary;
 }
 
-function createWindowsSandboxAclOwnerMarker(): string | undefined {
-  const marker = persistWindowsSandboxAclPoisonOwner(undefined, undefined, 'active');
+function createWindowsSandboxAclOwnerMarker(policyKey?: string): string | undefined {
+  const marker = persistWindowsSandboxAclPoisonOwner(
+    undefined,
+    undefined,
+    'active',
+    policyKey,
+  );
   if (marker !== undefined) {
     activeWindowsSandboxAclOwnerMarkers.add(marker);
     const legacy = legacyWindowsSandboxAclOwnerMarkers.get(marker);
@@ -1377,9 +1410,23 @@ function windowsSandboxAclOwnerLiveness(
   }
 }
 
-function assertNoPersistentWindowsSandboxAclPoison(): void {
+function isCompatibleWindowsSandboxAclOwner(
+  file: string,
+  owner: WindowsSandboxAclPoisonOwner,
+  policyKey: string | undefined,
+): boolean {
+  if (owner.state !== 'active') return false;
+  if (activeWindowsSandboxAclOwnerMarkers.has(file)) {
+    return policyKey === undefined || owner.policyKey === policyKey;
+  }
+  return policyKey !== undefined
+    && owner.policyKey === policyKey
+    && windowsSandboxAclOwnerLiveness(owner) === 'live';
+}
+
+function assertNoPersistentWindowsSandboxAclPoison(policyKey?: string): void {
   const poisoned = readWindowsSandboxAclPoisonOwners().filter(
-    ({ file, owner }) => !isVerifiedActiveWindowsSandboxAclOwner(file, owner),
+    ({ file, owner }) => !isCompatibleWindowsSandboxAclOwner(file, owner, policyKey),
   );
   if (poisoned.length === 0) return;
   throw persistentWindowsSandboxAclPoisonError(poisoned.map(({ owner }) => owner));
@@ -1477,10 +1524,18 @@ class ForeignWindowsSandboxAclOwnerContentionError extends WindowsSandboxAclAdmi
   }
 }
 
+class StaleWindowsSandboxAclOwnerContentionError extends WindowsSandboxAclAdmissionError {
+  constructor(cause: Error) {
+    super(cause.message, { cause });
+    this.name = 'StaleWindowsSandboxAclOwnerContentionError';
+  }
+}
+
 function recordWindowsSandboxAclAdmissionFailure(error: unknown): void {
   if (
     !isWindowsSandboxAclRecoveryLockTimeout(error)
     && !(error instanceof ForeignWindowsSandboxAclOwnerContentionError)
+    && !(error instanceof StaleWindowsSandboxAclOwnerContentionError)
   ) {
     recordWindowsSandboxAclFailure(error);
   }
@@ -1497,13 +1552,12 @@ function windowsSandboxAclPoisonSnapshotError(
     poisoned.map(({ owner }) => owner),
     currentBootIdentity,
   );
-  const foreignActiveContention = poisoned.every(({ file, owner }) => (
-    windowsSandboxAclOwnerLiveness(owner) !== 'stale'
-    && !activeWindowsSandboxAclOwnerMarkers.has(file)
-  ));
-  return foreignActiveContention
-    ? new ForeignWindowsSandboxAclOwnerContentionError(error)
-    : error;
+  if (poisoned.every(({ owner }) => owner.state === 'active')) {
+    return poisoned.some(({ owner }) => windowsSandboxAclOwnerLiveness(owner) === 'stale')
+      ? new StaleWindowsSandboxAclOwnerContentionError(error)
+      : new ForeignWindowsSandboxAclOwnerContentionError(error);
+  }
+  return error;
 }
 
 function windowsSandboxAclSetupBlockWithLock(): Error | undefined {
@@ -1546,10 +1600,10 @@ function withWindowsSandboxAclSetupBlock(
   };
 }
 
-function ensureWindowsSandboxAclRecoveryWithLock(): void {
+function ensureWindowsSandboxAclRecoveryWithLock(policyKey?: string): void {
   assertWindowsSandboxAclProcessSafe();
   const poisoned = readWindowsSandboxAclPoisonOwners().filter(
-    ({ file, owner }) => !isVerifiedActiveWindowsSandboxAclOwner(file, owner),
+    ({ file, owner }) => !isCompatibleWindowsSandboxAclOwner(file, owner, policyKey),
   );
   if (windowsSandboxAclStartupRecovered) {
     if (poisoned.length > 0) {
@@ -1570,15 +1624,15 @@ function ensureWindowsSandboxAclRecoveryWithLock(): void {
   }
   recoverWindowsSandboxAcls();
   for (const marker of poisoned) rmSync(marker.file, { force: true });
-  assertNoPersistentWindowsSandboxAclPoison();
+  assertNoPersistentWindowsSandboxAclPoison(policyKey);
 }
 
-async function ensureWindowsSandboxAclRecovery(): Promise<void> {
+async function ensureWindowsSandboxAclRecovery(policyKey?: string): Promise<void> {
   if (process.platform !== 'win32') return;
   try {
     await withKodaXFileLock(
       windowsSandboxAclRecoveryLockFile(),
-      async () => ensureWindowsSandboxAclRecoveryWithLock(),
+      async () => ensureWindowsSandboxAclRecoveryWithLock(policyKey),
       WINDOWS_SANDBOX_ACL_RECOVERY_LOCK_TIMEOUT_MS,
     );
   } catch (error: unknown) {
@@ -1587,28 +1641,20 @@ async function ensureWindowsSandboxAclRecovery(): Promise<void> {
   }
 }
 
-async function admitWindowsSandboxAclOwner(): Promise<string | undefined> {
+async function admitWindowsSandboxAclOwner(policyKey?: string): Promise<string | undefined> {
   if (process.platform !== 'win32') return undefined;
   let admittedMarker: string | undefined;
   try {
     return await withKodaXFileLock(
       windowsSandboxAclRecoveryLockFile(),
       async () => {
-        if (activeWindowsSandboxAclOwnerMarkers.size > 0) {
-          throw new ForeignWindowsSandboxAclOwnerContentionError(
-            new WindowsSandboxAclAdmissionError(
-              'Another Windows sandbox owner is active for the shared sandbox account; '
-              + 'wait for its sandboxed command or workspace session to close, then retry.',
-            ),
-          );
-        }
         try {
-          ensureWindowsSandboxAclRecoveryWithLock();
+          ensureWindowsSandboxAclRecoveryWithLock(policyKey);
         } catch (error: unknown) {
           recordWindowsSandboxAclAdmissionFailure(error);
           throw error;
         }
-        admittedMarker = createWindowsSandboxAclOwnerMarker();
+        admittedMarker = createWindowsSandboxAclOwnerMarker(policyKey);
         return admittedMarker;
       },
       WINDOWS_SANDBOX_ACL_RECOVERY_LOCK_TIMEOUT_MS,
@@ -1631,8 +1677,21 @@ async function confirmWindowsSandboxAclRecovery(
   marker?: string,
 ): Promise<void> {
   if (process.platform !== 'win32') return;
+  let policyKey: string | undefined;
   try {
     if (marker === undefined || !activeWindowsSandboxAclOwnerMarkers.has(marker)) return;
+    policyKey = parseWindowsSandboxAclPoisonOwner(readFileSync(marker, 'utf8')).policyKey;
+    if (policyKey !== undefined) {
+      await withKodaXFileLock(
+        windowsSandboxAclRecoveryLockFile(),
+        async () => {
+          recoverWindowsSandboxAcls();
+          confirmWindowsSandboxAclOwnerStopped(marker);
+        },
+        WINDOWS_SANDBOX_ACL_RECOVERY_LOCK_TIMEOUT_MS,
+      );
+      return;
+    }
     const poisonedMarker = writeAheadWindowsSandboxAclOwnerPoison(
       marker,
       undefined,
@@ -1648,8 +1707,16 @@ async function confirmWindowsSandboxAclRecovery(
       WINDOWS_SANDBOX_ACL_RECOVERY_LOCK_TIMEOUT_MS,
     );
   } catch (error: unknown) {
-    recordWindowsSandboxAclFailure(error);
-    throw error;
+    const durableError = policyKey === undefined
+      ? error
+      : await transitionWindowsSandboxAclOwnerToPoison(
+          marker,
+          undefined,
+          undefined,
+          error,
+        );
+    recordWindowsSandboxAclFailure(durableError);
+    throw durableError;
   }
 }
 
@@ -2850,9 +2917,9 @@ function workspaceShellWriteRoots(
   return [...new Set(roots)];
 }
 
-function workspaceShellTempRoot(workspaceRoot: string): string {
+function workspaceShellTempRoot(workspaceRoot: string, policyKey: string): string {
   const identity = process.platform === 'win32'
-    ? path.resolve(workspaceRoot).toLowerCase()
+    ? policyKey
     : path.resolve(workspaceRoot);
   return path.join(
     os.tmpdir(),
@@ -2861,16 +2928,26 @@ function workspaceShellTempRoot(workspaceRoot: string): string {
   );
 }
 
-function createWorkspaceShellTempDirectory(workspaceRoot: string): string {
+function createWorkspaceShellTempDirectory(
+  workspaceRoot: string,
+  policyKey: string,
+): string {
   return path.join(
-    workspaceShellTempRoot(workspaceRoot),
+    workspaceShellTempRoot(workspaceRoot, policyKey),
     `${process.pid}-${randomUUID()}`,
   );
 }
 
+async function removeWorkspaceShellTempDirectory(tempDirectory: string): Promise<void> {
+  await rm(tempDirectory, { recursive: true, force: true });
+  await rmdir(path.dirname(tempDirectory)).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== 'ENOENT' && error.code !== 'ENOTEMPTY') throw error;
+  });
+}
+
 function workspaceShellTempWriteRoots(shellTempDirectory?: string): string[] {
   return process.platform === 'win32'
-    ? shellTempDirectory === undefined ? [] : [shellTempDirectory]
+    ? shellTempDirectory === undefined ? [] : [path.dirname(shellTempDirectory)]
     : canonicalTempDirectories();
 }
 
@@ -3081,6 +3158,7 @@ function workspaceShellSandboxConfig(
   workspaceRoot: string,
   shellTempDirectory: string | undefined,
   agentHomeAccess?: AsrtShellAgentHomeAccess,
+  filesystemAccess?: AsrtShellSandboxSelection['filesystemAccess'],
   runtimeReadScopes = workspaceShellRuntimeReadScopes(
     process.env,
     workspaceShellExecutable(),
@@ -3105,6 +3183,7 @@ function workspaceShellSandboxConfig(
       workspaceRoot,
       ...workspaceShellTempWriteRoots(shellTempDirectory),
       ...scopedAgentHomeAccess.write,
+      ...(filesystemAccess?.write ?? []),
     ],
     agentHome,
   );
@@ -3123,6 +3202,7 @@ function workspaceShellSandboxConfig(
         ...new Set([
           ...runtimeReadScopes,
           ...scopedAgentHomeAccess.read,
+          ...(filesystemAccess?.read ?? []),
         ]),
       ],
       allowWrite: writeRoots,
@@ -3141,12 +3221,14 @@ function workspaceShellSessionSandboxConfig(
   workspaceRoot: string,
   shellTempDirectory: string | undefined,
   agentHomeAccess?: AsrtShellAgentHomeAccess,
+  filesystemAccess?: AsrtShellSandboxSelection['filesystemAccess'],
   runtimeReadScopes?: readonly string[],
 ): SandboxRuntimeConfig {
   const config = workspaceShellSandboxConfig(
     workspaceRoot,
     shellTempDirectory,
     agentHomeAccess,
+    filesystemAccess,
     runtimeReadScopes,
   );
   if (process.platform !== 'win32') return config;
@@ -3176,12 +3258,14 @@ function workspaceShellCommandSandboxConfig(
   workspaceRoot: string,
   shellTempDirectory: string | undefined,
   agentHomeAccess?: AsrtShellAgentHomeAccess,
+  filesystemAccess?: AsrtShellSandboxSelection['filesystemAccess'],
   runtimeReadScopes?: readonly string[],
 ): SandboxRuntimeConfig {
   const config = workspaceShellSandboxConfig(
     workspaceRoot,
     shellTempDirectory,
     agentHomeAccess,
+    filesystemAccess,
     runtimeReadScopes,
   );
   return process.platform === 'win32'
@@ -3304,6 +3388,7 @@ interface WorkspaceSessionLease {
 }
 
 interface WorkspaceSessionClient {
+  readonly policyKey: string;
   readonly tempDirectory?: string;
   acquire(
     request: SandboxBrokerRequest,
@@ -3357,10 +3442,10 @@ function assertWindowsSandboxAclProcessSafe(): void {
   }
 }
 
-function assertWindowsSandboxAclSafe(): void {
+function assertWindowsSandboxAclSafe(policyKey?: string): void {
   assertWindowsSandboxAclProcessSafe();
   if (process.platform !== 'win32') return;
-  assertNoPersistentWindowsSandboxAclPoison();
+  assertNoPersistentWindowsSandboxAclPoison(policyKey);
 }
 
 function trackWorkspaceSessionReset(reset: Promise<void>): void {
@@ -3545,9 +3630,10 @@ function setWorkspaceSessionReferenced(
 async function withExclusiveFileSystemEffectFence<T>(
   alreadyHeld: boolean,
   action: () => Promise<T>,
+  sandboxPolicyKey?: string,
 ): Promise<T> {
   if (alreadyHeld) return action();
-  const release = await acquireExclusiveFileSystemEffectLease();
+  const release = await acquireExclusiveFileSystemEffectLease(sandboxPolicyKey);
   try {
     return await action();
   } finally {
@@ -3558,12 +3644,14 @@ async function withExclusiveFileSystemEffectFence<T>(
 async function startWorkspaceSessionClientWithFence(
   workspaceRoot: string,
   agentHomeAccess: AsrtShellAgentHomeAccess | undefined,
+  filesystemAccess: AsrtShellSandboxSelection['filesystemAccess'],
   runtimeReadScopes: readonly string[],
+  policyKey: string,
   commandFenceHeld: boolean,
   onExit: () => void,
 ): Promise<WorkspaceSessionClient> {
   const tempDirectory = process.platform === 'win32'
-    ? createWorkspaceShellTempDirectory(workspaceRoot)
+    ? createWorkspaceShellTempDirectory(workspaceRoot, policyKey)
     : undefined;
   if (tempDirectory !== undefined) {
     await mkdir(tempDirectory, {
@@ -3584,6 +3672,7 @@ async function startWorkspaceSessionClientWithFence(
       workspaceRoot,
       tempDirectory,
       agentHomeAccess,
+      filesystemAccess,
       runtimeReadScopes,
     ),
   );
@@ -3597,13 +3686,13 @@ async function startWorkspaceSessionClientWithFence(
   });
   let windowsAclOwnerMarker: string | undefined;
   try {
-    windowsAclOwnerMarker = await admitWindowsSandboxAclOwner();
+    windowsAclOwnerMarker = await admitWindowsSandboxAclOwner(policyKey);
   } catch (error: unknown) {
     const cleanup = await Promise.allSettled([
       rm(initFile, { force: true }),
       ...(tempDirectory === undefined
         ? []
-        : [rm(tempDirectory, { recursive: true, force: true })]),
+        : [removeWorkspaceShellTempDirectory(tempDirectory)]),
     ]);
     const failures: unknown[] = [
       error,
@@ -3634,6 +3723,15 @@ async function startWorkspaceSessionClientWithFence(
       await retainWindowsSandboxAclOwnerPoison(windowsAclOwnerMarker, cleanupError);
       failures.push(cleanupError);
     }
+    const artifactCleanup = await Promise.allSettled([
+      rm(initFile, { force: true }),
+      ...(tempDirectory === undefined
+        ? []
+        : [removeWorkspaceShellTempDirectory(tempDirectory)]),
+    ]);
+    failures.push(...artifactCleanup.flatMap((result) => (
+      result.status === 'rejected' ? [result.reason] : []
+    )));
     if (failures.length === 1) throw error;
     throw new AggregateError(failures, 'Workspace sandbox owner launch cleanup failed.');
   }
@@ -3669,7 +3767,7 @@ async function startWorkspaceSessionClientWithFence(
   const tempCleanup = childExit.then(async () => {
     if (tempDirectory === undefined) return;
     try {
-      await rm(tempDirectory, { recursive: true, force: true });
+      await removeWorkspaceShellTempDirectory(tempDirectory);
     } catch (error: unknown) {
       emitKodaXDiagnostic({
         source: 'sandbox:workspace-session',
@@ -3929,9 +4027,10 @@ async function startWorkspaceSessionClientWithFence(
     setWorkspaceSessionReferenced(child, false);
   };
   const client: WorkspaceSessionClient = {
+    policyKey,
     ...(tempDirectory === undefined ? {} : { tempDirectory }),
     async acquire(value, signal, deadlineAt) {
-      assertWindowsSandboxAclSafe();
+      assertWindowsSandboxAclSafe(policyKey);
       throwIfWorkspacePreparationStopped(signal, deadlineAt);
       if (exited || closing) {
         throw new Error('ASRT workspace session is unavailable.');
@@ -3940,15 +4039,22 @@ async function startWorkspaceSessionClientWithFence(
       setWorkspaceSessionReferenced(child, true);
       activeLeases += 1;
       let finalized = false;
-      const finalize = (): void => {
-        if (finalized) return;
+      const finalize = (): boolean => {
+        if (finalized) return false;
         finalized = true;
         activeLeases -= 1;
+        const idle = activeLeases === 0;
         if (activeLeases === 0) {
           resolveDrained?.();
           resolveDrained = undefined;
         }
         scheduleIdleClose();
+        return idle;
+      };
+      const finalizeAndCloseIfIdle = async (): Promise<void> => {
+        if (finalize() && process.platform === 'win32') {
+          await client.close(commandFenceHeld);
+        }
       };
       const retireAfterCleanupFailure = (message: string, error: unknown): void => {
         emitKodaXDiagnostic({
@@ -3957,7 +4063,8 @@ async function startWorkspaceSessionClientWithFence(
           message,
           detail: error,
         });
-        finalize();
+        const idle = finalize();
+        if (!idle) return;
         void client.close(commandFenceHeld).catch((closeError: unknown) => {
           emitKodaXDiagnostic({
             source: 'sandbox:workspace-session',
@@ -3981,7 +4088,7 @@ async function startWorkspaceSessionClientWithFence(
           const cleanup = await request('cleanup');
           if (!cleanup.ok) throw new Error(cleanup.error ?? 'ASRT command cleanup failed.');
         }).then(
-          finalize,
+          finalizeAndCloseIfIdle,
           (cleanupError: unknown) => retireAfterCleanupFailure(
             'Late workspace sandbox preparation cleanup failed.',
             cleanupError,
@@ -4015,7 +4122,7 @@ async function startWorkspaceSessionClientWithFence(
               cleanupError,
             );
           }
-          finalize();
+          await finalizeAndCloseIfIdle();
           throw error;
         }
         let released = false;
@@ -4024,14 +4131,29 @@ async function startWorkspaceSessionClientWithFence(
           async release() {
             if (released) return;
             released = true;
+            let cleanupError: unknown;
             try {
               const cleanup = await request('cleanup');
               if (!cleanup.ok) {
                 throw new Error(cleanup.error ?? 'ASRT command cleanup failed.');
               }
-            } finally {
-              finalize();
+            } catch (error: unknown) {
+              cleanupError = error;
             }
+            let closeError: unknown;
+            try {
+              await finalizeAndCloseIfIdle();
+            } catch (error: unknown) {
+              closeError = error;
+            }
+            if (cleanupError !== undefined && closeError !== undefined) {
+              throw new AggregateError(
+                [cleanupError, closeError],
+                'Workspace sandbox command cleanup and policy-group reset both failed.',
+              );
+            }
+            if (cleanupError !== undefined) throw cleanupError;
+            if (closeError !== undefined) throw closeError;
           },
         };
       } catch (error) {
@@ -4055,6 +4177,7 @@ async function startWorkspaceSessionClientWithFence(
           await terminate();
           await confirmCleanReset();
           },
+          policyKey,
         );
       })().catch(async (error: unknown) => {
         await retainWindowsSandboxAclOwnerPoison(windowsAclOwnerMarker, error);
@@ -4071,29 +4194,142 @@ async function startWorkspaceSessionClientWithFence(
 function startWorkspaceSessionClient(
   workspaceRoot: string,
   agentHomeAccess: AsrtShellAgentHomeAccess | undefined,
+  filesystemAccess: AsrtShellSandboxSelection['filesystemAccess'],
   runtimeReadScopes: readonly string[],
+  policyKey: string,
   aclFenceHeld: boolean,
   onExit: () => void,
 ): Promise<WorkspaceSessionClient> {
   return withExclusiveFileSystemEffectFence(
     aclFenceHeld,
     async () => {
-      assertWindowsSandboxAclSafe();
-      await ensureWindowsSandboxAclRecovery();
+      const currentPolicyKey = workspaceShellPolicyKey(
+        workspaceRoot,
+        agentHomeAccess,
+        filesystemAccess,
+        runtimeReadScopes,
+      );
+      if (currentPolicyKey !== policyKey) {
+        throw new Error('Sandbox policy paths changed before ACL initialization.');
+      }
+      assertWindowsSandboxAclSafe(policyKey);
+      await ensureWindowsSandboxAclRecovery(policyKey);
       return startWorkspaceSessionClientWithFence(
         workspaceRoot,
         agentHomeAccess,
+        filesystemAccess,
         runtimeReadScopes,
+        policyKey,
         aclFenceHeld,
         onExit,
       );
     },
+    policyKey,
   );
+}
+
+function normalizedWorkspacePolicyPaths(values: readonly string[]): string[] {
+  return [...new Set(values.map((candidate) => {
+    const resolved = path.resolve(candidate);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  }))].sort();
+}
+
+interface WorkspacePolicyPathIdentity {
+  readonly lexical: string;
+  readonly canonical: string | null;
+}
+
+function workspacePolicyPathIdentity(candidate: string): WorkspacePolicyPathIdentity {
+  const normalize = (value: string): string => {
+    const resolved = path.resolve(value);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  };
+  let canonical: string | null = null;
+  try {
+    canonical = normalize(realpathSync.native(candidate));
+  } catch {
+    // A missing path remains distinguishable from an existing or retargeted
+    // path. Windows write grants reject unrepresentable missing targets before
+    // this policy is admitted.
+  }
+  return {
+    lexical: normalize(candidate),
+    canonical,
+  };
+}
+
+function workspacePolicyPathIdentities(
+  values: readonly string[],
+): WorkspacePolicyPathIdentity[] {
+  const identities = new Map<string, WorkspacePolicyPathIdentity>();
+  for (const value of values) {
+    const identity = workspacePolicyPathIdentity(value);
+    identities.set(`${identity.lexical}\0${identity.canonical ?? ''}`, identity);
+  }
+  return [...identities.values()].sort((left, right) => (
+    left.lexical.localeCompare(right.lexical)
+    || (left.canonical ?? '').localeCompare(right.canonical ?? '')
+  ));
+}
+
+function workspaceShellPolicyKey(
+  workspaceRoot: string,
+  agentHomeAccess: AsrtShellAgentHomeAccess | undefined,
+  filesystemAccess: AsrtShellSandboxSelection['filesystemAccess'],
+  runtimeReadScopes: readonly string[],
+): string {
+  // Keep persistent deny guards in the policy identity even though their
+  // ASRT copies are removed after the OS-level guard is installed. The guard
+  // remains part of the effective policy, and this makes the identity stable
+  // before and after first-session initialization.
+  const effectiveConfig = workspaceShellSessionSandboxConfig(
+    workspaceRoot,
+    undefined,
+    agentHomeAccess,
+    filesystemAccess,
+    runtimeReadScopes,
+  );
+  return createHash('sha256').update(JSON.stringify({
+    workspace: workspacePolicyPathIdentity(workspaceRoot),
+    agentHome: workspacePolicyPathIdentity(getAgentConfigHome()),
+    tempBase: workspacePolicyPathIdentity(os.tmpdir()),
+    filesystem: {
+      allowRead: workspacePolicyPathIdentities(effectiveConfig.filesystem.allowRead),
+      allowWrite: workspacePolicyPathIdentities(effectiveConfig.filesystem.allowWrite),
+      denyRead: workspacePolicyPathIdentities(effectiveConfig.filesystem.denyRead),
+      denyWrite: workspacePolicyPathIdentities(effectiveConfig.filesystem.denyWrite),
+    },
+    network: effectiveConfig.network,
+    windowsRunner: process.platform === 'win32'
+      ? {
+          version: KODAX_ASRT_VERSION,
+          architecture: process.arch,
+          path: workspacePolicyPathIdentity(requirePreparedWindowsRunner().path),
+        }
+      : null,
+    ephemeral: agentHomeAccess?.ephemeral === true,
+  })).digest('hex');
+}
+
+function workspaceShellFilesystemAccessIsRepresentable(
+  filesystemAccess: AsrtShellSandboxSelection['filesystemAccess'],
+): boolean {
+  if (process.platform !== 'win32') return true;
+  return (filesystemAccess?.write ?? []).every((candidate) => {
+    try {
+      realpathSync.native(candidate);
+      return true;
+    } catch {
+      return false;
+    }
+  });
 }
 
 async function getWorkspaceSession(
   workspaceRoot: string,
   agentHomeAccess?: AsrtShellAgentHomeAccess,
+  filesystemAccess?: AsrtShellSandboxSelection['filesystemAccess'],
   runtimeReadScopes = workspaceShellRuntimeReadScopes(
     process.env,
     workspaceShellExecutable(),
@@ -4101,16 +4337,25 @@ async function getWorkspaceSession(
   baselineReadScopes: readonly string[] = runtimeReadScopes,
   aclFenceHeld = false,
 ): Promise<WorkspaceSessionClient | undefined> {
-  await waitForWorkspaceSessionResets();
+  if (
+    pendingWorkspaceSessionResets.size > 0
+    || pendingWindowsSandboxAclTransitions.size > 0
+  ) return undefined;
   assertWindowsSandboxAclProcessSafe();
   const doctor = await doctorSandboxRuntime();
+  if (!doctor.ready && !doctorHasWindowsSandboxAclCleanupBlock(doctor)) return undefined;
+  const policyKey = workspaceShellPolicyKey(
+    workspaceRoot,
+    process.platform === 'win32' ? agentHomeAccess : undefined,
+    filesystemAccess,
+    runtimeReadScopes,
+  );
   if (!doctor.ready) {
-    if (!doctorHasWindowsSandboxAclCleanupBlock(doctor)) return undefined;
-    await ensureWindowsSandboxAclRecovery();
+    await ensureWindowsSandboxAclRecovery(policyKey);
     if (doctor.setupRequired) return undefined;
   }
-  await ensureWindowsSandboxAclRecovery();
-  assertWindowsSandboxAclSafe();
+  await ensureWindowsSandboxAclRecovery(policyKey);
+  assertWindowsSandboxAclSafe(policyKey);
   registerWorkspaceSessionBeforeExit();
   const scopedAccess = process.platform === 'win32'
     ? agentHomeAccess
@@ -4118,22 +4363,29 @@ async function getWorkspaceSession(
   const workspaceKey = process.platform === 'win32'
     ? workspaceRoot.toLowerCase()
     : workspaceRoot;
-  const normalizedReadScopes = (values: readonly string[]): string[] => (
-    [...values].map((candidate) => (
-      process.platform === 'win32' ? candidate.toLowerCase() : candidate
-    )).sort()
-  );
+  const normalizedReadScopes = normalizedWorkspacePolicyPaths;
   const normalizedRuntimeReadScopes = normalizedReadScopes(runtimeReadScopes);
   const isBaselineScope = JSON.stringify(normalizedRuntimeReadScopes)
     === JSON.stringify(normalizedReadScopes(baselineReadScopes));
-  const accessKey = scopedAccess === undefined && isBaselineScope
+  const hasAdditionalFilesystemAccess = (filesystemAccess?.read.length ?? 0) > 0
+    || (filesystemAccess?.write.length ?? 0) > 0;
+  const accessKey = scopedAccess === undefined
+    && !hasAdditionalFilesystemAccess
+    && isBaselineScope
     ? 'workspace'
     : createHash('sha256').update(JSON.stringify({
         read: [...(scopedAccess?.read ?? [])].map((candidate) => candidate.toLowerCase()).sort(),
         write: [...(scopedAccess?.write ?? [])].map((candidate) => candidate.toLowerCase()).sort(),
+        additionalRead: normalizedWorkspacePolicyPaths(filesystemAccess?.read ?? []),
+        additionalWrite: normalizedWorkspacePolicyPaths(filesystemAccess?.write ?? []),
         runtimeReadScopes: normalizedRuntimeReadScopes,
       })).digest('hex');
-  const key = `${workspaceKey}\0${accessKey}`;
+  // Windows ACL owners share one machine account, so their cache identity is
+  // exactly the canonical effective policy. POSIX retains its existing local
+  // workspace/access cache partitioning.
+  const key = process.platform === 'win32'
+    ? policyKey
+    : `${workspaceKey}\0${accessKey}`;
   if (process.platform === 'win32' && aclFenceHeld) {
     const retainedKey = scopedAccess?.ephemeral === true ? undefined : key;
     for (const [candidate, pending] of [...workspaceSessions]) {
@@ -4156,7 +4408,9 @@ async function getWorkspaceSession(
     return startWorkspaceSessionClient(
       workspaceRoot,
       scopedAccess,
+      filesystemAccess,
       runtimeReadScopes,
+      policyKey,
       aclFenceHeld,
       () => undefined,
     );
@@ -4193,7 +4447,9 @@ async function getWorkspaceSession(
     session = startWorkspaceSessionClient(
       workspaceRoot,
       scopedAccess,
+      filesystemAccess,
       runtimeReadScopes,
+      policyKey,
       aclFenceHeld,
       () => {
         if (workspaceSessions.get(key) === session) workspaceSessions.delete(key);
@@ -4244,8 +4500,7 @@ export async function resetAsrtWorkspaceSessionsForTest(options: {
 
 /**
  * Runtime-owned broker for admitted workspace shell calls. Non-admitted calls
- * return undefined; the caller either blocks them when failClosed is enabled or
- * keeps the optional legacy execution path.
+ * return undefined so the caller keeps the ordinary authorized execution path.
  */
 export function createAsrtShellSandbox(
   input: CreateAsrtShellSandboxInput,
@@ -4259,6 +4514,7 @@ export function createAsrtShellSandbox(
     const workspaceWarmup = getWorkspaceSession(
       workspaceRoot,
       undefined,
+      undefined,
       baselineReadScopes,
       baselineReadScopes,
     );
@@ -4271,14 +4527,13 @@ export function createAsrtShellSandbox(
       emitKodaXDiagnostic({
         source: 'sandbox:workspace-session',
         level: 'warn',
-        message: 'Workspace sandbox warm-up failed; admitted commands remain fail-closed.',
+        message: 'Workspace sandbox warm-up failed; admitted commands will use normal permission fallback.',
         detail: error,
       });
     });
   }
   return {
-    failClosed: input.failClosed === true,
-    processTreeContainment: input.failClosed === true && process.platform === 'linux'
+    processTreeContainment: process.platform === 'linux'
       ? 'root-exit-drains'
       : undefined,
     async prepare(shellInput) {
@@ -4312,6 +4567,18 @@ export function createAsrtShellSandbox(
             requestedAgentHomeAccess,
           )
         : requestedAgentHomeAccess;
+      const filesystemAccess = typeof selection === 'object'
+        ? selection.filesystemAccess
+        : undefined;
+      if (!workspaceShellFilesystemAccessIsRepresentable(filesystemAccess)) {
+        shellInput.reportObservation?.({
+          version: 1,
+          state: 'fallback',
+          reason: 'not_ready',
+          execution: 'normal_permission_policy',
+        });
+        return undefined;
+      }
       const ephemeralSession = process.platform === 'win32'
         && agentHomeAccess?.ephemeral === true;
       const executable = workspaceShellExecutable(shellInput.executable);
@@ -4326,68 +4593,13 @@ export function createAsrtShellSandbox(
       );
       let lease: WorkspaceSessionLease | undefined;
       let workspaceSession: WorkspaceSessionClient | undefined;
-      let exclusiveEffectLease:
-        | Awaited<ReturnType<typeof acquireExclusiveFileSystemEffectLease>>
-        | undefined;
-      let exclusiveReleaseReady = process.platform !== 'win32';
-      let exclusiveReleased = false;
-      let exclusiveRelease: Promise<void> | undefined;
-      const releaseExclusiveAfterReset = async (): Promise<void> => {
-        if (!exclusiveEffectLease) return;
-        if (!exclusiveReleaseReady) {
-          throw new Error('Windows workspace ACL reset is not confirmed.');
-        }
-        exclusiveRelease ??= exclusiveEffectLease();
-        await exclusiveRelease;
-        exclusiveReleased = true;
-      };
-      const fileSystemEffectLease = (): KodaXFileSystemEffectLease | undefined => (
-        exclusiveEffectLease === undefined
-          ? undefined
-          : {
-              bindEffectProcess: (pid, windowsJobContained) => (
-                exclusiveEffectLease!.bindEffectProcess(pid, windowsJobContained)
-              ),
-              finishEffectProcess: () => exclusiveEffectLease!.finishEffectProcess(),
-              release: releaseExclusiveAfterReset,
-            }
-      );
-      const closeWindowsCommandSession = async (): Promise<void> => {
-        if (process.platform !== 'win32' || !workspaceSession) return;
-        await workspaceSession.close(true);
-        exclusiveReleaseReady = true;
-        await releaseExclusiveAfterReset();
-      };
       try {
-        if (process.platform === 'win32') {
-          await waitForWorkspaceSessionResets();
-          const pendingExclusiveLease = acquireExclusiveFileSystemEffectLease();
-          try {
-            exclusiveEffectLease = await waitForWorkspacePreparation(
-              pendingExclusiveLease,
-              shellInput.signal,
-              shellInput.deadlineAt,
-            );
-          } catch (error: unknown) {
-            void pendingExclusiveLease.then((lateLease) => lateLease()).catch(
-              (releaseError: unknown) => {
-                emitKodaXDiagnostic({
-                  source: 'sandbox:workspace-session',
-                  level: 'warn',
-                  message: 'Late Windows workspace filesystem fence cleanup failed.',
-                  detail: releaseError,
-                });
-              },
-            );
-            throw error;
-          }
-        }
         const pendingSession = getWorkspaceSession(
           workspaceRoot,
           agentHomeAccess,
+          filesystemAccess,
           runtimeReadScopes,
           baselineReadScopes,
-          exclusiveEffectLease !== undefined,
         );
         let session: WorkspaceSessionClient | undefined;
         try {
@@ -4409,17 +4621,9 @@ export function createAsrtShellSandbox(
           ) {
             const lateRollback = pendingSession.then(
               async (lateSession) => {
-                if (lateSession) await lateSession.close(true);
-                exclusiveReleaseReady = true;
-                await releaseExclusiveAfterReset();
+                if (lateSession) await lateSession.close();
               },
-              async (sessionError: unknown) => {
-                if (!(sessionError instanceof ForeignWindowsSandboxAclOwnerContentionError)) {
-                  assertWindowsSandboxAclSafe();
-                }
-                exclusiveReleaseReady = true;
-                await releaseExclusiveAfterReset();
-              },
+              async () => undefined,
             );
             trackWorkspaceSessionReset(lateRollback);
             void lateRollback.catch((closeError: unknown) => {
@@ -4434,25 +4638,15 @@ export function createAsrtShellSandbox(
           throw error;
         }
         if (!session) {
-          if (exclusiveEffectLease) {
-            exclusiveReleaseReady = true;
-            await releaseExclusiveAfterReset();
-          }
           shellInput.reportObservation?.({
             version: 1,
             state: 'fallback',
             reason: 'not_ready',
             execution: 'normal_permission_policy',
           });
-          if (input.failClosed === true) {
-            const doctor = await doctorSandboxRuntime();
-            throw new Error(
-              'Required OS sandbox is unavailable: '
-              + (doctor.diagnostics.join(' ') || 'sandbox readiness could not be established.'),
-            );
-          }
           return undefined;
         }
+        const policyKey = session.policyKey;
         workspaceSession = session;
         const controlDirectory = await sandboxControlDirectory();
         const requestFile = path.join(
@@ -4482,6 +4676,7 @@ export function createAsrtShellSandbox(
             workspaceRoot,
             session.tempDirectory,
             agentHomeAccess,
+            filesystemAccess,
             runtimeReadScopes,
           )),
           command: executable,
@@ -4492,7 +4687,7 @@ export function createAsrtShellSandbox(
           endpoints: [],
           allowAllNetwork: true,
           bootstrapCommand: sandboxJavaScriptCommand(),
-          fallbackToNormalExecution: input.failClosed !== true,
+          fallbackToNormalExecution: true,
           observationBackend: sandboxRuntimeCapability().backend,
           observationFile,
           targetStartedMarker:
@@ -4517,13 +4712,12 @@ export function createAsrtShellSandbox(
           isElectron: process.versions.electron !== undefined,
         });
         await writeFile(requestFile, JSON.stringify(brokerRequest), { mode: 0o600 });
-        const preparedEffectLease = fileSystemEffectLease();
         let retirement: Promise<void> | undefined;
         const retireWorkspaceSession = async (): Promise<void> => {
           if (ephemeralSession) return;
           if (retirement === undefined) {
             retirement = workspaceSession?.close(
-              process.platform === 'win32' && !exclusiveReleased,
+              false,
             ) ?? Promise.resolve();
             void retirement.catch((error: unknown) => {
               emitKodaXDiagnostic({
@@ -4540,10 +4734,8 @@ export function createAsrtShellSandbox(
           executable: process.execPath,
           args: launch.args,
           env: launch.env,
-          authorizeStart: assertWindowsSandboxAclSafe,
-          ...(preparedEffectLease === undefined
-            ? {}
-            : { fileSystemEffectLease: preparedEffectLease }),
+          fileSystemEffectPolicyKey: policyKey,
+          authorizeStart: () => assertWindowsSandboxAclSafe(policyKey),
           async cleanup(cleanupInput) {
             let observation: KodaXShellSandboxObservation | undefined;
             const cleanupFailures: unknown[] = [];
@@ -4568,19 +4760,6 @@ export function createAsrtShellSandbox(
               await activeLease.release();
             } catch (error: unknown) {
               cleanupFailures.push(error);
-            }
-            if (process.platform === 'win32') {
-              try {
-                await closeWindowsCommandSession();
-              } catch (error: unknown) {
-                cleanupFailures.push(error);
-              }
-            } else if (exclusiveEffectLease) {
-              try {
-                await releaseExclusiveAfterReset();
-              } catch (error: unknown) {
-                cleanupFailures.push(error);
-              }
             }
             const attestationMissing = cleanupInput?.execution === 'started_or_unknown'
               && observation === undefined;
@@ -4614,7 +4793,6 @@ export function createAsrtShellSandbox(
         };
       } catch (error: unknown) {
         const failures: unknown[] = [error];
-        let aclResetConfirmed = true;
         const preparationStopped = shellInput.signal?.aborted
           || (
             shellInput.deadlineAt !== undefined
@@ -4639,7 +4817,7 @@ export function createAsrtShellSandbox(
           && workspaceSession
           && lease === undefined
         ) {
-          void closeWindowsCommandSession().catch((closeError: unknown) => {
+          void workspaceSession.close().catch((closeError: unknown) => {
             emitKodaXDiagnostic({
               source: 'sandbox:workspace-session',
               level: 'warn',
@@ -4651,9 +4829,8 @@ export function createAsrtShellSandbox(
         }
         if (process.platform === 'win32' && workspaceSession) {
           try {
-            await closeWindowsCommandSession();
+            await workspaceSession.close();
           } catch (closeError: unknown) {
-            aclResetConfirmed = false;
             failures.push(closeError);
             emitKodaXDiagnostic({
               source: 'sandbox:workspace-session',
@@ -4663,40 +4840,20 @@ export function createAsrtShellSandbox(
             });
           }
         }
-        if (
-          exclusiveEffectLease
-          && workspaceSession === undefined
-          && aclResetConfirmed
-          && !(preparationStopped && process.platform === 'win32')
-        ) {
-          exclusiveReleaseReady = true;
-          try {
-            await releaseExclusiveAfterReset();
-          } catch (releaseError: unknown) {
-            failures.push(releaseError);
-            emitKodaXDiagnostic({
-              source: 'sandbox:workspace-session',
-              level: 'warn',
-              message: 'Unused review-only filesystem fence cleanup failed.',
-              detail: releaseError,
-            });
-          }
-        }
-        if (failures.length > 1) {
-          throw new AggregateError(
-            failures,
-            `Workspace sandbox preparation failed and cleanup was incomplete: ${failures
-              .map(errorText)
-              .join(' | ')}`,
-          );
-        }
         if (preparationStopped) throw error;
-        if (input.failClosed === true) throw error;
+        const diagnostic = failures.length === 1
+          ? error
+          : new AggregateError(
+              failures,
+              `Workspace sandbox preparation failed and cleanup was incomplete: ${failures
+                .map(errorText)
+                .join(' | ')}`,
+            );
         emitKodaXDiagnostic({
           source: 'sandbox:workspace-session',
           level: 'warn',
           message: 'Workspace sandbox preparation failed; using normal permission fallback.',
-          detail: error,
+          detail: diagnostic,
         });
         shellInput.reportObservation?.({
           version: 1,
@@ -4929,6 +5086,7 @@ async function writeBrokerObservation(
 interface SandboxedBrokerChildResult {
   readonly exitCode: number;
   readonly targetStarted: boolean;
+  readonly spawnFailedBeforeSpawn: boolean;
   readonly diagnostic?: string;
 }
 
@@ -4945,10 +5103,14 @@ function waitForSandboxedBrokerTarget(
   let pending = Buffer.alloc(0);
   let diagnostic = Buffer.alloc(0);
   let processError: string | undefined;
+  let wrapperSpawned = false;
   let targetStarted = false;
   let observationWrite = Promise.resolve();
   return new Promise<SandboxedBrokerChildResult>((resolve) => {
     let settled = false;
+    child.once('spawn', () => {
+      wrapperSpawned = true;
+    });
     const finish = (result: SandboxedBrokerChildResult): void => {
       if (settled) return;
       settled = true;
@@ -4992,6 +5154,7 @@ function waitForSandboxedBrokerTarget(
       finish({
         exitCode: signal ? 1 : code ?? 1,
         targetStarted,
+        spawnFailedBeforeSpawn: processError !== undefined && !wrapperSpawned,
         ...(preTarget || processError
           ? { diagnostic: preTarget || processError }
           : {}),
@@ -5092,6 +5255,23 @@ export async function runAsrtBrokerProcess(requestFile: string): Promise<number>
       targetStartedMarker,
     );
     targetStarted = result.targetStarted;
+    if (
+      result.spawnFailedBeforeSpawn
+      && request.fallbackToNormalExecution === true
+      && !normalFallbackAttempted
+    ) {
+      normalFallbackAttempted = true;
+      if (request.wrappedInvocation === undefined) {
+        await resetSandboxManagerBestEffort();
+      }
+      await writeBrokerObservation(request, {
+        version: 1,
+        state: 'fallback',
+        reason: 'backend_failed',
+        execution: 'normal_permission_policy',
+      }).catch(() => undefined);
+      return await runNormalBrokerProcess(request);
+    }
     if (!targetStarted) {
       process.stderr.write(
         `${result.diagnostic ?? 'Sandbox target launch could not be attested.'}\n`,

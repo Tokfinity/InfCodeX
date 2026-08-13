@@ -71,9 +71,6 @@ export async function runKodaX(
     executionCwd: runtimeOptions.context?.executionCwd
       ?? runtimeOptions.context?.gitRoot
       ?? process.cwd(),
-    failClosedShellSandbox: runtimeOptions.context?.shellSandbox?.failClosed === true,
-    effectTreeContainmentAvailable: process.platform === 'win32'
-      || runtimeOptions.context?.shellSandbox?.processTreeContainment === 'root-exit-drains',
     protectedReadReviewAvailable: runtimeOptions.events?.beforeToolExecute !== undefined,
   });
   const guardrails = [

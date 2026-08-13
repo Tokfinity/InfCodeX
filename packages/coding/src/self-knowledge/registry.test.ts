@@ -111,7 +111,8 @@ describe('FEATURE_218 manual registry', () => {
     expect(sandbox).toContain('Run-scoped');
     expect(sandbox).toContain('case-insensitive PATH/Path');
     expect(sandbox).toContain('verbatim-argument contract');
-    expect(sandbox).toContain('capability metadata is version 2');
+    expect(sandbox).toContain('capability metadata is version 3');
+    expect(sandbox).toContain('already-approved normal permission path');
   });
 
   it('documents the v0.7.77 adaptive AMA and governed memory intervention contracts', () => {

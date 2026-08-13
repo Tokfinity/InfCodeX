@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   _peekFileMutationQueueSizeForTests,
   _resetFileMutationQueueForTests,
+  acquireExclusiveFileSystemEffectLease,
   acquireFileSystemMutationLease,
   normalizePathForKey,
   withFileMutation,
@@ -22,7 +23,13 @@ function effectRuntimeDirectory(): string {
     ? undefined
     : `${process.env.VITEST_WORKER_ID}-${process.pid}`.replace(/[^a-z0-9_-]/gi, '_');
   return path.join(
-    configHome,
+    process.platform === 'win32'
+      ? path.join(
+          path.resolve(process.env.PROGRAMDATA ?? 'C:\\ProgramData'),
+          'KodaX',
+          'sandbox-runtime',
+        )
+      : configHome,
     'runtime',
     ...(workerScope === undefined ? [] : [`test-filesystem-effects-${workerScope}`]),
   );
@@ -283,6 +290,67 @@ describe('cross-process filesystem effect lease', () => {
     const releaseSecond = await acquireFileSystemMutationLease();
     await releaseSecond();
     await releaseFirst();
+  });
+
+  it('lets sandbox ACL coordination overlap only with its exact policy', async () => {
+    const releaseSamePolicy = await acquireFileSystemMutationLease('policy-a');
+    const releaseCoordination = await acquireExclusiveFileSystemEffectLease('policy-a');
+    await releaseCoordination();
+    await releaseSamePolicy();
+  });
+
+  it('serializes slow ACL transitions for the same sandbox policy without falling back', async () => {
+    const releaseFirst = await acquireExclusiveFileSystemEffectLease('policy-a');
+    const second = acquireExclusiveFileSystemEffectLease('policy-a');
+    const releaseTimer = setTimeout(() => {
+      void releaseFirst();
+    }, 1_600);
+    try {
+      const releaseSecond = await second;
+      await releaseSecond();
+    } finally {
+      clearTimeout(releaseTimer);
+      await releaseFirst();
+    }
+  });
+
+  it('waits for sandbox ACL coordination before starting ordinary permission fallback', async () => {
+    const releaseCoordination = await acquireExclusiveFileSystemEffectLease('policy-a');
+    let fallbackSettled = false;
+    const fallback = acquireFileSystemMutationLease().finally(() => {
+      fallbackSettled = true;
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 1_500));
+    expect(fallbackSettled).toBe(false);
+    await releaseCoordination();
+    const releaseFallback = await fallback;
+    await releaseFallback();
+  });
+
+  it.runIf(process.platform === 'win32')(
+    'coordinates shell and host effects across different KODAX_HOME values',
+    async () => {
+      const releaseShell = await acquireFileSystemMutationLease();
+      setAgentConfigHome(path.join(configHome, 'other-home'));
+      try {
+        await expect(withFileMutation('/tmp/cross-home.txt', async () => 'unsafe'))
+          .rejects.toThrow('filesystem effect is already active');
+      } finally {
+        await releaseShell();
+      }
+    },
+  );
+
+  it('keeps different sandbox policies out of the same ACL coordination window', async () => {
+    const releaseOtherPolicy = await acquireFileSystemMutationLease('policy-b');
+    const startedAt = Date.now();
+    try {
+      await expect(acquireExclusiveFileSystemEffectLease('policy-a'))
+        .rejects.toThrow('different sandbox policy');
+      expect(Date.now() - startedAt).toBeLessThan(250);
+    } finally {
+      await releaseOtherPolicy();
+    }
   });
 
   it('requires and records a fresh completion proof after rebinding one lease', async () => {

@@ -26,6 +26,7 @@ const profileToolchainPath = [
   profileToolchainActive,
   process.env.PATH ?? process.env.Path ?? '',
 ].filter(Boolean).join(path.delimiter);
+const parallelSessionCount = 4;
 
 app.on('window-all-closed', () => {});
 
@@ -89,13 +90,16 @@ async function run() {
       + JSON.stringify(environmentProof.directPowerShellProbe),
     );
   }
-  const session = await runtime.sessions.create({
-    sessionId,
-    title: 'Windows GUI query smoke',
-    projectPath: workspaceDir,
-    surface: 'space-desktop',
-  });
-  await runtime.sessions.updateSettings(session.id, {
+  const sessions = await Promise.all(Array.from(
+    { length: parallelSessionCount },
+    (_, index) => runtime.sessions.create({
+      sessionId: `${sessionId}-${index}`,
+      title: `Windows GUI query smoke ${index}`,
+      projectPath: workspaceDir,
+      surface: 'space-desktop',
+    }),
+  ));
+  const settings = {
     permissionMode: 'auto',
     autoModeEngine: 'rules',
     shellExecution: {
@@ -114,35 +118,38 @@ async function run() {
       cache: { ttlMs: 0, refreshToken: 'packaged-electron-runtime-sandbox' },
       probeTimeoutMs: 10_000,
     },
-  });
-  const permissionSubscription = runtime.events.subscribe({
-    sessionId: session.id,
-    type: 'permission.requested',
-  }, (event) => {
-    const request = event.payload;
-    if (request?.toolName !== 'bash' || typeof request.id !== 'string') return;
-    void runtime.permissions.respond(request.id, { type: 'allow_once' }, {
-      runId: request.runId,
-    });
-  });
+  };
+  await Promise.all(sessions.map((session) => (
+    runtime.sessions.updateSettings(session.id, settings)
+  )));
+  const permissionSubscriptions = sessions.map((session) => runtime.events.subscribe({
+      sessionId: session.id,
+      type: 'permission.requested',
+    }, (event) => {
+      const request = event.payload;
+      if (request?.toolName !== 'bash' || typeof request.id !== 'string') return;
+      void runtime.permissions.respond(request.id, { type: 'allow_once' }, {
+        runId: request.runId,
+      });
+    }));
   const sandboxedRuns = new Set();
-  const sandboxSubscription = runtime.events.subscribe({
-    sessionId: session.id,
-    type: 'tool.sandbox',
-  }, (event) => {
-    if (
-      typeof event.runId === 'string'
-      && event.payload?.update?.observation?.state === 'applied'
-      && event.payload.update.observation.backend === 'windows-restricted-user'
-    ) {
-      sandboxedRuns.add(event.runId);
-    }
-  });
+  const sandboxSubscriptions = sessions.map((session) => runtime.events.subscribe({
+      sessionId: session.id,
+      type: 'tool.sandbox',
+    }, (event) => {
+      if (
+        typeof event.runId === 'string'
+        && event.payload?.update?.observation?.state === 'applied'
+        && event.payload.update.observation.backend === 'windows-restricted-user'
+      ) {
+        sandboxedRuns.add(event.runId);
+      }
+    }));
   let appliedSandboxCount = 0;
   try {
-    for (let index = 0; index < ordinaryQueryCount; index += 1) {
-      fs.writeFileSync(consoleProbeQueryFile, String(index), 'utf8');
+    const runQuery = async (index) => {
       try {
+        const session = sessions[index % sessions.length];
         const handle = await runtime.runs.start({
           sessionId: session.id,
           prompt: `ordinary query ${index}`,
@@ -160,13 +167,19 @@ async function run() {
       } catch (error) {
         const detail = error instanceof Error ? error.stack : String(error);
         throw new Error(`Ordinary query ${index} failed: ${detail}`);
-      } finally {
-        fs.writeFileSync(consoleProbeQueryFile, 'idle', 'utf8');
       }
+    };
+    for (let index = 0; index < ordinaryQueryCount; index += parallelSessionCount) {
+      fs.writeFileSync(consoleProbeQueryFile, String(index), 'utf8');
+      await Promise.all(Array.from(
+        { length: Math.min(parallelSessionCount, ordinaryQueryCount - index) },
+        (_, offset) => runQuery(index + offset),
+      ));
     }
+    fs.writeFileSync(consoleProbeQueryFile, 'idle', 'utf8');
   } finally {
-    sandboxSubscription.close();
-    permissionSubscription.close();
+    for (const subscription of sandboxSubscriptions) subscription.close();
+    for (const subscription of permissionSubscriptions) subscription.close();
   }
   const preflight = await runtime.status.preflight();
   writeResult({
@@ -176,6 +189,7 @@ async function run() {
     clientCount: preflight.clientCount,
     environmentProof,
     ordinaryQueryCount,
+    parallelSessionCount,
     appliedSandboxCount,
   });
 
@@ -272,6 +286,8 @@ class WindowsHideSmokeProvider extends KodaXBaseProvider {
         !content.includes('Exit: 0')
         || !content.includes('runtime-sandbox-ok')
         || !content.includes('profile-toolchain-ok')
+        || !content.includes('parallel-barrier-ok')
+        || !content.includes('abcdef0')
         || !content.includes('node-realpath-ok')
         || !content.toLowerCase().includes(${JSON.stringify(
           `node-realpath=${path.join(profileToolchainVersion, 'node.exe')}`.toLowerCase(),
@@ -289,6 +305,19 @@ class WindowsHideSmokeProvider extends KodaXBaseProvider {
       };
     }
     this.toolSequence += 1;
+    const promptText = typeof last?.content === 'string'
+      ? last.content
+      : JSON.stringify(last?.content ?? '');
+    const queryId = /ordinary query (\\d+)/.exec(promptText)?.[1]
+      ?? String(this.toolSequence);
+    const queryNumber = Number(queryId);
+    const barrierGroup = Math.floor(queryNumber / ${parallelSessionCount});
+    const barrierCount = Math.min(
+      ${parallelSessionCount},
+      ${ordinaryQueryCount} - barrierGroup * ${parallelSessionCount},
+    );
+    const barrierDirectory = ${JSON.stringify(path.join(workspaceDir, '.parallel-barriers'))}
+      + '\\\\' + barrierGroup;
     return {
       textBlocks: [],
       toolBlocks: [{
@@ -296,8 +325,10 @@ class WindowsHideSmokeProvider extends KodaXBaseProvider {
         id: 'runtime-sandbox-shell-' + this.toolSequence,
         name: 'bash',
         input: {
-          command: ${JSON.stringify(
-            `profile-tool.exe --profile-toolchain `
+          command: 'set "KODAX_CONSOLE_PROBE_QUERY_ID=' + queryId
+            + '" && profile-tool.exe --profile-toolchain --barrier "' + barrierDirectory
+            + '" ' + queryId + ' ' + barrierCount + ' && ' + ${JSON.stringify(
+            `git rev-parse --short HEAD `
             + `&& node -e "const p=require('node:fs').realpathSync(process.execPath);`
             + `process.stdout.write('node-realpath='+p+'\\nnode-realpath-ok')" `
             + `&& if defined ELECTRON_RUN_AS_NODE `

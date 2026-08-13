@@ -103,7 +103,6 @@ describe('Agent Home shell boundary', () => {
       const guardrail = createAgentHomeShellBoundaryGuardrail({
         projectRoot: process.cwd(),
         executionCwd: process.cwd(),
-        failClosedShellSandbox: false,
       });
       const verdict = await guardrail.beforeTool!(callBash(
         `Set-Content -Path "${path.join(agentHome, 'agents', 'reviewer.md')}" -Value result`,
@@ -116,11 +115,10 @@ describe('Agent Home shell boundary', () => {
     }
   });
 
-  it('blocks opaque shell execution without a fail-closed sandbox', async () => {
+  it('blocks opaque shell execution without authoritative host review', async () => {
     const guardrail = createAgentHomeShellBoundaryGuardrail({
       projectRoot: process.cwd(),
       executionCwd: process.cwd(),
-      failClosedShellSandbox: false,
     });
     const verdict = await guardrail.beforeTool!(
       callBash('node -e "eval(process.env.KODAX_TASK)"'),
@@ -138,7 +136,6 @@ describe('Agent Home shell boundary', () => {
       const guardrail = createAgentHomeShellBoundaryGuardrail({
         projectRoot: process.cwd(),
         executionCwd: process.cwd(),
-        failClosedShellSandbox: false,
       });
       const verdict = await guardrail.beforeTool!(
         callBash(`type "${path.join(agentHome, 'config.json')}"`),
@@ -152,12 +149,10 @@ describe('Agent Home shell boundary', () => {
     }
   });
 
-  it('allows opaque shell execution only behind a fail-closed sandbox', async () => {
+  it('allows opaque shell execution after authoritative host review', async () => {
     const guardrail = createAgentHomeShellBoundaryGuardrail({
       projectRoot: process.cwd(),
       executionCwd: process.cwd(),
-      failClosedShellSandbox: true,
-      effectTreeContainmentAvailable: true,
       protectedReadReviewAvailable: true,
     });
     const verdict = await guardrail.beforeTool!(
@@ -168,11 +163,10 @@ describe('Agent Home shell boundary', () => {
     expect(verdict.action).toBe('allow');
   });
 
-  it('blocks opaque shell execution when the sandbox cannot prove its effect tree drained', async () => {
+  it('does not make host authorization depend on sandbox containment availability', async () => {
     const guardrail = createAgentHomeShellBoundaryGuardrail({
       projectRoot: process.cwd(),
       executionCwd: process.cwd(),
-      failClosedShellSandbox: true,
       protectedReadReviewAvailable: true,
     });
     const verdict = await guardrail.beforeTool!(
@@ -180,11 +174,10 @@ describe('Agent Home shell boundary', () => {
       ctx(),
     );
 
-    expect(verdict.action).toBe('block');
-    expect('reason' in verdict ? verdict.reason : '').toContain('process-tree containment');
+    expect(verdict.action).toBe('allow');
   });
 
-  it('does not treat a fail-closed mutation sandbox as protected-read approval', async () => {
+  it('does not treat mutation containment as protected-read approval', async () => {
     const { setAgentConfigHome } = await import('@kodax-ai/agent');
     const agentHome = await mkdtemp(path.join(os.tmpdir(), 'kodax-standalone-home-'));
     setAgentConfigHome(agentHome);
@@ -192,7 +185,6 @@ describe('Agent Home shell boundary', () => {
       const guardrail = createAgentHomeShellBoundaryGuardrail({
         projectRoot: process.cwd(),
         executionCwd: process.cwd(),
-        failClosedShellSandbox: true,
       });
       const protectedRead = await guardrail.beforeTool!(
         callBash(`type "${path.join(agentHome, 'config.json')}"`),
@@ -223,7 +215,6 @@ describe('Agent Home shell boundary', () => {
     const boundary = createAgentHomeShellBoundaryGuardrail({
       projectRoot: process.cwd(),
       executionCwd: process.cwd(),
-      failClosedShellSandbox: false,
     });
 
     const outcome = await runToolBeforeGuardrails(
@@ -1190,7 +1181,6 @@ describe('AutoModeToolGuardrail — Tier 1', () => {
     const guardrail = createAutoModeToolGuardrail({
       ...baseConfig(''),
       resolveProvider: () => provider,
-      workspaceShellSandboxAvailable: true,
       admitWorkspaceSandboxCall,
       analyzeCall: () => ({
         schemaVersion: 1,
@@ -1256,7 +1246,6 @@ describe('AutoModeToolGuardrail — Tier 1', () => {
     const guardrail = createAutoModeToolGuardrail({
       ...baseConfig(''),
       resolveProvider: () => provider,
-      workspaceShellSandboxAvailable: true,
       admitWorkspaceSandboxCall: vi.fn(),
       analyzeCall: () => ({
         schemaVersion: 1,
@@ -1288,7 +1277,6 @@ describe('AutoModeToolGuardrail — Tier 1', () => {
     const guardrail = createAutoModeToolGuardrail({
       ...baseConfig(''),
       resolveProvider: () => provider,
-      workspaceShellSandboxAvailable: true,
       admitWorkspaceSandboxCall,
       analyzeCall: () => ({
         schemaVersion: 1,
@@ -1321,7 +1309,6 @@ describe('AutoModeToolGuardrail — Tier 1', () => {
     const guardrail = createAutoModeToolGuardrail({
       ...baseConfig(''),
       resolveProvider: () => provider,
-      workspaceShellSandboxAvailable: false,
       admitWorkspaceSandboxCall,
       analyzeCall: () => ({
         schemaVersion: 1,
@@ -1359,8 +1346,6 @@ describe('AutoModeToolGuardrail — Tier 1', () => {
     const guardrail = createAutoModeToolGuardrail({
       ...baseConfig(''),
       resolveProvider: () => provider,
-      workspaceShellSandboxAvailable: true,
-      requireWorkspaceShellSandbox: true,
       admitWorkspaceSandboxCall,
     });
     const payload = Buffer.from(
@@ -1385,7 +1370,6 @@ describe('AutoModeToolGuardrail — Tier 1', () => {
     const guardrail = createAutoModeToolGuardrail({
       ...baseConfig(''),
       resolveProvider: () => provider,
-      requireWorkspaceShellSandbox: true,
       analyzeCall: () => ({
         schemaVersion: 1,
         analysis: { status: 'complete', shell: 'shell', binding: 'exact' },
@@ -1405,14 +1389,13 @@ describe('AutoModeToolGuardrail — Tier 1', () => {
     expect(verdict.action).toBe('allow');
   });
 
-  it('blocks an opaque interpreter command when no required sandbox adapter exists', async () => {
+  it('allows an opaque interpreter command after the classifier authorizes it', async () => {
     const provider = new StubProvider(okResult(
       '<decision>allow</decision><hazard>none</hazard><reason>requested command</reason>',
     ));
     const guardrail = createAutoModeToolGuardrail({
       ...baseConfig(''),
       resolveProvider: () => provider,
-      requireWorkspaceShellSandbox: true,
       analyzeCall: () => ({
         schemaVersion: 1,
         analysis: { status: 'incomplete', shell: 'shell', binding: 'partial' },
@@ -1426,7 +1409,7 @@ describe('AutoModeToolGuardrail — Tier 1', () => {
       ctx([{ role: 'user', content: 'Run the requested command.' }]),
     );
 
-    expect(verdict.action).toBe('block');
+    expect(verdict.action).toBe('allow');
   });
 
   it.each([
@@ -1542,7 +1525,6 @@ describe('AutoModeToolGuardrail — Tier 1', () => {
     const guardrail = createAutoModeToolGuardrail({
       ...baseConfig(''),
       resolveProvider: () => provider,
-      workspaceShellSandboxAvailable: true,
       admitWorkspaceSandboxCall,
       analyzeCall: () => ({
         schemaVersion: 1,
@@ -1571,7 +1553,6 @@ describe('AutoModeToolGuardrail — Tier 1', () => {
     const guardrail = createAutoModeToolGuardrail({
       ...baseConfig(''),
       resolveProvider: () => provider,
-      workspaceShellSandboxAvailable: true,
       admitWorkspaceSandboxCall,
       analyzeCall: () => ({
         schemaVersion: 1,
@@ -2014,7 +1995,6 @@ describe('AutoModeToolGuardrail — Tier 1', () => {
     const guardrail = createAutoModeToolGuardrail({
       ...baseConfig(''),
       resolveProvider: () => provider,
-      workspaceShellSandboxAvailable: true,
       admitWorkspaceSandboxCall: vi.fn(),
       analyzeCall: () => ({
         schemaVersion: 1,
@@ -2422,7 +2402,6 @@ describe('AutoModeToolGuardrail — Tier 1', () => {
     const guardrail = createAutoModeToolGuardrail({
       ...baseConfig(''),
       resolveProvider: () => provider,
-      workspaceShellSandboxAvailable: true,
       admitWorkspaceSandboxCall,
       analyzeCall: () => ({
         schemaVersion: 1,
@@ -2483,7 +2462,6 @@ describe('AutoModeToolGuardrail — Tier 1', () => {
     const guardrail = createAutoModeToolGuardrail({
       ...baseConfig(''),
       resolveProvider: () => provider,
-      workspaceShellSandboxAvailable: true,
       admitWorkspaceSandboxCall,
       analyzeCall: () => ({
         schemaVersion: 1,
@@ -2606,7 +2584,6 @@ describe('AutoModeToolGuardrail — Tier 1', () => {
     const guardrail = createAutoModeToolGuardrail({
       ...baseConfig(''),
       resolveProvider: () => provider,
-      workspaceShellSandboxAvailable: true,
       admitWorkspaceSandboxCall,
       analyzeCall: () => ({
         schemaVersion: 1,
@@ -2640,7 +2617,6 @@ describe('AutoModeToolGuardrail — Tier 1', () => {
       ...baseConfig(''),
       resolveProvider: () => provider,
       askUser,
-      workspaceShellSandboxAvailable: true,
       admitWorkspaceSandboxCall,
       analyzeCall: () => ({
         schemaVersion: 1,
@@ -2671,7 +2647,6 @@ describe('AutoModeToolGuardrail — Tier 1', () => {
       initialEngine: 'rules',
       askUser,
       evaluateRulesCall: () => ({ action: 'block', reason: 'recursive deletion needs confirmation' }),
-      workspaceShellSandboxAvailable: true,
       admitWorkspaceSandboxCall,
       analyzeCall: () => ({
         schemaVersion: 1,
@@ -2710,7 +2685,6 @@ describe('AutoModeToolGuardrail — Tier 1', () => {
         patternId: 'rm_rf_root',
         reason: 'host policy requires confirmation',
       })],
-      workspaceShellSandboxAvailable: true,
       admitWorkspaceSandboxCall,
       analyzeCall: () => ({
         schemaVersion: 1,
@@ -2883,6 +2857,80 @@ describe('AutoModeToolGuardrail — Tier 1', () => {
 });
 
 describe('AutoModeToolGuardrail — classifier verdicts', () => {
+  it('caches only an LLM allow for the same command and user-intent revision', async () => {
+    let calls = 0;
+    const provider = new StubProvider(async () => {
+      calls += 1;
+      return okResult(
+        '<decision>allow</decision><hazard>none</hazard><reason>requested command</reason>',
+      );
+    });
+    const guardrail = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      resolveProvider: () => provider,
+      analyzeCall: () => ({
+        schemaVersion: 1,
+        analysis: { status: 'incomplete', shell: 'shell', binding: 'partial' },
+        operations: [{ kind: 'unknown', summary: 'opaque command' }],
+        risks: ['unmodeled_effect'],
+      }),
+    });
+    const firstIntent = ctx([{ role: 'user', content: 'Run the diagnostic.' }]);
+
+    await expect(guardrail.beforeTool!(callBash('tool --diagnose'), firstIntent))
+      .resolves.toMatchObject({ action: 'allow' });
+    await expect(guardrail.beforeTool!(callBash('tool --diagnose'), firstIntent))
+      .resolves.toMatchObject({ action: 'allow' });
+    expect(calls).toBe(1);
+
+    await expect(guardrail.beforeTool!(
+      callBash('tool --diagnose'),
+      ctx([
+        { role: 'user', content: 'Run the diagnostic.' },
+        {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'previous-tool', content: 'done' }],
+        },
+      ]),
+    )).resolves.toMatchObject({ action: 'allow' });
+    expect(calls).toBe(1);
+
+    await expect(guardrail.beforeTool!(
+      callBash('tool --diagnose'),
+      ctx([{ role: 'user', content: 'Run a fresh diagnostic.' }]),
+    )).resolves.toMatchObject({ action: 'allow' });
+    expect(calls).toBe(2);
+  });
+
+  it('does not reuse an automatic allow after the live classifier model changes', async () => {
+    let calls = 0;
+    let liveModel = 'classifier-a';
+    const provider = new StubProvider(async () => {
+      calls += 1;
+      return okResult(
+        '<decision>allow</decision><hazard>none</hazard><reason>requested command</reason>',
+      );
+    });
+    const guardrail = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      getDefaultModel: () => liveModel,
+      resolveProvider: () => provider,
+      analyzeCall: () => ({
+        schemaVersion: 1,
+        analysis: { status: 'incomplete', shell: 'shell', binding: 'partial' },
+        operations: [{ kind: 'unknown', summary: 'opaque command' }],
+        risks: ['unmodeled_effect'],
+      }),
+    });
+    const intent = ctx([{ role: 'user', content: 'Run the diagnostic.' }]);
+
+    await guardrail.beforeTool!(callBash('tool --diagnose'), intent);
+    liveModel = 'classifier-b';
+    await guardrail.beforeTool!(callBash('tool --diagnose'), intent);
+
+    expect(calls).toBe(2);
+  });
+
   it('adopts allow without asking when classifier auxiliaries are missing', async () => {
     const askUser = vi.fn<AutoModeAskUser>(async () => 'block');
     const g = createAutoModeToolGuardrail(baseConfig(
@@ -3445,8 +3493,8 @@ describe('AutoModeToolGuardrail — askUser escalation handling (FEATURE_092 pha
       askUser,
     });
 
-    const rejected = await g.beforeTool!(callBash('mkfs.ext4 /dev/sda1'), ctx());
-    const safer = await g.beforeTool!(callBash('rm -rf ./dist'), ctx());
+    const rejected = await g.beforeTool!(callBash('git push --force origin main'), ctx());
+    const safer = await g.beforeTool!(callBash('git status --short'), ctx());
 
     expect(rejected.action).toBe('block');
     if (rejected.action === 'block') {
@@ -3907,13 +3955,13 @@ describe('AutoModeToolGuardrail — historical Tier 0 detector (FEATURE_158)', (
     expect(classifierCalls).toBe(0);
   });
 
-  it('retains the legacy Tier 0 gate when Rules is explicitly selected', async () => {
+  it('hard-blocks catastrophic disk formatting before Rules evaluation', async () => {
     const g = createAutoModeToolGuardrail({
       ...baseConfig(''),
       initialEngine: 'rules',
     });
     const verdict = await g.beforeTool!(callBash('mkfs.ext4 /dev/sda1'), ctx());
-    expect(verdict.action).toBe('escalate');
+    expect(verdict.action).toBe('block');
   });
 
   it('does not count a static match as a classifier denial when the LLM allows', async () => {
@@ -3930,7 +3978,7 @@ describe('AutoModeToolGuardrail — historical Tier 0 detector (FEATURE_158)', (
     expect(stats.denials.cumulative).toBe(0);
   });
 
-  it('does not let a legacy Tier 0 match override an LLM allow', async () => {
+  it('hard-blocks raw-disk writes but still lets ordinary file writes reach the LLM', async () => {
     const provider = new StubProvider(okResult(
       '<decision>allow</decision><hazard>none</hazard><reason>LLM reviewed the concrete operation</reason>',
     ));
@@ -3940,10 +3988,10 @@ describe('AutoModeToolGuardrail — historical Tier 0 detector (FEATURE_158)', (
       resolveProvider: () => provider,
     });
     const diskWrite = await g.beforeTool!(callBash('dd if=/dev/zero of=/dev/sda'), ctx());
-    expect(diskWrite.action).toBe('allow');
+    expect(diskWrite.action).toBe('block');
     const allow = await g.beforeTool!(callBash('dd if=/dev/zero of=test.bin'), ctx());
     expect(allow.action).toBe('allow');
-    expect(stream).toHaveBeenCalledTimes(2);
+    expect(stream).toHaveBeenCalledTimes(1);
   });
 
   it('sends a credential-zone write to the classifier before confirmation', async () => {
@@ -4596,7 +4644,7 @@ describe('FEATURE_158 Step 9 — subagent SharedState + legacy Tier 0 propagatio
     expect(stream).not.toHaveBeenCalled();
   });
 
-  it('subagent retains the legacy Tier 0 gate when shared state explicitly selects Rules', async () => {
+  it('subagent hard-blocks catastrophic disk formatting even when Rules is selected', async () => {
     const sharedState = {
       engine: 'rules' as const,
       denials: { consecutive: 3, cumulative: 3 },
@@ -4605,8 +4653,8 @@ describe('FEATURE_158 Step 9 — subagent SharedState + legacy Tier 0 propagatio
     const child = createAutoModeToolGuardrail({ ...baseConfig(''), sharedState });
     // mkfs.ext4 /dev/sda1 → Tier 0 should still fire (mkfs_or_format pattern)
     const verdict = await child.beforeTool!(callBash('mkfs.ext4 /dev/sda1'), ctx());
-    expect(verdict.action).toBe('escalate');
-    if (verdict.action === 'escalate') {
+    expect(verdict.action).toBe('block');
+    if (verdict.action === 'block') {
       expect(verdict.reason).toMatch(/filesystem.*block device/i);
     }
   });
@@ -4701,7 +4749,9 @@ describe('AutoModeToolGuardrail — getClaudeMd live getter (FEATURE_092 follow-
     await g.beforeTool!(callBash('ls'), ctx());
     expect(captured.at(-1)).toContain('RULES BEFORE EDIT');
     liveContent = 'RULES AFTER EDIT';
-    await g.beforeTool!(callBash('pwd'), ctx());
+    // Keep every ordinary cache input stable. A live policy change must be
+    // enough to invalidate an earlier automatic allow for the same action.
+    await g.beforeTool!(callBash('ls'), ctx());
     expect(captured.at(-1)).toContain('RULES AFTER EDIT');
     expect(captured.at(-1)).not.toContain('RULES BEFORE EDIT');
   });

@@ -42,11 +42,13 @@ import type {
   WorkflowProcessEvent,
 } from "@kodax-ai/agent";
 import type {
+  AutoModePermissionReview,
   AutoModeToolGuardrail,
   KodaXMessage,
   KodaXOptions,
   KodaXResult,
   KodaXShellSandbox,
+  KodaXToolSandboxObservationUpdate,
   RunningSession,
 } from "@kodax-ai/coding";
 import { resolveProviderModelDescriptors } from "@kodax-ai/coding";
@@ -207,7 +209,7 @@ describe("createKodaXRuntime", () => {
       rollback: true,
     });
     expect(runtime.capabilities.sandboxRuntime).toMatchObject({
-      version: 2,
+      version: 3,
       genericCommandExecution: true,
       ordinaryCallsTriggerSetup: false,
       unavailableBehavior: "structured-no-execution",
@@ -16166,6 +16168,175 @@ describe("createKodaXRuntime", () => {
     await runtime.runs.abort(handle.runId);
     await runtime.close();
   });
+
+  it.runIf(process.platform === "win32")(
+    "falls back before launch when an Auto-approved external write cannot be represented by the Windows sandbox",
+    async () => {
+      const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+      const projectRoot = path.join(tempRoot, "auto-filesystem-policy-project");
+      const missingTarget = path.join(tempRoot, "outside", "new-output.txt");
+      await fs.mkdir(projectRoot, { recursive: true });
+      const existingTarget = path.join(tempRoot, "outside", "existing-output.txt");
+      await fs.mkdir(path.dirname(existingTarget), { recursive: true });
+      await fs.writeFile(existingTarget, "before", "utf8");
+      let review: AutoModePermissionReview = {
+        schemaVersion: 1,
+        analysis: { status: "complete", shell: "shell", binding: "exact" },
+        operations: [{
+          kind: "create",
+          target: { path: missingTarget, boundary: "outside-workspace" },
+        }],
+        risks: ["cross_boundary_mutation"],
+      };
+      replMock.bootstrapAutoMode.mockImplementation(async (deps) => {
+        const guardrail = {
+          kind: "tool",
+          name: "auto-mode",
+          beforeTool: async (call: RunnerToolCall) => {
+            deps.admitWorkspaceSandboxCall?.(call, review);
+            return { action: "allow" as const };
+          },
+          getEngine: () => "llm" as const,
+          getStats: () => ({ engine: "llm" as const, denials: {}, breaker: {} }),
+          setEngine: () => undefined,
+          getEngineForTest: () => "llm" as const,
+          getStatsForTest: () => ({
+            engine: "llm" as const,
+            denials: {},
+            breaker: {},
+          }),
+          setProviderForTest: () => undefined,
+        } as unknown as AutoModeToolGuardrail;
+        return {
+          getGuardrail: () => guardrail,
+          rulesLoadResult: { merged: {}, sources: [], skipped: [], errors: [] },
+        };
+      });
+      const callerObservation = {
+        version: 1 as const,
+        state: "applied" as const,
+        backend: "windows-restricted-user" as const,
+        policyId: "caller-sandbox" as const,
+      };
+      const callerPrepare = vi.fn<KodaXShellSandbox["prepare"]>(async (request) => {
+        request.reportObservation?.(callerObservation);
+        if (request.executable === undefined || request.args === undefined) return undefined;
+        return {
+          executable: request.executable,
+          args: request.args,
+          env: request.env,
+          ...(request.windowsVerbatimArguments === undefined
+            ? {}
+            : { windowsVerbatimArguments: request.windowsVerbatimArguments }),
+          cleanup: async () => callerObservation,
+        };
+      });
+      const runtime = await createKodaXRuntime({
+        homeDir: tempRoot,
+        sessionsDir: path.join(tempRoot, "sessions"),
+        defaultProvider: "mock-provider",
+        defaultModel: "mock-model",
+        sharedDaemonHost: true,
+      });
+      const session = await runtime.sessions.create({
+        title: "Auto external write fallback",
+      });
+      await runtime.sessions.updateSettings(session.id, {
+        permissionMode: "auto",
+        autoModeEngine: "llm",
+        autoModeClassifierModel: "mock-provider:mock-model",
+        executionCwd: projectRoot,
+      });
+      let runOptions: KodaXOptions | undefined;
+      codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => {
+        runOptions = options;
+        return fakeRunningSession(options, new Promise<KodaXResult>(() => undefined));
+      });
+      const handle = await runtime.runs.start({
+        sessionId: session.id,
+        prompt: "create an external output",
+        options: {
+          context: {
+            executionCwd: projectRoot,
+            gitRoot: projectRoot,
+            shellSandbox: { prepare: callerPrepare },
+          },
+        },
+      });
+      await flushMicrotasks();
+      if (!runOptions) throw new Error("expected Runtime run options");
+      review = {
+        schemaVersion: 1,
+        analysis: { status: "complete", shell: "shell", binding: "exact" },
+        operations: [{
+          kind: "update",
+          target: { path: existingTarget, boundary: "outside-workspace" },
+        }],
+        risks: ["cross_boundary_mutation"],
+      };
+      const representableCall: RunnerToolCall = {
+        id: "bash_external_update",
+        name: "bash",
+        input: { command: `echo updated > "${existingTarget}"` },
+      };
+      await authorizeRuntimeAutoCall(runOptions, representableCall);
+      const sandboxed = await runOptions.context?.shellSandbox?.prepare({
+        toolCallId: representableCall.id,
+        toolInput: representableCall.input,
+        command: String(representableCall.input.command),
+        executable: process.env.ComSpec ?? process.env.COMSPEC ?? "cmd.exe",
+        args: ["/d", "/s", "/c", String(representableCall.input.command)],
+        cwd: projectRoot,
+        env: process.env,
+        windowsVerbatimArguments: true,
+      });
+      expect(sandboxed).toBeDefined();
+      expect(callerPrepare).not.toHaveBeenCalled();
+      await sandboxed?.cleanup();
+
+      review = {
+        schemaVersion: 1,
+        analysis: { status: "complete", shell: "shell", binding: "exact" },
+        operations: [{
+          kind: "create",
+          target: { path: missingTarget, boundary: "outside-workspace" },
+        }],
+        risks: ["cross_boundary_mutation"],
+      };
+      const call: RunnerToolCall = {
+        id: "bash_external_create",
+        name: "bash",
+        input: { command: `echo ok > "${missingTarget}"` },
+      };
+      await authorizeRuntimeAutoCall(runOptions, call);
+      const observations: KodaXToolSandboxObservationUpdate[] = [];
+      const invocation = await runOptions.context?.shellSandbox?.prepare({
+        toolCallId: call.id,
+        toolInput: call.input,
+        command: String(call.input.command),
+        executable: process.env.ComSpec ?? process.env.COMSPEC ?? "cmd.exe",
+        args: ["/d", "/s", "/c", String(call.input.command)],
+        cwd: projectRoot,
+        env: process.env,
+        windowsVerbatimArguments: true,
+        reportObservation: (observation) => observations.push(observation),
+      });
+
+      expect(callerPrepare).toHaveBeenCalledOnce();
+      expect(observations).toEqual([]);
+      if (!invocation) throw new Error("expected ordinary permission fallback invocation");
+      execFileSync(invocation.executable, [...invocation.args], {
+        cwd: projectRoot,
+        env: invocation.env,
+        windowsHide: true,
+        windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+      });
+      await expect(fs.readFile(missingTarget, "utf8")).resolves.toContain("ok");
+      await expect(invocation?.cleanup()).resolves.toEqual(callerObservation);
+      await runtime.runs.abort(handle.runId);
+      await runtime.close();
+    },
+  );
 
   it("runs explicit auto engines inside Runtime and brokers only guardrail escalation", async () => {
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");

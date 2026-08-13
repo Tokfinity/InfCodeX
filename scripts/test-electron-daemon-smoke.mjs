@@ -28,6 +28,7 @@ let smokePassed = false;
 try {
   const consoleProbe = await prepareConsoleProbe();
   await preparePackagedApplication(electronPackage.version);
+  await verifyIndependentWindowsSandboxPolicySharing();
   const executable = path.join(appDir, 'release', 'win-unpacked', 'kodax-daemon-smoke.exe');
   assert.ok(existsSync(executable), `Packaged Electron executable is missing: ${executable}`);
   const resultFile = path.join(temporaryRoot, 'result.json');
@@ -50,6 +51,7 @@ try {
   assert.deepEqual(result.ok, true, result.error ?? 'Packaged Electron startup failed.');
   assert.equal(result.clientCount, 1, 'The packaged facade must be the only logical client after cold start.');
   assert.equal(result.ordinaryQueryCount, ordinaryQueryCount);
+  assert.equal(result.parallelSessionCount, 4, 'The packaged smoke must exercise four concurrent Runtime sessions.');
   assert.equal(
     result.appliedSandboxCount,
     ordinaryQueryCount,
@@ -180,7 +182,10 @@ public static class Program {
   public static int Main(string[] args) {
     string observationDirectory = Environment.GetEnvironmentVariable("KODAX_CONSOLE_PROBE_DIR");
     string queryFile = Environment.GetEnvironmentVariable("KODAX_CONSOLE_PROBE_QUERY");
-    string query = File.Exists(queryFile) ? File.ReadAllText(queryFile).Trim() : "unattributed";
+    string query = Environment.GetEnvironmentVariable("KODAX_CONSOLE_PROBE_QUERY_ID");
+    if (String.IsNullOrWhiteSpace(query)) {
+      query = File.Exists(queryFile) ? File.ReadAllText(queryFile).Trim() : "unattributed";
+    }
     Thread.Sleep(25);
     IntPtr window = GetConsoleWindow();
     string state = window == IntPtr.Zero ? "none" : (IsWindowVisible(window) ? "visible" : "hidden");
@@ -204,6 +209,18 @@ public static class Program {
       Console.WriteLine("abcdef0");
     } else if (command == "--profile-toolchain") {
       Console.WriteLine("profile-toolchain-ok");
+    } else if (args.Length == 5 && args[0] == "--profile-toolchain" && args[1] == "--barrier") {
+      string barrierDirectory = args[2];
+      int expected = Int32.Parse(args[4]);
+      Directory.CreateDirectory(barrierDirectory);
+      File.WriteAllText(Path.Combine(barrierDirectory, args[3] + ".ready"), "ready");
+      DateTime deadline = DateTime.UtcNow.AddSeconds(20);
+      while (Directory.GetFiles(barrierDirectory, "*.ready").Length < expected) {
+        if (DateTime.UtcNow >= deadline) return 98;
+        Thread.Sleep(25);
+      }
+      Console.WriteLine("profile-toolchain-ok");
+      Console.WriteLine("parallel-barrier-ok");
     }
     return 0;
   }
@@ -224,8 +241,12 @@ async function verifyConsoleProbe(probe) {
   for (let query = 0; query < ordinaryQueryCount; query += 1) {
     const queryRecords = records.filter((record) => record.query === query);
     assert.ok(
-      queryRecords.length >= 2,
-      `Ordinary query ${query} must execute at least two observable Git probes; got ${queryRecords.length}.`,
+      queryRecords.some((record) => record.args[0] === '--profile-toolchain'),
+      `Ordinary query ${query} must execute the profile-tool probe.`,
+    );
+    assert.ok(
+      queryRecords.some((record) => record.args.join(' ') === 'rev-parse --short HEAD'),
+      `Ordinary query ${query} must execute the Git probe.`,
     );
     for (const record of queryRecords) {
       assert.notEqual(
@@ -256,6 +277,117 @@ async function preparePackagedApplication(electronVersion) {
     'utf8',
   );
   await run(process.execPath, [electronBuilderCli, '--dir', '--win', '--x64', '--config', 'electron-builder.json'], appDir, 300_000);
+}
+
+async function verifyIndependentWindowsSandboxPolicySharing() {
+  const crossProcessHome = path.join(temporaryRoot, 'cross-process-home');
+  const workspace = path.join(crossProcessHome, 'workspace');
+  const barrierScript = path.join(workspace, 'policy-barrier.cjs');
+  const worker = path.join(repoRoot, 'tests', 'fixtures', 'windows-sandbox-policy-worker.mts');
+  const tsxCli = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+  await mkdir(workspace, { recursive: true });
+  await writeFile(barrierScript, String.raw`
+const fs = require('node:fs');
+const path = require('node:path');
+const [directory, participant, expectedText] = process.argv.slice(2);
+const expected = Number(expectedText);
+fs.mkdirSync(directory, { recursive: true });
+fs.writeFileSync(path.join(directory, participant + '.ready'), 'ready', 'utf8');
+const deadline = Date.now() + 30_000;
+const wait = () => {
+  if (fs.readdirSync(directory).filter((name) => name.endsWith('.ready')).length >= expected) {
+    process.stdout.write('cross-process-sandbox-ok:' + participant);
+    return;
+  }
+  if (Date.now() >= deadline) {
+    process.stderr.write('cross-process barrier timed out');
+    process.exitCode = 98;
+    return;
+  }
+  setTimeout(wait, 25);
+};
+wait();
+`, 'utf8');
+  const {
+    KODAX_HOME: _ignoredHome,
+    ProgramData: _ignoredProgramData,
+    PROGRAMDATA: _ignoredUpperProgramData,
+    VITEST: _ignoredVitest,
+    ...baseEnvironment
+  } = process.env;
+  const workerEnvironment = {
+    ...baseEnvironment,
+    ProgramData: programDataDir,
+    KODAX_HOME: path.join(crossProcessHome, '.kodax'),
+    KODAX_CROSS_PROCESS_WORKSPACE: workspace,
+    KODAX_CROSS_PROCESS_BARRIER: barrierScript,
+    PATH: [
+      path.dirname(process.execPath),
+      process.env.PATH ?? process.env.Path ?? '',
+    ].filter(Boolean).join(path.delimiter),
+  };
+  const runWorker = async (participant, expected, barrierName, preflightDirectory) => {
+    const barrierDirectory = path.join(workspace, '.policy-barriers', barrierName);
+    const resultFile = path.join(temporaryRoot, `cross-process-${participant}.json`);
+    await mkdir(barrierDirectory, { recursive: true });
+    let launchError;
+    try {
+      await run(process.execPath, [tsxCli, worker], repoRoot, 120_000, {
+        ...workerEnvironment,
+        KODAX_CROSS_PROCESS_PARTICIPANT: participant,
+        KODAX_CROSS_PROCESS_EXPECTED: String(expected),
+        KODAX_CROSS_PROCESS_BARRIER_DIR: barrierDirectory,
+        KODAX_CROSS_PROCESS_RESULT: resultFile,
+        ...(preflightDirectory === undefined
+          ? {}
+          : { KODAX_CROSS_PROCESS_PREFLIGHT_DIR: preflightDirectory }),
+      });
+    } catch (error) {
+      launchError = error;
+    }
+    const result = existsSync(resultFile)
+      ? JSON.parse(await readFile(resultFile, 'utf8'))
+      : undefined;
+    assert.ok(result, `Cross-process sandbox worker ${participant} did not publish a result: ${String(launchError)}`);
+    assert.equal(result.error, undefined, result.error ?? String(launchError ?? 'worker failed'));
+    assert.match(result.result, new RegExp(`cross-process-sandbox-ok:${participant}`));
+    assert.match(result.result, /(?:^|\n)Exit: 0(?:\n|$)/);
+    assert.doesNotMatch(result.result, /\[Error\]/);
+    assert.ok(
+      result.observations.some((observation) => (
+        observation?.state === 'applied'
+        && observation.backend === 'windows-restricted-user'
+      )),
+      `Independent worker ${participant} did not use the Windows sandbox: ${JSON.stringify({
+        observations: result.observations,
+        diagnostics: result.diagnostics,
+      })}`,
+    );
+    return result;
+  };
+
+  await runWorker('warmup', 1, 'warmup');
+  const preflightDirectory = path.join(workspace, '.policy-preflight');
+  await mkdir(preflightDirectory, { recursive: true });
+  const workers = [
+    runWorker('process-a', 2, 'parallel', preflightDirectory),
+    runWorker('process-b', 2, 'parallel', preflightDirectory),
+  ];
+  const preflightDeadline = Date.now() + 30_000;
+  while (!['process-a', 'process-b'].every((participant) => (
+    existsSync(path.join(preflightDirectory, `${participant}.ready`))
+  ))) {
+    if (Date.now() >= preflightDeadline) {
+      throw new Error('Independent sandbox workers did not finish readiness preflight.');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  await writeFile(path.join(preflightDirectory, 'start'), 'start', 'utf8');
+  await Promise.all(workers);
+  await assertNoAclPoisonMarkers(
+    'Independent same-policy KodaX processes must release all ACL owners after both commands finish.',
+    crossProcessHome,
+  );
 }
 
 function createBuilderConfig(electronVersion) {
@@ -392,10 +524,10 @@ async function verifyAttachDetachAndOwnerFence(
   assert.equal((await enableDaemonOwnerWhenReady(sdk)).mode, 'daemon');
 }
 
-async function assertNoAclPoisonMarkers(message) {
+async function assertNoAclPoisonMarkers(message, legacyHomeDir = homeDir) {
   const directories = [
     path.join(programDataDir, 'KodaX', 'sandbox-runtime', 'acl-poison'),
-    path.join(homeDir, '.kodax', 'sandbox-runtime', 'acl-poison'),
+    path.join(legacyHomeDir, '.kodax', 'sandbox-runtime', 'acl-poison'),
   ];
   for (const directory of directories) {
     const entries = existsSync(directory) ? await readdir(directory) : [];
@@ -480,9 +612,14 @@ async function waitUntil(predicate, timeoutMs, description, earlyFailure = () =>
   throw new Error(`Timed out waiting for ${description}.`);
 }
 
-function run(command, args, cwd, timeoutMs = 120_000) {
+function run(command, args, cwd, timeoutMs = 120_000, env = process.env) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(command, args, {
+      cwd,
+      env,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
     const stdout = [];
     const stderr = [];
     let settled = false;

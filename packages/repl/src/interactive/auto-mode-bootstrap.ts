@@ -59,8 +59,6 @@ export interface AutoModeBootstrapDeps {
   readonly executionCwd: string;
   /** Whether process environment path aliases equal the executed shell's aliases. */
   readonly trustProcessEnvironmentPathExpansion?: boolean;
-  /** Runtime-confirmed ASRT availability for exact workspace shell calls. */
-  readonly workspaceShellSandboxAvailable?: boolean;
   /** Runtime-owned one-shot admission into the workspace shell sandbox. */
   readonly admitWorkspaceSandboxCall?: AutoModeGuardrailConfig['admitWorkspaceSandboxCall'];
   readonly getCurrentProviderName: () => string;
@@ -185,8 +183,6 @@ export async function bootstrapAutoMode(
         deps.projectRoot,
         deps.executionCwd,
       ),
-      workspaceShellSandboxAvailable: deps.workspaceShellSandboxAvailable,
-      requireWorkspaceShellSandbox: true,
       admitWorkspaceSandboxCall: deps.admitWorkspaceSandboxCall,
       log: deps.log,
       onEngineChange: deps.onEngineChange,

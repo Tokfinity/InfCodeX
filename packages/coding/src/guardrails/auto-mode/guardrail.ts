@@ -38,7 +38,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import type { CostTracker, KodaXBaseProvider } from '@kodax-ai/llm';
+import type { CostTracker, KodaXBaseProvider, KodaXMessage } from '@kodax-ai/llm';
 import type {
   GuardrailContext,
   GuardrailVerdict,
@@ -95,6 +95,24 @@ import { resolveToolBridgeTarget } from '../../tools/tool-bridge.js';
 import type { ToolSideEffect } from '../../tools/side-effect.js';
 
 export type AutoModeEngine = 'llm' | 'rules';
+
+function automaticPermissionIntentRevision(
+  messages: readonly KodaXMessage[],
+): readonly unknown[] {
+  const revision: unknown[] = [];
+  for (const message of messages) {
+    if (message.role !== 'user' || message._synthetic === true) continue;
+    if (typeof message.content === 'string') {
+      revision.push(message.content);
+      continue;
+    }
+    const userContent = message.content.filter((block) => (
+      block.type === 'text' || block.type === 'image'
+    ));
+    if (userContent.length > 0) revision.push(userContent);
+  }
+  return revision;
+}
 
 export interface AutoModeSharedState {
   engine: AutoModeEngine;
@@ -255,12 +273,6 @@ export interface AutoModeGuardrailConfig {
   readonly allowOnClassifierFailure?: (
     call: RunnerToolCall,
   ) => boolean | Promise<boolean>;
-
-  /** Whether ordinary bash calls can be enforced by an OS workspace sandbox. */
-  readonly workspaceShellSandboxAvailable?: boolean;
-
-  /** Host invariant: every allowed Bash call must receive exact fail-closed admission. */
-  readonly requireWorkspaceShellSandbox?: boolean;
 
   /** Mint one exact bash call for workspace-sandboxed execution. */
   readonly admitWorkspaceSandboxCall?: (
@@ -436,8 +448,6 @@ export interface AutoModeGuardrailConfig {
 export interface AgentHomeShellBoundaryGuardrailOptions {
   readonly projectRoot: string;
   readonly executionCwd: string;
-  readonly failClosedShellSandbox: boolean;
-  readonly effectTreeContainmentAvailable?: boolean;
   readonly protectedReadReviewAvailable?: boolean;
 }
 
@@ -1299,49 +1309,6 @@ function restrictionsRequireClassifierFallback(
     : false;
 }
 
-function isSandboxContainableMutation(
-  permissionReview: AutoModePermissionReview,
-): boolean {
-  if (
-    permissionReview.analysis.status !== 'complete'
-    || permissionReview.analysis.binding !== 'exact'
-    || permissionReview.operations.length === 0
-  ) return false;
-  let hasMutation = false;
-  for (const operation of permissionReview.operations) {
-    if (operation.options?.whatIf === true || operation.kind === 'read') {
-      if (
-        operation.kind === 'read'
-        && (
-          operation.target.boundary === 'protected'
-          || operation.target.boundary === 'unresolved'
-        )
-      ) return false;
-      continue;
-    }
-    if (operation.kind === 'execute' || operation.kind === 'unknown') return false;
-    hasMutation = true;
-    if ('target' in operation) {
-      if (!isAllowedMutationBoundary(operation.target.boundary)) return false;
-      continue;
-    }
-    if (!('source' in operation)) return false;
-    if (operation.kind === 'copy') {
-      if (
-        !isAllowedMutationBoundary(operation.destination.boundary)
-        || operation.source.boundary === 'protected'
-        || operation.source.boundary === 'unresolved'
-      ) return false;
-      continue;
-    }
-    if (
-      !isAllowedMutationBoundary(operation.source.boundary)
-      || !isAllowedMutationBoundary(operation.destination.boundary)
-    ) return false;
-  }
-  return hasMutation;
-}
-
 function isStaticallyBoundShellCall(
   permissionReview: AutoModePermissionReview,
 ): boolean {
@@ -1368,8 +1335,6 @@ function hasProtectedShellRead(permissionReview: AutoModePermissionReview): bool
 export function createAgentHomeShellBoundaryGuardrail(
   options: AgentHomeShellBoundaryGuardrailOptions,
 ): ToolGuardrail {
-  const canContainOpaqueShell = options.failClosedShellSandbox
-    && options.effectTreeContainmentAvailable === true;
   return {
     kind: 'tool',
     name: 'agent-home-shell-boundary',
@@ -1401,26 +1366,16 @@ export function createAgentHomeShellBoundaryGuardrail(
             reason: 'Reading protected Agent Home data requires explicit host review.',
           };
         }
-        if (
-          canContainOpaqueShell
-          && options.protectedReadReviewAvailable === true
-        ) return { action: 'allow' };
+        if (options.protectedReadReviewAvailable === true) return { action: 'allow' };
         if (review !== undefined && isStaticallyBoundShellCall(review)) {
           return { action: 'allow' };
         }
       } catch {
-        if (
-          canContainOpaqueShell
-          && options.protectedReadReviewAvailable === true
-        ) return { action: 'allow' };
+        if (options.protectedReadReviewAvailable === true) return { action: 'allow' };
       }
       return {
         action: 'block',
-        reason: options.failClosedShellSandbox && !canContainOpaqueShell
-          ? 'The opaque shell command requires authoritative process-tree containment.'
-          : options.failClosedShellSandbox
-            ? 'The opaque shell command requires explicit host review.'
-          : 'The opaque shell command requires a fail-closed OS sandbox.',
+        reason: 'The opaque shell command requires explicit host review.',
       };
     },
   };
@@ -1438,6 +1393,7 @@ export function createAutoModeToolGuardrail(
   const evaluateRulesCall = config.evaluateRulesCall ?? evaluateAutoRulesCall;
   // For tests only: lets us swap the provider mid-flight.
   let providerOverride: KodaXBaseProvider | undefined;
+  const automaticAllowCache = new Set<string>();
 
   // Single mutation point for `state.engine`. Fires `onEngineChange` on every
   // real transition (no callback when the new value equals the old) so UI
@@ -1488,29 +1444,13 @@ export function createAutoModeToolGuardrail(
     }
 
     const allowFinal = (): GuardrailVerdict => {
-      if (guardedCall.name === 'bash' && config.requireWorkspaceShellSandbox === true) {
-        if (permissionReview === undefined) {
-          return {
-            action: 'block',
-            reason: 'The shell command was not started because the required OS sandbox is unavailable.',
-          };
-        }
-        if (config.admitWorkspaceSandboxCall !== undefined) {
-          config.admitWorkspaceSandboxCall(guardedCall, permissionReview);
-          return { action: 'allow' };
-        }
-        if (isStaticallyBoundShellCall(permissionReview)) return { action: 'allow' };
-        return {
-          action: 'block',
-          reason: 'The opaque shell command was not started because the required OS sandbox is unavailable.',
-        };
-      }
-      if (
-        guardedCall.name === 'bash'
-        && permissionReview
-        && isSandboxContainableMutation(permissionReview)
-      ) {
-        config.admitWorkspaceSandboxCall?.(guardedCall, permissionReview);
+      if (guardedCall.name === 'bash') {
+        const sandboxReview = permissionReview ?? fallbackPermissionReview(
+          guardedCall.name,
+          action || safeFallbackToClassifierInput(guardedCall.name, guardedCall.input),
+          'analyzer_unavailable',
+        );
+        config.admitWorkspaceSandboxCall?.(guardedCall, sandboxReview);
       }
       return { action: 'allow' };
     };
@@ -1574,20 +1514,21 @@ export function createAutoModeToolGuardrail(
       return { action: 'block', reason: hardBoundary.reason };
     }
 
-    // The historical "Tier 0" detector remains useful as deterministic facts,
-    // but Auto[LLM] has one decision owner: the classifier. Only explicitly
-    // selected Auto[Rules] retains the legacy pre-classifier approval gate.
-    const tier0: AbsoluteDenyResult = [
-      checkAbsoluteDeny,
-      ...(config.extraAbsoluteDenyChecks ?? []),
-    ].reduce<AbsoluteDenyResult>((result, check) => (
+    // Catastrophic host operations are not authorization questions: block them
+    // before Auto[LLM]. Agent Home matches remain classifier facts because the
+    // narrow root/control-plane hard boundary was already checked above.
+    const builtInTier0 = checkAbsoluteDeny(guardedCall, projectRoot, executionCwd);
+    const tier0: AbsoluteDenyResult = (config.extraAbsoluteDenyChecks ?? []).reduce<AbsoluteDenyResult>((result, check) => (
       result.denied ? result : check(guardedCall, projectRoot, executionCwd)
-    ), { denied: false });
+    ), builtInTier0);
     if (tier0.denied) {
       logAutoModeWarning(
         config.log,
         `[auto-mode] high-impact static pattern matched (${tier0.patternId}): ${tier0.reason}`,
       );
+      if (builtInTier0.denied && builtInTier0.patternId !== 'user_kodax_write') {
+        return { action: 'block', reason: tier0.reason };
+      }
       if (state.engine === 'llm') {
         signals = [...signals, {
           kind: 'dangerous_pattern',
@@ -1617,7 +1558,7 @@ export function createAutoModeToolGuardrail(
       );
       action = safeFallbackToClassifierInput(guardedCall.name, guardedCall.input);
     }
-    if (tier0.denied && state.engine === 'llm' && action === '') {
+    if (tier0.denied && action === '') {
       action = safeFallbackToClassifierInput(guardedCall.name, guardedCall.input);
     }
     const requiresReadAnalysis = DETERMINISTIC_READ_TOOLS.has(guardedCall.name);
@@ -1646,18 +1587,6 @@ export function createAutoModeToolGuardrail(
       if (action === '') {
         action = safeFallbackToClassifierInput(guardedCall.name, guardedCall.input);
       }
-      permissionReview = fallbackPermissionReview(
-        guardedCall.name,
-        action,
-        'analyzer_unavailable',
-      );
-    }
-    if (
-      !permissionReview
-      && guardedCall.name === 'bash'
-      && config.requireWorkspaceShellSandbox === true
-      && action !== ''
-    ) {
       permissionReview = fallbackPermissionReview(
         guardedCall.name,
         action,
@@ -1695,6 +1624,7 @@ export function createAutoModeToolGuardrail(
         ctx.permissionIntent,
       );
     }
+    const userIntentRevision = automaticPermissionIntentRevision(ctx.messages ?? []);
     if (tier0.denied && state.engine === 'rules') return escalateOrAsk(tier0.reason);
     if (
       !tier0.denied && permissionReview
@@ -1759,6 +1689,29 @@ export function createAutoModeToolGuardrail(
         source: 'configuration',
       });
     }
+    let classifierClaudeMd: string | undefined;
+    try {
+      classifierClaudeMd = intentEvidence
+        ? undefined
+        : config.getClaudeMd?.() ?? config.claudeMd;
+    } catch (error) {
+      return fallbackOnClassifierException(error);
+    }
+    const automaticAllowKey = createHash('sha256').update(JSON.stringify({
+      projectRoot,
+      executionCwd,
+      tool: guardedCall.name,
+      action: permissionAction,
+      intentRevision: userIntentRevision,
+      permissionIntent: ctx.permissionIntent ?? null,
+      classifier: {
+        provider: resolved.providerName,
+        model: resolved.model,
+      },
+      claudeMd: classifierClaudeMd ?? null,
+      signals,
+    })).digest('hex');
+    if (automaticAllowCache.has(automaticAllowKey)) return allowFinal();
 
     // Infrastructure degradation never widens policy to Auto[rules].
     if (breakerShouldFallback(state.breaker, Date.now())) {
@@ -1812,7 +1765,7 @@ export function createAutoModeToolGuardrail(
         rules: config.rules,
         // Compact review deliberately excludes AGENTS.md. An analyzer override
         // that declines the call retains the legacy live/static behavior.
-        claudeMd: intentEvidence ? undefined : config.getClaudeMd?.() ?? config.claudeMd,
+        claudeMd: classifierClaudeMd,
         // classify() ignores transcript when intentEvidence is present; keeping
         // the parameter here preserves its standalone/legacy API.
         transcript: ctx.messages ?? [],
@@ -1860,6 +1813,12 @@ export function createAutoModeToolGuardrail(
     switch (decision.kind) {
       case 'allow':
         state.denials = recordDenialAllow(state.denials);
+        automaticAllowCache.add(automaticAllowKey);
+        while (automaticAllowCache.size > 64) {
+          const oldest = automaticAllowCache.values().next().value as string | undefined;
+          if (oldest === undefined) break;
+          automaticAllowCache.delete(oldest);
+        }
         return allowFinal();
 
       case 'confirm':

@@ -761,30 +761,29 @@ while a cross-category conflict fails quickly instead of waiting indefinitely.
 Recognized shell mutations of the Agent Home root or Runtime are blocked before
 either Auto engine can consult its classifier or approval surface; credential
 and security configuration remains on the reviewable branch.
-Every coding run also installs the shell boundary outside Auto mode. Runtime
-uses fail-closed ASRT admission in every permission mode. Linux's PID namespace
-and the Windows per-effect Job provide authoritative process-tree containment;
-macOS and legacy custom adapters without the optional `processTreeContainment`
-capability fail closed for opaque Bash but may execute a complete, exact
-permission analysis. On Windows, ASRT never grants `MODIFY` on the Agent Home
+Every coding run keeps authorization independent from containment. Runtime
+attempts ASRT first; a pre-start infrastructure failure or incompatible policy
+owner returns an already-authorized command to ordinary permission execution.
+Committed or unknown target start is never replayed by the execution layer.
+Linux's PID namespace and the Windows per-effect Job provide process-tree
+containment when selected. On Windows, ASRT never grants `MODIFY` on the Agent Home
 directory object because that right includes root deletion. It grants verified
 ordinary paths only in a session keyed by the permission review's exact
-Agent Home read/write targets. Existing targets are granted directly; a create
-uses its nearest existing safe parent. The OS boundary independently rejects the
+Agent Home read/write targets. Existing targets are granted directly; a missing
+external target that would require a broader parent grant uses ordinary permission
+execution. The OS boundary independently rejects the
 root object, broken/escaping links, and writes under Runtime, sandbox-control,
-legacy process-control, or Learned Area. The eager session grants the workspace
-plus one empty, disposable per-session temp directory; the child receives that
-directory through `TEMP`, `TMP`, and `TMPDIR`, and KodaX removes it after the
-session exits, so ASRT never recursively grants the complete user temp tree or
-reuses an accumulating tree. Creating or modifying files inside `agents`,
+legacy process-control, or Learned Area. Each policy group grants the workspace
+plus one bounded policy temp root; every session receives a disposable child
+through `TEMP`, `TMP`, and `TMPDIR`, and KodaX removes that child after exit.
+Creating or modifying files inside `agents`,
 Sessions, tool-results, and other ordinary directories stays available without
 approval. Reviewable Agent Home reads are not placed on the OS sandbox's
 unconditional deny list, so an explicit approval remains effective. Because
-ASRT's Windows sessions share one restricted-user SID, automatic-safe scopes use
-a bounded eight-entry cache whose eviction completes before replacement. A
-review-only credential/control-file scope is one-shot and holds an exclusive
-cross-process shell-effect fence from before ACL initialization through process
-drain and session reset. `kodax sandbox setup` installs idempotent persistent
+ASRT's Windows sessions share one restricted-user SID, so only exact effective
+policy matches share concurrently; an incompatible policy uses ordinary
+permission execution. Setup/reset holds a short cross-process coordination
+fence. `kodax sandbox setup` installs idempotent persistent
 read guards for the dedicated sandbox SID on existing sensitive roots; normal
 startup only audits them and fails closed if migration is required. Exact
 reviewed child grants override the inherited Agent Home deny, while the root

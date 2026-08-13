@@ -60,20 +60,20 @@ sensitive files require review. The legacy `processes/children` registry is
 hard-denied to model writes; upgrade cleanup quarantines its unauthenticated
 records without signaling a process. Exact
 non-sensitive Runtime reads remain open.
-Opaque shell execution is admitted only behind a fail-closed OS sandbox with
-authoritative process-tree containment. Runtime supplies Linux PID-namespace
-containment and a Windows per-effect Job in all permission modes. macOS and
-legacy custom adapters without the optional containment capability fail closed
-for opaque Bash; they retain statically exact commands. Windows sandbox grants
+Shell authorization and OS containment are separate layers. Runtime attempts
+the sandbox first; infrastructure unavailability or policy-owner contention
+before target start returns an already-authorized call to the normal permission
+path. A sandbox denial after target start is never implicitly replayed. Runtime
+supplies Linux PID-namespace containment and a Windows per-effect Job when
+containment is selected. Windows sandbox grants
 attach to the permission review's exact verified ordinary Home paths, not to
 the Home root object, so child mutation does not imply whole-root deletion.
 Safe paths remain automatic; root/control-plane writes and escaping links are
-rejected again before ACL construction. The eager workspace session uses a
-disposable per-session temp directory and leaves unrelated user-owned trees
-ungranted. Safe scopes have bounded reuse and retire before replacement;
-review-only scopes exclude every other shell from ACL initialization through
-reset so the shared Windows sandbox identity cannot expose temporary access to
-a concurrent command. Existing sensitive roots carry idempotent persistent read
+rejected again before ACL construction. Each exact policy group uses a
+disposable temp scope and leaves unrelated user-owned trees ungranted. Equal
+workspace, Agent Home, additional filesystem, toolchain, and network policies
+may share one Windows safety domain concurrently; different policies use the
+normal permission fallback. Existing sensitive roots carry idempotent persistent read
 guards for the dedicated sandbox SID, installed only by explicit sandbox setup;
 startup performs a bounded read-only audit. Exact child grants preserve safe
 Agent Home access beneath the inherited deny. Repository config and hooks use

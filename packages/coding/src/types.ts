@@ -1655,7 +1655,9 @@ export interface KodaXPreparedShellSandboxInvocation {
   readonly env: NodeJS.ProcessEnv;
   readonly windowsVerbatimArguments?: boolean;
   readonly fileSystemEffectLease?: KodaXFileSystemEffectLease;
-  /** Final synchronous fail-closed check immediately before the effect gate starts the target. */
+  /** Full sandbox policy identity used to coordinate compatible Windows ACL sessions. */
+  readonly fileSystemEffectPolicyKey?: string;
+  /** Final synchronous sandbox-safety check immediately before the effect gate starts the target. */
   readonly authorizeStart?: () => void;
   cleanup(input?: {
     readonly execution: 'not_started' | 'started_or_unknown';
@@ -1666,8 +1668,6 @@ export interface KodaXPreparedShellSandboxInvocation {
 
 /** Runtime-owned OS sandbox broker for selected concrete shell calls. */
 export interface KodaXShellSandbox {
-  /** Selected calls must not fall back to ordinary host execution. */
-  readonly failClosed?: boolean;
   /**
    * Host-trusted proof that the prepared root cannot settle while one of its
    * descendants remains alive. Omitted adapters remain source-compatible but

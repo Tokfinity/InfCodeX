@@ -355,7 +355,7 @@ vi.mock('node:child_process', async (importOriginal) => {
             const message = JSON.parse(line) as {
               readonly id: string;
               readonly type: 'wrap' | 'cleanup';
-              readonly request?: {
+              readonly request?: Readonly<Record<string, unknown>> & {
                 readonly targetStartedMarker?: string;
               };
             };
@@ -790,7 +790,6 @@ describe('ASRT workspace shell adapter', () => {
     createAsrtShellSandbox({
       workspaceRoot: root,
       shouldSandbox: () => true,
-      failClosed: true,
     });
 
     if (process.platform === 'win32') {
@@ -811,7 +810,7 @@ describe('ASRT workspace shell adapter', () => {
     });
   });
 
-  it('serializes workspace ACL initialization behind active filesystem effects', async () => {
+  it('falls back without initializing ACLs while an ordinary filesystem effect is active', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-acl-fence-'));
     tempRoots.push(root);
     const releaseActiveEffect = await acquireFileSystemMutationLease();
@@ -822,7 +821,6 @@ describe('ASRT workspace shell adapter', () => {
       const sandbox = createAsrtShellSandbox({
         workspaceRoot: root,
         shouldSandbox: () => true,
-        failClosed: true,
       });
       preparing = sandbox.prepare({
         toolCallId: 'acl-fence',
@@ -842,9 +840,9 @@ describe('ASRT workspace shell adapter', () => {
 
     const invocation = await preparing!;
     try {
-      expect(preparedPrematurely).toBe(false);
+      expect(preparedPrematurely).toBe(true);
       expect(sessionCountWhileBlocked).toBe(0);
-      expect(invocation).toBeDefined();
+      expect(invocation).toBeUndefined();
     } finally {
       await invocation?.cleanup();
     }
@@ -863,7 +861,6 @@ describe('ASRT workspace shell adapter', () => {
       createAsrtShellSandbox({
         workspaceRoot: workspace,
         shouldSandbox: () => true,
-        failClosed: true,
       });
 
       await new Promise<void>((resolve) => setImmediate(resolve));
@@ -946,7 +943,6 @@ describe('ASRT workspace shell adapter', () => {
       const sandbox = createAsrtShellSandbox({
         workspaceRoot: workspace,
         shouldSandbox: () => true,
-        failClosed: true,
       });
       await new Promise<void>((resolve) => setImmediate(resolve));
       expect(capturedWorkspaceSessionConfigs).toHaveLength(0);
@@ -1070,7 +1066,6 @@ describe('ASRT workspace shell adapter', () => {
       const sandbox = createAsrtShellSandbox({
         workspaceRoot: workspace,
         shouldSandbox: () => true,
-        failClosed: true,
       });
       await new Promise<void>((resolve) => setImmediate(resolve));
       expect(capturedWorkspaceSessionConfigs).toHaveLength(0);
@@ -1104,8 +1099,15 @@ describe('ASRT workspace shell adapter', () => {
       workspaceSessionControl.releaseClose = undefined;
       await firstCleanup;
 
-      const second = await secondPending;
-      if (!second) throw new Error('expected second toolchain invocation');
+      await expect(secondPending).resolves.toBeUndefined();
+      const second = await sandbox.prepare({
+        toolCallId: 'toolchain-scope-b-after-reset',
+        toolInput: { command: 'tool-b --version' },
+        command: 'tool-b --version',
+        cwd: workspace,
+        env: { PATH: toolchainB },
+      });
+      if (!second) throw new Error('expected second toolchain invocation after reset');
       await second.cleanup();
       expect(capturedWorkspaceSessionConfigs).toHaveLength(2);
       const firstConfig = capturedWorkspaceSessionConfigs[0] as {
@@ -1130,7 +1132,6 @@ describe('ASRT workspace shell adapter', () => {
       const sandbox = createAsrtShellSandbox({
         workspaceRoot: workspace,
         shouldSandbox: () => true,
-        failClosed: true,
       });
       const preparing = sandbox.prepare({
         toolCallId: 'profile-toolchain-path-race',
@@ -1159,7 +1160,9 @@ describe('ASRT workspace shell adapter', () => {
 
   it('prepares only an admitted concrete call with workspace/temp writes and normal local network', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-shell-'));
-    tempRoots.push(root);
+    const additionalReadRoot = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-read-'));
+    const additionalWriteRoot = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-write-'));
+    tempRoots.push(root, additionalReadRoot, additionalWriteRoot);
     const home = path.resolve(os.homedir());
     const customAgentHome = path.join(root, 'custom-agent-home');
     vi.stubEnv('KODAX_HOME', customAgentHome);
@@ -1225,12 +1228,15 @@ describe('ASRT workspace shell adapter', () => {
           agentHomeRootAlias,
         ],
       },
+      filesystemAccess: {
+        read: [additionalReadRoot],
+        write: [additionalWriteRoot],
+      },
     }));
     const reportObservation = vi.fn();
     const sandbox = createAsrtShellSandbox({
       workspaceRoot: root,
       shouldSandbox,
-      failClosed: true,
     });
     const childControlledTemp = path.join(path.parse(root).root, 'kodax-child-temp');
 
@@ -1316,6 +1322,8 @@ describe('ASRT workspace shell adapter', () => {
         expect(request.config.filesystem.allowWrite).toContain(path.resolve(customAgentHome));
       }
       expect(request.config.filesystem.allowWrite).not.toContain(childControlledTemp);
+      expect(request.config.filesystem.allowRead).toContain(path.resolve(additionalReadRoot));
+      expect(request.config.filesystem.allowWrite).toContain(path.resolve(additionalWriteRoot));
       const sensitiveHomeReads = [
         '.ssh', '.aws', '.azure', '.gnupg', '.kube', '.docker', '.kodax', '.agents',
         '.codex', '.claude', '.gemini', '.direnv', '.terraform.d',
@@ -1463,7 +1471,7 @@ describe('ASRT workspace shell adapter', () => {
       expect(request.config.network.allowedDomains).toEqual([]);
       expect(request.config.network.strictAllowlist).toBe(false);
       expect(request.allowAllNetwork).toBe(true);
-      expect(request.fallbackToNormalExecution).toBe(false);
+      expect(request.fallbackToNormalExecution).toBe(true);
       expect(request.env.TEST_API_KEY).toBe('must-not-cross-the-broker');
       expect(request.env.AWS_ACCESS_KEY_ID).toBe('must-not-cross-the-broker-either');
       if (process.platform === 'win32') {
@@ -1492,6 +1500,38 @@ describe('ASRT workspace shell adapter', () => {
   });
 
   it.runIf(process.platform === 'win32')(
+    'uses ordinary permission fallback for a missing external write target',
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-missing-write-'));
+      const missingTarget = path.join(root, '..', `${path.basename(root)}-missing`, 'output.txt');
+      tempRoots.push(root);
+      const reportObservation = vi.fn();
+      const sandbox = createAsrtShellSandbox({
+        workspaceRoot: root,
+        shouldSandbox: () => ({
+          filesystemAccess: { read: [], write: [missingTarget] },
+        }),
+      });
+
+      await expect(sandbox.prepare({
+        toolCallId: 'missing-external-write',
+        toolInput: { command: 'echo content > output.txt' },
+        command: 'echo content > output.txt',
+        cwd: root,
+        env: process.env,
+        reportObservation,
+      })).resolves.toBeUndefined();
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(0);
+      expect(reportObservation).toHaveBeenCalledWith({
+        version: 1,
+        state: 'fallback',
+        reason: 'not_ready',
+        execution: 'normal_permission_policy',
+      });
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
     'keeps persistent Windows sensitive-root guards outside ASRT startup propagation',
     async () => {
       const agentHome = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-agent-home-'));
@@ -1500,7 +1540,6 @@ describe('ASRT workspace shell adapter', () => {
       const sandbox = createAsrtShellSandbox({
         workspaceRoot: os.homedir(),
         shouldSandbox: () => true,
-        failClosed: true,
       });
 
       const prepared = await sandbox.prepare({
@@ -1568,7 +1607,6 @@ describe('ASRT workspace shell adapter', () => {
         shouldSandbox: () => ({
           agentHomeAccess: { read: [], write: [agentsDirectory] },
         }),
-        failClosed: true,
       });
       const prepared = await sandbox.prepare({
         toolCallId: 'bash-junction-workspace',
@@ -1609,7 +1647,6 @@ describe('ASRT workspace shell adapter', () => {
       const sandbox = createAsrtShellSandbox({
         workspaceRoot: root,
         shouldSandbox: () => true,
-        failClosed: true,
       });
       const prepared = await sandbox.prepare({
         toolCallId: 'bash-git-guards',
@@ -1619,7 +1656,15 @@ describe('ASRT workspace shell adapter', () => {
         env: process.env,
       });
       if (!prepared) throw new Error('expected Git guard workspace invocation');
+      const concurrent = await sandbox.prepare({
+        toolCallId: 'bash-git-guards-concurrent',
+        toolInput: { command: 'git status --short' },
+        command: 'git status --short',
+        cwd: root,
+        env: process.env,
+      });
       try {
+        expect(concurrent).toBeDefined();
         const guardPayloads = capturedSyncSpawns.flatMap((call) => {
           const encodedIndex = call.args.indexOf('-EncodedCommand');
           if (encodedIndex < 0 || !call.input) return [];
@@ -1644,8 +1689,10 @@ describe('ASRT workspace shell adapter', () => {
         };
         expect(sessionConfig.filesystem.denyWrite).toEqual([]);
       } finally {
+        await concurrent?.cleanup();
         await prepared.cleanup();
       }
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(1);
     },
   );
 
@@ -1657,7 +1704,6 @@ describe('ASRT workspace shell adapter', () => {
       const sandbox = createAsrtShellSandbox({
         workspaceRoot: root,
         shouldSandbox: () => true,
-        failClosed: true,
       });
       const prepared = await sandbox.prepare({
         toolCallId: 'bash-workspace-acl-recovery',
@@ -1690,7 +1736,7 @@ describe('ASRT workspace shell adapter', () => {
   );
 
   it.runIf(process.platform === 'win32')(
-    'does not spawn a workspace owner when its durable ACL poison marker cannot be written',
+    'falls back without spawning a workspace owner when its durable ACL poison marker cannot be written',
     async () => {
       const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-workspace-marker-failure-'));
       tempRoots.push(root);
@@ -1700,7 +1746,6 @@ describe('ASRT workspace shell adapter', () => {
       const sandbox = createAsrtShellSandbox({
         workspaceRoot: root,
         shouldSandbox: () => true,
-        failClosed: true,
       });
       const prepare = (toolCallId: string) => sandbox.prepare({
         toolCallId,
@@ -1712,8 +1757,7 @@ describe('ASRT workspace shell adapter', () => {
         env: process.env,
       });
 
-      await expect(prepare('bash-workspace-marker-failure'))
-        .rejects.toThrow('injected ACL poison marker write failure');
+      await expect(prepare('bash-workspace-marker-failure')).resolves.toBeUndefined();
       expect(capturedSpawnArgv).toHaveLength(spawnCount);
       expect(capturedWorkspaceSessionConfigs).toHaveLength(0);
 
@@ -1735,7 +1779,6 @@ describe('ASRT workspace shell adapter', () => {
       const sandbox = createAsrtShellSandbox({
         workspaceRoot: root,
         shouldSandbox: () => true,
-        failClosed: true,
       });
       const prepared = await sandbox.prepare({
         toolCallId: 'bash-workspace-shutdown',
@@ -1774,7 +1817,6 @@ describe('ASRT workspace shell adapter', () => {
       const sandbox = createAsrtShellSandbox({
         workspaceRoot: root,
         shouldSandbox: () => true,
-        failClosed: true,
       });
       const prepare = (toolCallId: string) => sandbox.prepare({
         toolCallId,
@@ -1820,7 +1862,6 @@ describe('ASRT workspace shell adapter', () => {
       const sandbox = createAsrtShellSandbox({
         workspaceRoot: root,
         shouldSandbox: () => true,
-        failClosed: true,
       });
       const prepared = await sandbox.prepare({
         toolCallId: 'bash-shared-runtime-shutdown',
@@ -1865,14 +1906,13 @@ describe('ASRT workspace shell adapter', () => {
   );
 
   it.runIf(process.platform === 'win32')(
-    'blocks workspace replacement when post-session ACL recovery fails',
+    'falls back when post-session ACL recovery fails',
     async () => {
       const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-workspace-reset-recovery-'));
       tempRoots.push(root);
       const sandbox = createAsrtShellSandbox({
         workspaceRoot: root,
         shouldSandbox: () => true,
-        failClosed: true,
       });
       const prepare = (toolCallId: string) => sandbox.prepare({
         toolCallId,
@@ -1896,8 +1936,7 @@ describe('ASRT workspace shell adapter', () => {
           expect.stringContaining('Windows sandbox ACL recovery failed'),
         ]),
       );
-      await expect(prepare('bash-after-reset-recovery-failure'))
-        .rejects.toThrow('Windows sandbox ACL cleanup was not confirmed');
+      await expect(prepare('bash-after-reset-recovery-failure')).resolves.toBeUndefined();
       expect(capturedWorkspaceSessionConfigs).toHaveLength(1);
       expect(capturedSyncSpawns.filter(({ args }) => (
         args.includes('acl') && args.includes('recover')
@@ -1913,7 +1952,6 @@ describe('ASRT workspace shell adapter', () => {
       const sandbox = createAsrtShellSandbox({
         workspaceRoot: root,
         shouldSandbox: () => true,
-        failClosed: true,
       });
       const prepare = (toolCallId: string) => sandbox.prepare({
         toolCallId,
@@ -2003,13 +2041,70 @@ describe('ASRT workspace shell adapter', () => {
     ))).toHaveLength(process.platform === 'win32' ? 2 : 1);
   });
 
-  it('serializes Windows ACL scopes while retaining POSIX session concurrency', async () => {
+  it.runIf(process.platform !== 'win32')(
+    'keeps ordinary POSIX workspace sessions outside the scoped-session cache quota',
+    async () => {
+    const roots: string[] = [];
+      for (let index = 0; index < 9; index += 1) {
+        const root = await mkdtemp(path.join(os.tmpdir(), `kodax-posix-workspace-${index}-`));
+        roots.push(root);
+        tempRoots.push(root);
+        const sandbox = createAsrtShellSandbox({
+          workspaceRoot: root,
+          shouldSandbox: () => true,
+        });
+        const prepared = await sandbox.prepare({
+          toolCallId: `bash-posix-workspace-${index}`,
+          toolInput: { command: 'node --version' },
+          command: 'node --version',
+          cwd: root,
+          env: process.env,
+        });
+        if (!prepared) throw new Error(`expected ordinary POSIX workspace invocation ${index}`);
+        await prepared.cleanup();
+      }
+
+      const scopedSandbox = createAsrtShellSandbox({
+        workspaceRoot: roots[0]!,
+        shouldSandbox: () => ({
+          filesystemAccess: { read: [roots[1]!], write: [] },
+        }),
+      });
+      const scoped = await scopedSandbox.prepare({
+        toolCallId: 'bash-posix-scoped',
+        toolInput: { command: 'node --version' },
+        command: 'node --version',
+        cwd: roots[0]!,
+        env: process.env,
+      });
+      if (!scoped) throw new Error('expected scoped POSIX workspace invocation');
+      await scoped.cleanup();
+
+      const firstWorkspaceAgain = createAsrtShellSandbox({
+        workspaceRoot: roots[0]!,
+        shouldSandbox: () => true,
+      });
+      const reused = await firstWorkspaceAgain.prepare({
+        toolCallId: 'bash-posix-workspace-reused',
+        toolInput: { command: 'node --version' },
+        command: 'node --version',
+        cwd: roots[0]!,
+        env: process.env,
+      });
+      if (!reused) throw new Error('expected reused POSIX workspace invocation');
+      await reused.cleanup();
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(10);
+    },
+  );
+
+  it('shares one workspace owner across concurrent commands with the same policy', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-session-parallel-'));
     tempRoots.push(root);
     const sandbox = createAsrtShellSandbox({
       workspaceRoot: root,
       shouldSandbox: () => true,
     });
+    const reportObservation = vi.fn();
     const prepare = (toolCallId: string) => sandbox.prepare({
       toolCallId,
       toolInput: { command: 'node --version' },
@@ -2018,36 +2113,254 @@ describe('ASRT workspace shell adapter', () => {
       args: ['--version'],
       cwd: root,
       env: process.env,
+      reportObservation,
     });
 
+    const [first, second] = await Promise.all([
+      prepare('bash-parallel-1'),
+      prepare('bash-parallel-2'),
+    ]);
+    if (!first || !second) throw new Error('expected parallel workspace invocations');
     if (process.platform === 'win32') {
-      const first = await prepare('bash-serialized-1');
-      if (!first) throw new Error('expected first serialized workspace invocation');
-      let secondPrepared = false;
-      const secondPending = prepare('bash-serialized-2').then((value) => {
-        secondPrepared = true;
-        return value;
-      });
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      expect(secondPrepared).toBe(false);
+      const poisonDirectories = [
+        path.join(process.env.KODAX_HOME!, 'sandbox-runtime', 'acl-poison'),
+        path.join(process.env.ProgramData!, 'KodaX', 'sandbox-runtime', 'acl-poison'),
+      ];
+      for (const directory of poisonDirectories) {
+        await expect(readdir(directory)).resolves.toHaveLength(1);
+      }
       await first.cleanup();
-      const second = await secondPending;
-      if (!second) throw new Error('expected second serialized workspace invocation');
+      for (const directory of poisonDirectories) {
+        await expect(readdir(directory)).resolves.toHaveLength(1);
+      }
       await second.cleanup();
+      for (const directory of poisonDirectories) {
+        await expect(readdir(directory)).resolves.toEqual([]);
+      }
     } else {
-      const [first, second] = await Promise.all([
-        prepare('bash-parallel-1'),
-        prepare('bash-parallel-2'),
-      ]);
-      if (!first || !second) throw new Error('expected parallel workspace invocations');
       await Promise.all([first.cleanup(), second.cleanup()]);
     }
 
     expect(capturedSpawnArgv.filter((argv) => argv.some((arg) => (
       arg.includes('sandbox-workspace-session')
       || arg === '__asrt-workspace-session'
-    )))).toHaveLength(process.platform === 'win32' ? 2 : 1);
+    )))).toHaveLength(1);
   });
+
+  it.runIf(process.platform === 'win32')(
+    'keeps an incompatible local policy as retryable fallback instead of sticky poison',
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-local-policy-contention-'));
+      const otherToolchain = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-local-policy-other-'));
+      tempRoots.push(root, otherToolchain);
+      const sandbox = createAsrtShellSandbox({
+        workspaceRoot: root,
+        shouldSandbox: () => true,
+      });
+      const prepare = (toolCallId: string, env: NodeJS.ProcessEnv = process.env) => sandbox.prepare({
+        toolCallId,
+        toolInput: { command: 'node --version' },
+        command: 'node --version',
+        executable: process.execPath,
+        args: ['--version'],
+        cwd: root,
+        env,
+      });
+
+      const first = await prepare('bash-local-policy-a');
+      if (!first) throw new Error('expected first local policy invocation');
+      await expect(prepare('bash-local-policy-b', {
+        ...process.env,
+        PATH: otherToolchain,
+      })).resolves.toBeUndefined();
+      await first.cleanup();
+
+      const retry = await prepare('bash-local-policy-a-retry');
+      if (!retry) throw new Error('expected original policy to remain retryable');
+      await retry.cleanup();
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'does not share a sandbox owner when the host temp policy base differs',
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-temp-policy-'));
+      const tempA = path.join(root, 'temp-a');
+      const tempB = path.join(root, 'temp-b');
+      await mkdir(tempA, { recursive: true });
+      await mkdir(tempB, { recursive: true });
+      tempRoots.push(root);
+      const sandbox = createAsrtShellSandbox({
+        workspaceRoot: root,
+        shouldSandbox: () => true,
+      });
+      const prepare = (toolCallId: string) => sandbox.prepare({
+        toolCallId,
+        toolInput: { command: 'node --version' },
+        command: 'node --version',
+        executable: process.execPath,
+        args: ['--version'],
+        cwd: root,
+        env: process.env,
+      });
+
+      vi.stubEnv('TEMP', tempA);
+      vi.stubEnv('TMP', tempA);
+      const first = await prepare('bash-temp-policy-a');
+      if (!first) throw new Error('expected first temp policy invocation');
+      vi.stubEnv('TEMP', tempB);
+      vi.stubEnv('TMP', tempB);
+      const incompatible = await prepare('bash-temp-policy-b');
+      try {
+        expect(incompatible).toBeUndefined();
+      } finally {
+        await incompatible?.cleanup();
+        await first.cleanup();
+      }
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'does not share a policy after a reviewed junction target changes',
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-policy-junction-'));
+      const physicalA = path.join(root, 'physical-a');
+      const physicalB = path.join(root, 'physical-b');
+      const reviewedLink = path.join(root, 'reviewed-link');
+      await mkdir(physicalA, { recursive: true });
+      await mkdir(physicalB, { recursive: true });
+      await symlink(physicalA, reviewedLink, 'junction');
+      tempRoots.push(root);
+      const sandbox = createAsrtShellSandbox({
+        workspaceRoot: root,
+        shouldSandbox: () => ({
+          filesystemAccess: { read: [reviewedLink], write: [] },
+        }),
+      });
+      const prepare = (toolCallId: string) => sandbox.prepare({
+        toolCallId,
+        toolInput: { command: 'node --version' },
+        command: 'node --version',
+        executable: process.execPath,
+        args: ['--version'],
+        cwd: root,
+        env: process.env,
+      });
+
+      const first = await prepare('bash-policy-junction-a');
+      if (!first) throw new Error('expected first junction policy invocation');
+      await rm(reviewedLink, { recursive: true, force: true });
+      await symlink(physicalB, reviewedLink, 'junction');
+      const incompatible = await prepare('bash-policy-junction-b');
+      try {
+        expect(incompatible).toBeUndefined();
+      } finally {
+        await incompatible?.cleanup();
+        await first.cleanup();
+      }
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'shares an exact policy across independent Windows owner processes and falls back for a different policy',
+    async () => {
+      const actualChildProcess = await vi.importActual<typeof import('node:child_process')>(
+        'node:child_process',
+      );
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-cross-process-policy-'));
+      const otherToolchain = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-other-policy-'));
+      tempRoots.push(root, otherToolchain);
+      const sandbox = createAsrtShellSandbox({
+        workspaceRoot: root,
+        shouldSandbox: () => true,
+      });
+      const prepare = (toolCallId: string, env: NodeJS.ProcessEnv = process.env) => sandbox.prepare({
+        toolCallId,
+        toolInput: { command: 'node --version' },
+        command: 'node --version',
+        executable: process.execPath,
+        args: ['--version'],
+        cwd: root,
+        env,
+      });
+      const primaryDirectory = path.join(
+        process.env.ProgramData!,
+        'KodaX',
+        'sandbox-runtime',
+        'acl-poison',
+      );
+      const first = await prepare('bash-policy-probe');
+      if (!first) throw new Error('expected policy probe invocation');
+      const [localMarkerName] = await readdir(primaryDirectory);
+      if (!localMarkerName) throw new Error('expected local policy marker');
+      const localOwner = JSON.parse(await readFile(
+        path.join(primaryDirectory, localMarkerName),
+        'utf8',
+      )) as { readonly policyKey?: string };
+      expect(localOwner.policyKey).toMatch(/^[a-f0-9]{64}$/);
+      await first.cleanup();
+
+      const holder = actualChildProcess.spawn(process.execPath, [
+        '-e',
+        'process.stdout.write("ready\\n");setInterval(()=>{},1000)',
+      ], {
+        stdio: ['ignore', 'pipe', 'ignore'],
+        windowsHide: true,
+      });
+      await once(holder.stdout!, 'data');
+      if (holder.pid === undefined) throw new Error('policy holder PID missing');
+      const holderIdentity = readProcessStartIdentity(holder.pid);
+      if (holderIdentity === undefined) throw new Error('policy holder identity missing');
+      const foreignMarker = path.join(primaryDirectory, 'foreign-compatible-policy.json');
+      await writeFile(foreignMarker, JSON.stringify({
+        version: 1,
+        state: 'active',
+        policyKey: localOwner.policyKey,
+        holderPid: holder.pid,
+        holderProcessStartIdentity: holderIdentity,
+        windowsBootIdentity: processIdentityMock.windowsBootIdentity,
+      }), 'utf8');
+      const releaseForeignCompatibleEffect = await acquireFileSystemMutationLease(
+        localOwner.policyKey,
+      );
+      try {
+        processIdentityMock.unreadablePids.add(holder.pid);
+        await expect(prepare('bash-unverified-foreign-policy')).resolves.toBeUndefined();
+        processIdentityMock.unreadablePids.delete(holder.pid);
+
+        const compatible = await prepare('bash-compatible-foreign-policy');
+        if (!compatible) throw new Error('expected compatible cross-process policy admission');
+        expect(compatible.fileSystemEffectPolicyKey).toBe(localOwner.policyKey);
+        await compatible.cleanup();
+
+        const observation = vi.fn();
+        const incompatible = await sandbox.prepare({
+          toolCallId: 'bash-incompatible-foreign-policy',
+          toolInput: { command: 'node --version' },
+          command: 'node --version',
+          executable: process.execPath,
+          args: ['--version'],
+          cwd: root,
+          env: { ...process.env, PATH: otherToolchain },
+          reportObservation: observation,
+        });
+        expect(incompatible).toBeUndefined();
+        expect(observation).toHaveBeenCalledWith(expect.objectContaining({
+          state: 'fallback',
+          execution: 'normal_permission_policy',
+        }));
+        const ordinaryFallbackEffect = await acquireFileSystemMutationLease();
+        await ordinaryFallbackEffect();
+      } finally {
+        processIdentityMock.unreadablePids.delete(holder.pid);
+        await releaseForeignCompatibleEffect();
+        const holderClosed = once(holder, 'close');
+        holder.kill('SIGKILL');
+        await holderClosed;
+        await rm(foreignMarker, { force: true });
+      }
+    },
+  );
 
   it('retires a workspace session when sandbox execution cannot be attested', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-session-unattested-'));
@@ -2055,7 +2368,6 @@ describe('ASRT workspace shell adapter', () => {
     const sandbox = createAsrtShellSandbox({
       workspaceRoot: root,
       shouldSandbox: () => true,
-      failClosed: true,
     });
     const prepare = (toolCallId: string) => sandbox.prepare({
       toolCallId,
@@ -2102,7 +2414,6 @@ describe('ASRT workspace shell adapter', () => {
     const sandbox = createAsrtShellSandbox({
       workspaceRoot: root,
       shouldSandbox: () => true,
-      failClosed: true,
     });
     const prepare = (toolCallId: string) => sandbox.prepare({
       toolCallId,
@@ -2159,7 +2470,6 @@ describe('ASRT workspace shell adapter', () => {
     const sandbox = createAsrtShellSandbox({
       workspaceRoot: root,
       shouldSandbox: () => true,
-      failClosed: true,
     });
     const prepare = (toolCallId: string) => sandbox.prepare({
       toolCallId,
@@ -2192,8 +2502,7 @@ describe('ASRT workspace shell adapter', () => {
         expect.stringContaining('ASRT workspace session ACL reset was not confirmed'),
       ]),
     );
-    await expect(replacementPending)
-      .rejects.toThrow('Windows sandbox ACL cleanup was not confirmed');
+    await expect(replacementPending).resolves.toBeUndefined();
     expect(capturedWorkspaceSessionConfigs).toHaveLength(1);
   });
 
@@ -2205,7 +2514,6 @@ describe('ASRT workspace shell adapter', () => {
       const sandbox = createAsrtShellSandbox({
         workspaceRoot: root,
         shouldSandbox: () => true,
-        failClosed: true,
       });
       const prepare = (toolCallId: string) => sandbox.prepare({
         toolCallId,
@@ -2219,7 +2527,7 @@ describe('ASRT workspace shell adapter', () => {
 
       if (failurePoint === 'wrap') {
         workspaceSessionControl.wrapFailure = 'injected wrap failure';
-        await expect(prepare('bash-wrap-rpc-failed')).rejects.toThrow('injected wrap failure');
+        await expect(prepare('bash-wrap-rpc-failed')).resolves.toBeUndefined();
         workspaceSessionControl.wrapFailure = undefined;
       } else {
         const first = await prepare('bash-cleanup-rpc-failed');
@@ -2246,7 +2554,6 @@ describe('ASRT workspace shell adapter', () => {
     const sandbox = createAsrtShellSandbox({
       workspaceRoot: root,
       shouldSandbox: () => true,
-      failClosed: true,
     });
     const invocation = await sandbox.prepare({
       toolCallId: 'bash-request-cleanup-failure',
@@ -2283,7 +2590,6 @@ describe('ASRT workspace shell adapter', () => {
     const sandbox = createAsrtShellSandbox({
       workspaceRoot: root,
       shouldSandbox: () => true,
-      failClosed: true,
     });
     const invocation = await sandbox.prepare({
       toolCallId: 'bash-attestation-cleanup-failure',
@@ -2315,8 +2621,8 @@ describe('ASRT workspace shell adapter', () => {
     const sandbox = createAsrtShellSandbox({
       workspaceRoot: root,
       shouldSandbox: () => true,
-      failClosed: true,
     });
+    const reportObservation = vi.fn();
     const prepare = (toolCallId: string) => sandbox.prepare({
       toolCallId,
       toolInput: { command: 'node --version' },
@@ -2325,6 +2631,7 @@ describe('ASRT workspace shell adapter', () => {
       args: ['--version'],
       cwd: root,
       env: process.env,
+      reportObservation,
     });
     const first = await prepare('bash-before-request-write-failure');
     if (!first) throw new Error('expected initial workspace invocation');
@@ -2332,16 +2639,13 @@ describe('ASRT workspace shell adapter', () => {
 
     fileSystemMock.writeBrokerRequestFailure = true;
     workspaceSessionControl.cleanupFailure = 'injected cleanup after request write failure';
-    const failure = await prepare('bash-request-write-failure').then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    expect(failure).toBeInstanceOf(AggregateError);
-    const failures = (failure as AggregateError).errors.map((error) => String(error));
-    expect(failures).toEqual(expect.arrayContaining([
-      expect.stringContaining('injected broker request write failure'),
-      expect.stringContaining('injected cleanup after request write failure'),
-    ]));
+    await expect(prepare('bash-request-write-failure')).resolves.toBeUndefined();
+    expect(reportObservation).toHaveBeenLastCalledWith({
+      version: 1,
+      state: 'fallback',
+      reason: 'prepare_failed',
+      execution: 'normal_permission_policy',
+    });
     fileSystemMock.writeBrokerRequestFailure = false;
     workspaceSessionControl.cleanupFailure = undefined;
 
@@ -2359,7 +2663,6 @@ describe('ASRT workspace shell adapter', () => {
       const sandbox = createAsrtShellSandbox({
         workspaceRoot: root,
         shouldSandbox: () => true,
-        failClosed: true,
       });
       const poisonDirectories = [
         path.join(process.env.KODAX_HOME!, 'sandbox-runtime', 'acl-poison'),
@@ -2375,7 +2678,7 @@ describe('ASRT workspace shell adapter', () => {
         args: ['--version'],
         cwd: root,
         env: process.env,
-      })).rejects.toThrow('injected broker request write failure');
+      })).resolves.toBeUndefined();
       for (const directory of poisonDirectories) {
         await expect(readdir(directory)).resolves.toEqual([]);
       }
@@ -2405,7 +2708,6 @@ describe('ASRT workspace shell adapter', () => {
         shouldSandbox: () => ({
           agentHomeAccess: { read: [], write: [], ephemeral: true },
         }),
-        failClosed: true,
       });
       fileSystemMock.writeBrokerRequestFailure = true;
 
@@ -2417,7 +2719,7 @@ describe('ASRT workspace shell adapter', () => {
         args: ['--version'],
         cwd: root,
         env: process.env,
-      })).rejects.toThrow('injected broker request write failure');
+      })).resolves.toBeUndefined();
       await expect(readdir(path.join(
         process.env.ProgramData!,
         'KodaX',
@@ -2445,7 +2747,6 @@ describe('ASRT workspace shell adapter', () => {
             write: [],
           },
         }),
-        failClosed: true,
       });
 
       const rejectedOwner = sandbox.prepare({
@@ -2461,7 +2762,7 @@ describe('ASRT workspace shell adapter', () => {
           () => reject(new Error('rejected workspace owner did not settle')),
           3_000,
         )),
-      ])).rejects.toThrow('ASRT workspace session returned malformed control data');
+      ])).resolves.toBeUndefined();
 
       workspaceSessionControl.malformedReady = false;
       const recovered = await sandbox.prepare({
@@ -2512,7 +2813,6 @@ describe('ASRT workspace shell adapter', () => {
       const sandbox = createAsrtShellSandbox({
         workspaceRoot: root,
         shouldSandbox: () => ({ agentHomeAccess: access }),
-        failClosed: true,
       });
       const prepare = async (id: string): Promise<void> => {
         const invocation = await sandbox.prepare({
@@ -2542,7 +2842,7 @@ describe('ASRT workspace shell adapter', () => {
   );
 
   it.runIf(process.platform === 'win32')(
-    'holds an exclusive filesystem fence while a review-only Agent Home ACL is live',
+    'keeps ordinary authorized shell effects available while a review-only ACL is live',
     async () => {
       const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-exclusive-review-'));
       const agentHome = path.join(root, 'agent-home');
@@ -2556,7 +2856,6 @@ describe('ASRT workspace shell adapter', () => {
         shouldSandbox: () => ({
           agentHomeAccess: { read: [reviewedConfig], write: [], ephemeral: true },
         }),
-        failClosed: true,
       });
 
       const invocation = await sandbox.prepare({
@@ -2567,16 +2866,8 @@ describe('ASRT workspace shell adapter', () => {
         env: process.env,
       });
       if (!invocation) throw new Error('expected review-only sandbox invocation');
-      let overlappingLease: Awaited<ReturnType<typeof acquireFileSystemMutationLease>> | undefined;
-      let overlapError: unknown;
-      try {
-        overlappingLease = await acquireFileSystemMutationLease();
-      } catch (error: unknown) {
-        overlapError = error;
-      } finally {
-        await overlappingLease?.();
-      }
-      expect(overlapError).toBeInstanceOf(Error);
+      const overlappingLease = await acquireFileSystemMutationLease();
+      await overlappingLease();
 
       await invocation.cleanup();
       const admittedAfterCleanup = await acquireFileSystemMutationLease();
@@ -2601,7 +2892,6 @@ describe('ASRT workspace shell adapter', () => {
         shouldSandbox: () => ({
           agentHomeAccess: { read: [], write: [selectedPath] },
         }),
-        failClosed: true,
       });
       const prepare = async (id: string): Promise<void> => {
         const invocation = await sandbox.prepare({
@@ -2618,12 +2908,11 @@ describe('ASRT workspace shell adapter', () => {
       await prepare('temp-one');
       selectedPath = path.join(safeDirectory, 'two.txt');
       await prepare('temp-two');
-      const sessionTemps = capturedWorkspaceSessionConfigs.map((config) => {
-        const filesystem = config.filesystem as { readonly allowWrite: readonly string[] };
-        return filesystem.allowWrite.find((candidate) => (
-          candidate.includes(`${path.sep}kodax-sandbox${path.sep}`)
-        ));
-      }).filter((candidate): candidate is string => candidate !== undefined);
+      const sessionTemps = capturedWorkspaceRequests.map((request) => (
+        (request.env as NodeJS.ProcessEnv | undefined)?.TEMP
+      )).filter((candidate): candidate is string => (
+        candidate?.includes(`${path.sep}kodax-sandbox${path.sep}`) === true
+      ));
       expect(sessionTemps).toHaveLength(capturedWorkspaceSessionConfigs.length);
       expect(new Set(sessionTemps).size).toBe(sessionTemps.length);
 
@@ -2642,7 +2931,6 @@ describe('ASRT workspace shell adapter', () => {
       const sandbox = createAsrtShellSandbox({
         workspaceRoot: root,
         shouldSandbox: () => true,
-        failClosed: true,
       });
       const prepare = (toolCallId: string) => sandbox.prepare({
         toolCallId,
@@ -2691,7 +2979,6 @@ describe('ASRT workspace shell adapter', () => {
         shouldSandbox: () => ({
           agentHomeAccess: { read: [], write: [selectedPath] },
         }),
-        failClosed: true,
       });
       const prepare = async (index: number): Promise<void> => {
         selectedPath = path.join(safeDirectory, `${index}.txt`);
@@ -2747,7 +3034,6 @@ describe('ASRT workspace shell adapter', () => {
         shouldSandbox: () => ({
           agentHomeAccess: { read: [], write: [selectedPath] },
         }),
-        failClosed: true,
       });
       const prepare = async (index: number) => {
         selectedPath = path.join(safeDirectory, `${index}.txt`);
@@ -2783,8 +3069,7 @@ describe('ASRT workspace shell adapter', () => {
       expect(reportObservation).not.toHaveBeenCalled();
 
       workspaceSessionControl.closeExitCode = 0;
-      await expect(prepare(8))
-        .rejects.toThrow('Windows sandbox ACL cleanup was not confirmed');
+      await expect(prepare(8)).resolves.toBeUndefined();
       expect(capturedWorkspaceSessionConfigs).toHaveLength(9);
     },
   );
@@ -2836,9 +3121,12 @@ describe('ASRT workspace shell adapter', () => {
     await vi.waitFor(() => expect(workspaceSessionControl.releaseClose).toBeDefined());
     await expect(readdir(poisonDirectory)).resolves.toHaveLength(1);
     await expect(readdir(globalPoisonDirectory)).resolves.toHaveLength(1);
-    await expect(acquireFileSystemMutationLease())
-      .rejects.toThrow('filesystem effect is already active');
-    let replacementPrepared = false;
+    let effectDuringResetSettled = false;
+    const effectDuringResetPending = acquireFileSystemMutationLease().finally(() => {
+      effectDuringResetSettled = true;
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    expect(effectDuringResetSettled).toBe(false);
     const replacementPending = sandbox.prepare({
       toolCallId: 'bash-after-session-cancel',
       toolInput: { command: 'node --version' },
@@ -2847,17 +3135,27 @@ describe('ASRT workspace shell adapter', () => {
       args: ['--version'],
       cwd: root,
       env: process.env,
-    }).then((value) => {
-      replacementPrepared = true;
-      return value;
     });
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(replacementPrepared).toBe(false);
+    await expect(replacementPending).resolves.toBeUndefined();
     expect(capturedWorkspaceSessionConfigs).toHaveLength(1);
     workspaceSessionControl.delayClose = false;
     workspaceSessionControl.releaseClose?.();
     workspaceSessionControl.releaseClose = undefined;
-    const replacement = await replacementPending;
+    const effectDuringReset = await effectDuringResetPending;
+    await effectDuringReset();
+    await vi.waitFor(async () => {
+      await expect(readdir(poisonDirectory)).resolves.toEqual([]);
+      await expect(readdir(globalPoisonDirectory)).resolves.toEqual([]);
+    });
+    const replacement = await sandbox.prepare({
+      toolCallId: 'bash-after-session-cancel-reset',
+      toolInput: { command: 'node --version' },
+      command: 'node --version',
+      executable: process.execPath,
+      args: ['--version'],
+      cwd: root,
+      env: process.env,
+    });
     if (!replacement) throw new Error('expected replacement after cancelled startup cleanup');
     await replacement.cleanup();
     const effectAfterCleanup = await acquireFileSystemMutationLease();
@@ -2927,7 +3225,6 @@ describe('ASRT workspace shell adapter', () => {
       const sandbox = createAsrtShellSandbox({
         workspaceRoot: root,
         shouldSandbox: () => true,
-        failClosed: true,
       });
       const preparing = sandbox.prepare({
         toolCallId: 'bash-session-cancel-unclean',
@@ -2964,9 +3261,9 @@ describe('ASRT workspace shell adapter', () => {
         args: ['--version'],
         cwd: root,
         env: process.env,
-      })).rejects.toThrow('Windows sandbox ACL cleanup was not confirmed');
-      await expect(acquireFileSystemMutationLease())
-        .rejects.toThrow('filesystem effect is already active');
+      })).resolves.toBeUndefined();
+      const authorizedFallbackLease = await acquireFileSystemMutationLease();
+      await authorizedFallbackLease();
       expect(capturedWorkspaceSessionConfigs).toHaveLength(1);
     },
   );
@@ -3005,7 +3302,17 @@ describe('ASRT workspace shell adapter', () => {
     workspaceSessionControl.releaseWrap = undefined;
     await vi.waitFor(() => expect(workspaceSessionControl.cleanupRequests).toBe(1));
     workspaceSessionControl.cleanupFailure = undefined;
-    const next = await sandbox.prepare({
+    if (process.platform === 'win32') {
+      await vi.waitFor(async () => {
+        await expect(readdir(path.join(
+          path.resolve(process.env.ProgramData!),
+          'KodaX',
+          'sandbox-runtime',
+          'acl-poison',
+        ))).resolves.toEqual([]);
+      });
+    }
+    let next = await sandbox.prepare({
       toolCallId: 'bash-after-wrap-cancel',
       toolInput: { command: 'node --version' },
       command: 'node --version',
@@ -3014,6 +3321,18 @@ describe('ASRT workspace shell adapter', () => {
       cwd: root,
       env: process.env,
     });
+    for (let attempt = 0; next === undefined && attempt < 10; attempt += 1) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+      next = await sandbox.prepare({
+        toolCallId: `bash-after-wrap-cancel-${attempt}`,
+        toolInput: { command: 'node --version' },
+        command: 'node --version',
+        executable: process.execPath,
+        args: ['--version'],
+        cwd: root,
+        env: process.env,
+      });
+    }
     if (!next) throw new Error('expected replacement after failed late cleanup');
     await next.cleanup();
     expect(capturedWorkspaceSessionConfigs).toHaveLength(2);
@@ -3044,7 +3363,17 @@ describe('ASRT workspace shell adapter', () => {
     await vi.waitFor(() => expect(workspaceSessionControl.cleanupRequests).toBe(1));
     workspaceSessionControl.cleanupFailure = undefined;
     workspaceSessionControl.afterWrapResponse = undefined;
-    const next = await sandbox.prepare({
+    if (process.platform === 'win32') {
+      await vi.waitFor(async () => {
+        await expect(readdir(path.join(
+          path.resolve(process.env.ProgramData!),
+          'KodaX',
+          'sandbox-runtime',
+          'acl-poison',
+        ))).resolves.toEqual([]);
+      });
+    }
+    let next = await sandbox.prepare({
       toolCallId: 'bash-after-cancelled-cleanup',
       toolInput: { command: 'node --version' },
       command: 'node --version',
@@ -3053,6 +3382,18 @@ describe('ASRT workspace shell adapter', () => {
       cwd: root,
       env: process.env,
     });
+    for (let attempt = 0; next === undefined && attempt < 10; attempt += 1) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+      next = await sandbox.prepare({
+        toolCallId: `bash-after-cancelled-cleanup-${attempt}`,
+        toolInput: { command: 'node --version' },
+        command: 'node --version',
+        executable: process.execPath,
+        args: ['--version'],
+        cwd: root,
+        env: process.env,
+      });
+    }
     if (!next) throw new Error('expected replacement after cancelled cleanup failure');
     await next.cleanup();
     expect(capturedWorkspaceSessionConfigs).toHaveLength(2);
@@ -3066,7 +3407,6 @@ describe('ASRT workspace shell adapter', () => {
     const sandbox = createAsrtShellSandbox({
       workspaceRoot: root,
       shouldSandbox: () => true,
-      failClosed: true,
     });
     const prepare = (toolCallId: string) => sandbox.prepare({
       toolCallId,
@@ -3077,11 +3417,9 @@ describe('ASRT workspace shell adapter', () => {
       cwd: root,
       env: process.env,
     });
-    await expect(prepare('bash-before-unknown-session-kill'))
-      .rejects.toThrow('process-tree termination was not confirmed');
+    await expect(prepare('bash-before-unknown-session-kill')).resolves.toBeUndefined();
     const startedAt = Date.now();
-    await expect(prepare('bash-after-unknown-session-kill'))
-      .rejects.toThrow('Windows sandbox ACL cleanup was not confirmed');
+    await expect(prepare('bash-after-unknown-session-kill')).resolves.toBeUndefined();
     expect(Date.now() - startedAt).toBeLessThan(1_500);
     expect(capturedWorkspaceSessionConfigs).toHaveLength(1);
 
@@ -3185,7 +3523,6 @@ describe('ASRT workspace shell adapter', () => {
       const sandbox = createAsrtShellSandbox({
         workspaceRoot: root,
         shouldSandbox: () => true,
-        failClosed: true,
       });
       const prepared = await sandbox.prepare({
         toolCallId: 'bash-electron-bootstrap',
@@ -3277,12 +3614,11 @@ describe('ASRT workspace shell adapter', () => {
     });
   });
 
-  it('marks an admitted fail-closed call unavailable instead of permitting normal execution', async () => {
+  it('does not expose a fail-closed mode when an admitted call is unavailable', async () => {
     await markSandboxRuntimeUnavailable();
     const sandbox = createAsrtShellSandbox({
       workspaceRoot: process.cwd(),
       shouldSandbox: () => true,
-      failClosed: true,
     });
     const reportObservation = vi.fn();
 
@@ -3293,8 +3629,8 @@ describe('ASRT workspace shell adapter', () => {
       cwd: process.cwd(),
       env: process.env,
       reportObservation,
-    })).rejects.toThrow(/ASRT|sandbox/i);
-    expect(sandbox.failClosed).toBe(true);
+    })).resolves.toBeUndefined();
+    expect(sandbox).not.toHaveProperty('failClosed');
     expect(sandbox.processTreeContainment).toBe(
       process.platform === 'linux' ? 'root-exit-drains' : undefined,
     );
@@ -3357,7 +3693,6 @@ describe('ASRT workspace shell adapter', () => {
       const sandbox = createAsrtShellSandbox({
         workspaceRoot: root,
         shouldSandbox: () => true,
-        failClosed: true,
       });
       const invocation = await sandbox.prepare({
         toolCallId: 'bash-active-workspace-owner',
@@ -3652,7 +3987,6 @@ describe('ASRT workspace shell adapter', () => {
       const sandbox = createAsrtShellSandbox({
         workspaceRoot: root,
         shouldSandbox: () => true,
-        failClosed: true,
       });
       const preparing = sandbox.prepare({
         toolCallId: 'bash-cancelled-foreign-owner',
@@ -3751,6 +4085,13 @@ describe('ASRT workspace shell adapter', () => {
       })).rejects.toThrow(/unconfirmed Windows sandbox process tree.*acl recover --force --json/i);
       await expect(stat(marker)).resolves.toBeDefined();
       expect(capturedBrokerRequests).toHaveLength(0);
+      await rm(marker, { force: true });
+      await expect(runKodaXSandboxed({
+        command: process.execPath,
+        args: ['--version'],
+        cwd: root,
+        filesystem: { allowRead: [], allowWrite: [] },
+      })).resolves.toMatchObject({ status: 'completed', exitCode: 0 });
     },
   );
 
@@ -3921,15 +4262,9 @@ describe('ASRT workspace shell adapter', () => {
       const marker = path.join(poisonDirectory, 'module-owner-before-workspace.json');
       const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-workspace-owner-contention-'));
       tempRoots.push(root);
-      const shellTempRoot = path.join(
-        os.tmpdir(),
-        'kodax-sandbox',
-        createHash('sha256').update(path.resolve(root).toLowerCase()).digest('hex').slice(0, 16),
-      );
       const sandbox = createAsrtShellSandbox({
         workspaceRoot: root,
         shouldSandbox: () => true,
-        failClosed: true,
       });
       await doctorSandboxRuntime({ refresh: true });
       recoveryLockMock.calls = 0;
@@ -3955,9 +4290,8 @@ describe('ASRT workspace shell adapter', () => {
           args: ['--version'],
           cwd: root,
           env: process.env,
-        })).rejects.toThrow(/sandbox owner.*active/i);
+        })).resolves.toBeUndefined();
         expect(capturedWorkspaceSessionConfigs).toHaveLength(0);
-        await expect(readdir(shellTempRoot)).resolves.toEqual([]);
         const controlDirectory = path.join(path.resolve(process.env.KODAX_HOME!), 'sandbox-runtime');
         await expect(readdir(controlDirectory)).resolves.not.toEqual(
           expect.arrayContaining([expect.stringMatching(/^workspace-.*\.json$/)]),
@@ -4339,7 +4673,6 @@ describe('ASRT workspace shell adapter', () => {
       const sandbox = createAsrtShellSandbox({
         workspaceRoot: root,
         shouldSandbox: () => true,
-        failClosed: true,
       });
       const active = await sandbox.prepare({
         toolCallId: 'active-owner-during-setup',
@@ -4389,7 +4722,6 @@ describe('ASRT workspace shell adapter', () => {
       const sandbox = createAsrtShellSandbox({
         workspaceRoot: root,
         shouldSandbox: () => true,
-        failClosed: true,
       });
 
       await expect(sandbox.prepare({
@@ -4400,7 +4732,7 @@ describe('ASRT workspace shell adapter', () => {
         args: ['--version'],
         cwd: root,
         env: process.env,
-      })).rejects.toThrow('acl recover --force --json');
+      })).resolves.toBeUndefined();
       expect(capturedWorkspaceSessionConfigs).toHaveLength(0);
     },
   );
@@ -4420,7 +4752,6 @@ describe('ASRT workspace shell adapter', () => {
       const sandbox = createAsrtShellSandbox({
         workspaceRoot: root,
         shouldSandbox: () => true,
-        failClosed: true,
       });
 
       await expect(sandbox.prepare({
@@ -4431,7 +4762,7 @@ describe('ASRT workspace shell adapter', () => {
         args: ['--version'],
         cwd: root,
         env: process.env,
-      })).rejects.toThrow('acl recover --force --json');
+      })).resolves.toBeUndefined();
       expect(capturedWorkspaceSessionConfigs).toHaveLength(0);
     },
   );
@@ -5122,9 +5453,9 @@ describe('ASRT Skill-script adapter', () => {
     });
   });
 
-  it.each(['missing', 'spawn_error'] as const)(
-    'does not replay when target attestation ends with %s',
-    async (mode) => {
+  it(
+    'does not replay when a spawned wrapper exits without target attestation',
+    async () => {
       const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-attestation-fallback-'));
       tempRoots.push(root);
       const requestFile = path.join(root, 'request.json');
@@ -5145,7 +5476,7 @@ describe('ASRT Skill-script adapter', () => {
         fallbackToNormalExecution: true,
         observationFile,
       }), 'utf8');
-      sandboxWrapper.mode = mode;
+      sandboxWrapper.mode = 'missing';
 
       await expect(runAsrtBrokerProcess(requestFile)).resolves.toBe(1);
       expect(capturedSpawnArgv.filter(
@@ -5154,6 +5485,41 @@ describe('ASRT Skill-script adapter', () => {
       await expect(readFile(observationFile, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     },
   );
+
+  it('falls back once when the sandbox wrapper is proven not to have spawned', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-wrapper-spawn-fallback-'));
+    tempRoots.push(root);
+    const requestFile = path.join(root, 'request.json');
+    const observationFile = path.join(root, 'observation.json');
+    await writeFile(requestFile, JSON.stringify({
+      config: {
+        network: {
+          allowedDomains: [], deniedDomains: [], strictAllowlist: false,
+          allowUnixSockets: [], allowAllUnixSockets: false, allowLocalBinding: false,
+        },
+        filesystem: { denyRead: [], allowRead: [], allowWrite: [root], denyWrite: [] },
+      },
+      command: process.execPath,
+      args: ['--version'],
+      cwd: root,
+      env: {},
+      endpoints: [],
+      fallbackToNormalExecution: true,
+      observationFile,
+    }), 'utf8');
+    sandboxWrapper.mode = 'spawn_error';
+
+    await expect(runAsrtBrokerProcess(requestFile)).resolves.toBe(0);
+    expect(capturedSpawnArgv.filter(
+      (argv) => JSON.stringify(argv) === JSON.stringify([process.execPath, '--version']),
+    )).toHaveLength(1);
+    expect(JSON.parse(readFileSync(observationFile, 'utf8'))).toEqual({
+      version: 1,
+      state: 'fallback',
+      reason: 'backend_failed',
+      execution: 'normal_permission_policy',
+    });
+  });
 
   it('drains target attestation before deciding whether fallback is safe', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-attestation-race-'));

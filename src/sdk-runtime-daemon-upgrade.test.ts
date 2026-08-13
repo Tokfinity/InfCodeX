@@ -161,9 +161,9 @@ describe('Runtime daemon capability upgrade', () => {
     expect(newClose).toHaveBeenCalled();
   });
 
-  it.skipIf(process.platform !== 'win32')(
-    'replaces an idle 0.7.85 daemon before exposing the repaired sandbox execution chain',
-    async () => {
+  it.skipIf(process.platform !== 'win32').each([1, 2])(
+    'replaces an idle sandbox v%i daemon before exposing sandbox execution v3',
+    async (sandboxVersion) => {
       const calls: string[] = [];
       const oldTransport = createLegacyTransport({
         preflight: createPreflight(),
@@ -175,7 +175,7 @@ describe('Runtime daemon capability upgrade', () => {
           managedRunDurability: { version: 1 },
           runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
           runtimeEventCoalescing: { version: 1 },
-          sandboxRuntime: { version: 1, asrtVersion: '0.0.65' },
+          sandboxRuntime: { version: sandboxVersion, asrtVersion: '0.0.65' },
           sessionEventJournal: { version: 1 },
         },
         onRollback: () => upgradeMocks.readLockOwner.mockReturnValue(undefined),
@@ -219,9 +219,9 @@ describe('Runtime daemon capability upgrade', () => {
     },
   );
 
-  it.skipIf(process.platform !== 'win32')(
-    'keeps a busy 0.7.85 daemon fenced behind the sandbox v2 upgrade requirement',
-    async () => {
+  it.skipIf(process.platform !== 'win32').each([1, 2])(
+    'keeps a busy sandbox v%i daemon fenced behind the sandbox v3 upgrade requirement',
+    async (sandboxVersion) => {
       const calls: string[] = [];
       const oldTransport = createLegacyTransport({
         preflight: createPreflight({ blockers: ['active_runs'], canStop: false }),
@@ -233,7 +233,7 @@ describe('Runtime daemon capability upgrade', () => {
           managedRunDurability: { version: 1 },
           runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
           runtimeEventCoalescing: { version: 1 },
-          sandboxRuntime: { version: 1, asrtVersion: '0.0.65' },
+          sandboxRuntime: { version: sandboxVersion, asrtVersion: '0.0.65' },
           sessionEventJournal: { version: 1 },
         },
       });
@@ -461,7 +461,7 @@ describe('Runtime daemon capability upgrade', () => {
       daemonOrphanExit: 1,
       daemonShutdownVerification: 1,
       managedRunDurability: 1,
-      sandboxRuntime: 2,
+      sandboxRuntime: 3,
       runtimeEventCoalescing: 1,
       sessionEventJournal: 1,
     });
@@ -761,7 +761,7 @@ function createCurrentTransport(
       return initializeResult('runtime_current', {
         actorSettlementConvergence: { version: 1 },
         managedRunDurability: { version: 1 },
-        sandboxRuntime: { version: 2 },
+        sandboxRuntime: { version: 3 },
         sessionEventJournal: { version: 1 },
         runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
         runtimeEventCoalescing: { version: 1 },

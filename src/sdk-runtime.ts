@@ -713,7 +713,7 @@ export const KODAX_RUNTIME_SDK_CAPABILITIES = Object.freeze({
   daemonOrphanExit: 1,
   daemonShutdownVerification: 1,
   managedRunDurability: 1,
-  sandboxRuntime: 2,
+  sandboxRuntime: 3,
   sessionEventJournal: 1,
   runtimeEventCoalescing: 1,
 } as const);
@@ -771,8 +771,8 @@ export interface RuntimeCapabilityRequirements {
   /** Optional integration failures are isolated, observable, and hot-recoverable. */
   readonly integrationConfigResilience?: 1;
   readonly actorControlPlane?: 1;
-  /** Require the fail-closed Windows sandbox execution chain introduced after 0.7.85. */
-  readonly sandboxRuntime?: 1 | 2;
+  /** Require the sandbox-first execution chain and permission fallback revision. */
+  readonly sandboxRuntime?: 1 | 2 | 3;
   /** Runtime owns Auto LLM/rules classification before shared permission brokering. */
   readonly runtimeAutoModeGuardrail?: 1 | 2 | 3 | 4;
 }
@@ -3381,7 +3381,7 @@ export async function createKodaXRuntime(
             ...(process.platform === "win32"
               ? {
                   daemonShutdownVerification: 1 as const,
-                  sandboxRuntime: 2 as const,
+                  sandboxRuntime: 3 as const,
                 }
               : {}),
             runtimeAutoModeGuardrail: 4 as const,
@@ -4726,7 +4726,7 @@ async function connectKodaXRuntimeInternal(
             ...(process.platform === "win32"
               ? {
                   daemonShutdownVerification: 1 as const,
-                  sandboxRuntime: 2 as const,
+                  sandboxRuntime: 3 as const,
                 }
               : {}),
             runtimeAutoModeGuardrail: 4 as const,
@@ -9964,7 +9964,6 @@ function buildRunOptions(input: {
   const runtimeWorkspaceShellSandbox =
     createAsrtShellSandbox({
       workspaceRoot,
-      failClosed: true,
       shouldSandbox: async (call) => {
         const autoMode =
           replApi.normalizePermissionMode(record.permissionMode) === "auto";
@@ -9987,13 +9986,15 @@ function buildRunOptions(input: {
           agentHomeAccess: review === undefined
             ? undefined
             : runtimePermissionReviewAgentHomeAccess(review, executionCwd),
+          filesystemAccess: review === undefined
+            ? undefined
+            : runtimePermissionReviewFilesystemAccess(review, executionCwd),
         };
       },
     });
   const shellSandbox =
     runtimeWorkspaceShellSandbox !== undefined && callerShellSandbox !== undefined
       ? {
-          failClosed: true,
           // Opaque calls admitted by the Runtime-owned Auto guardrail consume
           // the Runtime sandbox token; non-Auto calls always select Runtime.
           // The optional caller adapter is only a compatibility fallback for
@@ -10010,16 +10011,6 @@ function buildRunOptions(input: {
               },
             });
             if (runtimeInvocation !== undefined) return runtimeInvocation;
-            if (
-              runtimeWorkspaceShellSandbox.failClosed === true
-              && runtimeObservation?.state !== "not_selected"
-            ) {
-              if (runtimeObservation !== undefined) {
-                request.reportObservation?.(runtimeObservation);
-              }
-              return undefined;
-            }
-
             let callerObservation:
               | Parameters<NonNullable<typeof request.reportObservation>>[0]
               | undefined;
@@ -19823,13 +19814,13 @@ function runtimeAutoModeDecisionKey(call: RunnerToolCall): string | undefined {
   }
 }
 
-function runtimePermissionAgentHomePath(
+function runtimePermissionPath(
   target: AutoModePermissionTarget,
   executionCwd: string,
-): string | undefined {
+): string {
   const home = os.homedir();
   const candidate = target.path;
-  const expanded = (candidate === "~"
+  const homeExpanded = (candidate === "~"
     ? home
     : /^~[\\/]/.test(candidate)
       ? path.join(home, candidate.slice(2))
@@ -19838,7 +19829,31 @@ function runtimePermissionAgentHomePath(
     /^(?:\$\{HOME\}|\$HOME|\$env:(?:home|userprofile)|%userprofile%)(?=$|[\\/])/i,
     home,
   );
-  const resolved = path.resolve(executionCwd, expanded);
+  const envExpanded = homeExpanded.replace(
+    /^(?:%([^%]+)%|\$env:([A-Za-z_][A-Za-z0-9_]*)|\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*))(?=$|[\\/])/i,
+    (
+      matched: string,
+      percent: string | undefined,
+      powershell: string | undefined,
+      braced: string | undefined,
+      bare: string | undefined,
+    ) => {
+      const name = [percent, powershell, braced, bare]
+        .find((value) => value !== undefined);
+      if (name === undefined) return matched;
+      return Object.entries(process.env).find(([candidateName, value]) => (
+        candidateName.toLowerCase() === name.toLowerCase() && value !== undefined
+      ))?.[1] ?? matched;
+    },
+  );
+  return path.resolve(executionCwd, envExpanded);
+}
+
+function runtimePermissionAgentHomePath(
+  target: AutoModePermissionTarget,
+  executionCwd: string,
+): string | undefined {
+  const resolved = runtimePermissionPath(target, executionCwd);
   const insideAgentHome = isPathInsideDirectory(
     resolved,
     path.resolve(getAgentConfigHome()),
@@ -19849,6 +19864,37 @@ function runtimePermissionAgentHomePath(
     || target.boundary === "protected"
     ? resolved
     : undefined;
+}
+
+function runtimePermissionReviewFilesystemAccess(
+  review: AutoModePermissionReview,
+  executionCwd: string,
+): { readonly read: readonly string[]; readonly write: readonly string[] } | undefined {
+  const read = new Set<string>();
+  const write = new Set<string>();
+  const add = (
+    target: AutoModePermissionTarget,
+    destination: Set<string>,
+  ): void => {
+    if (target.boundary !== "outside-workspace" && target.boundary !== "system-temp") return;
+    destination.add(runtimePermissionPath(target, executionCwd));
+  };
+  for (const operation of review.operations) {
+    if ("target" in operation) {
+      add(
+        operation.target,
+        operation.kind === "read" || operation.options?.whatIf === true ? read : write,
+      );
+      continue;
+    }
+    if ("source" in operation) {
+      add(operation.source, operation.kind === "copy" ? read : write);
+      add(operation.destination, write);
+    }
+  }
+  return read.size === 0 && write.size === 0
+    ? undefined
+    : { read: [...read], write: [...write] };
 }
 
 function runtimePermissionReviewAgentHomeAccess(
@@ -20204,7 +20250,6 @@ async function createRuntimeAutoModeGuardrail(input: {
     projectRoot,
     executionCwd,
     trustProcessEnvironmentPathExpansion,
-    requireWorkspaceShellSandbox: true,
     admitWorkspaceSandboxCall: (call, review) => {
       if (reviewTouchesProtectedWindowsSystemTemp(review)) return;
       const key = runtimeAutoModeDecisionKey(call);

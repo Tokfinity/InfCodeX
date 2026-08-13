@@ -21,16 +21,16 @@ All notable changes to this project will be documented in this file.
   traversal ancestors below their profile application root, so version managers,
   shims, virtual environments, and sibling runtime files work without naming
   individual tools or exposing broad Documents/AppData vendor trees. Windows
-  keeps one command scope active at a time and confirms the previous owner's ACL
-  reset before switching scopes. Standalone SDK calls, workspace sessions, and
-  duplicate SDK module copies also obey one machine-wide owner boundary across
-  Runtime profiles and KodaX homes, so their grants cannot combine through the
-  shared Windows sandbox identity. The
+  shares one effective policy scope across compatible commands and confirms ACL
+  reset before switching to an incompatible scope. Standalone SDK calls,
+  workspace sessions, and duplicate SDK module copies use the same machine-wide
+  policy-owner protocol across Runtime profiles and KodaX homes, so incompatible
+  grants cannot combine through the shared Windows sandbox identity. The
   target receives a case-normalized environment and preserves the Windows
   verbatim-argument contract, so
   profile-managed executables and quoted path arguments survive both broker layers.
-- Auto-started Runtime clients now require sandbox execution capability v2, so
-  an idle daemon from KodaX 0.7.85 is replaced only after its durable shutdown
+- Auto-started Runtime clients now require sandbox execution capability v3, so
+  an idle daemon from KodaX 0.7.85 or the earlier v2 execution policy is replaced only after its durable shutdown
   outcome and Windows Job supervisor prove the old process tree is empty. A
   daemon without that verification contract remains fail-closed and must be
   stopped explicitly before the repaired Shell chain is exposed.
@@ -42,15 +42,21 @@ All notable changes to this project will be documented in this file.
 - Clean Windows workspace-session shutdown now honors the sandbox runtime's full
   ACL reset budget before escalating to process-tree termination, while unclean
   or unverified exits remain durably fail-closed.
-- Windows Shell commands now close their command-scoped workspace session and
-  confirm ACL reset before releasing the filesystem-effect fence. A completed
-  command therefore cannot leave an idle Runtime holding the machine-wide
-  sandbox owner and blocking Shell calls from another KodaX or KodaX Space
-  process. Preparation failures follow the same rollback order, while an
-  unreadable live owner remains retryable contention instead of sticky poison.
-  A live background Shell deliberately retains its command scope and fence
-  until its process tree exits; concurrent Windows Shell effects are rejected
-  rather than combining scopes on the shared restricted-user identity.
+- Windows Shell sessions now share one ACL policy group when their normalized
+  workspace, Agent Home access, additional filesystem permissions, toolchain
+  scopes, and network policy are identical. Compatible commands can run in
+  parallel across independent KodaX processes; the last local member confirms
+  reset before releasing its owner. Different policies fall back immediately
+  to the already-authorized ordinary execution path instead of blocking on a
+  machine-wide sandbox fence. Preparation failures use the same fallback, while
+  a command that started or may have started is never replayed implicitly.
+- Runtime Shell containment is now sandbox-first rather than sandbox-required.
+  Auto[LLM] remains the single authorization decision, successful allow results
+  are cached only for the same Runtime-session intent revision, and unavailable
+  sandbox infrastructure uses normal permission enforcement without another
+  classifier call. Catastrophic root deletion, disk formatting/raw disk writes,
+  fork bombs, and Agent Home root/control-plane destruction remain deterministic
+  hard denials. The obsolete public `failClosed` switch has been removed.
 - The packaged Electron regression smoke now runs 20 Runtime Shell commands
   through a profile-added junction toolchain, resolves the packaged Node binary
   through its version-manager ancestry, exercises a quoted `cmd.exe` path, and

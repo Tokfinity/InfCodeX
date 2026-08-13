@@ -55,6 +55,9 @@ const fileMutationQueue = new Map<string, Promise<unknown>>();
 const FILE_SYSTEM_EFFECT_COORDINATOR_TIMEOUT_MS = 5_000;
 // A real cross-category conflict remains a short fail-closed admission error.
 const FILE_SYSTEM_EFFECT_CONFLICT_TIMEOUT_MS = 1_000;
+// Exact-policy ACL setup/reset is serialized, not rejected. Real Windows
+// account/ACL work can legitimately exceed the ordinary conflict budget.
+const FILE_SYSTEM_EFFECT_POLICY_TRANSITION_TIMEOUT_MS = 30_000;
 const FILE_SYSTEM_EFFECT_RELEASE_ATTEMPTS = 3;
 const EFFECT_STATE_FILE = 'model-filesystem-effects.json';
 const EFFECT_COORDINATOR_LOCK = 'model-filesystem-effects.lock';
@@ -69,6 +72,7 @@ interface EffectLeaseOwner {
   readonly effectProcessStartIdentity?: string;
   readonly pid: number;
   readonly processStartIdentity?: string;
+  readonly sandboxPolicyKey?: string;
   readonly posixProcessGroup?: boolean;
   readonly token: string;
   readonly windowsJobContained?: boolean;
@@ -103,7 +107,13 @@ function effectRuntimePath(agentHome: string, name: string): string {
 }
 
 function captureEffectLeaseStorage(): EffectLeaseStorage {
-  const agentHome = getAgentConfigHome();
+  const agentHome = process.platform === 'win32'
+    ? path.join(
+        path.resolve(process.env.PROGRAMDATA ?? 'C:\\ProgramData'),
+        'KodaX',
+        'sandbox-runtime',
+      )
+    : getAgentConfigHome();
   return {
     coordinatorPath: effectRuntimePath(agentHome, EFFECT_COORDINATOR_LOCK),
     statePath: effectRuntimePath(agentHome, EFFECT_STATE_FILE),
@@ -121,6 +131,7 @@ function isEffectLeaseOwner(value: unknown): value is EffectLeaseOwner {
     && (record.effectFinished === undefined || typeof record.effectFinished === 'boolean')
     && (record.processStartIdentity === undefined
       || typeof record.processStartIdentity === 'string')
+    && (record.sandboxPolicyKey === undefined || typeof record.sandboxPolicyKey === 'string')
     && (record.posixProcessGroup === undefined || typeof record.posixProcessGroup === 'boolean')
     && (record.windowsJobContained === undefined
       || typeof record.windowsJobContained === 'boolean');
@@ -272,7 +283,31 @@ async function withEffectLeaseCoordinator<T>(
   }
 }
 
-async function acquireEffectLease(mode: EffectLeaseMode): Promise<FileSystemMutationLeaseRelease> {
+function namespaceConflictsWithShell(
+  namespace: EffectLeaseOwner,
+  shellPolicyKey: string | undefined,
+): boolean {
+  if (namespace.sandboxPolicyKey === undefined) return true;
+  // Only an exact, verified sandbox policy may share the ACL transition.
+  // Ordinary permission execution still has to wait until path-based ACL
+  // grants/revokes finish so it cannot retarget a junction mid-transition.
+  if (shellPolicyKey === undefined) return true;
+  return namespace.sandboxPolicyKey !== shellPolicyKey;
+}
+
+function shellConflictsWithNamespace(
+  shell: EffectLeaseOwner,
+  namespacePolicyKey: string | undefined,
+): boolean {
+  if (namespacePolicyKey === undefined) return true;
+  if (shell.sandboxPolicyKey === undefined) return true;
+  return shell.sandboxPolicyKey !== namespacePolicyKey;
+}
+
+async function acquireEffectLease(
+  mode: EffectLeaseMode,
+  sandboxPolicyKey?: string,
+): Promise<FileSystemMutationLeaseRelease> {
   const storage = captureEffectLeaseStorage();
   const token = randomUUID();
   const owner: EffectLeaseOwner = {
@@ -281,8 +316,11 @@ async function acquireEffectLease(mode: EffectLeaseMode): Promise<FileSystemMuta
     ...(EFFECT_OWNER_START_IDENTITY === undefined
       ? {}
       : { processStartIdentity: EFFECT_OWNER_START_IDENTITY }),
+    ...(sandboxPolicyKey === undefined ? {} : { sandboxPolicyKey }),
   };
-  const deadline = Date.now() + FILE_SYSTEM_EFFECT_CONFLICT_TIMEOUT_MS;
+  const conflictDeadline = Date.now() + FILE_SYSTEM_EFFECT_CONFLICT_TIMEOUT_MS;
+  const policyTransitionDeadline = Date.now()
+    + FILE_SYSTEM_EFFECT_POLICY_TRANSITION_TIMEOUT_MS;
   const managedCleanupSkipped = await reconcileAbandonedManagedEffects(storage);
   while (true) {
     const acquired = await withEffectLeaseCoordinator(storage, async () => {
@@ -291,11 +329,54 @@ async function acquireEffectLease(mode: EffectLeaseMode): Promise<FileSystemMuta
         managedCleanupSkipped,
       );
       const conflicts = mode === 'shell'
-        ? state.direct.length > 0 || state.namespaces.length > 0
+        ? state.direct.length > 0
+          || state.namespaces.some((lease) => (
+            namespaceConflictsWithShell(lease, sandboxPolicyKey)
+          ))
         : mode === 'direct'
           ? state.shells.length > 0 || state.namespaces.length > 0
-          : state.direct.length > 0 || state.namespaces.length > 0 || state.shells.length > 0;
-      if (conflicts) return false;
+          : state.direct.length > 0
+            || state.namespaces.length > 0
+            || state.shells.some((lease) => (
+              shellConflictsWithNamespace(lease, sandboxPolicyKey)
+            ));
+      if (conflicts) {
+        const incompatibleSandboxPolicy = sandboxPolicyKey !== undefined && (
+          mode === 'namespace'
+            ? state.namespaces.some((lease) => (
+                lease.sandboxPolicyKey !== sandboxPolicyKey
+              ))
+              || state.shells.some((lease) => (
+                shellConflictsWithNamespace(lease, sandboxPolicyKey)
+              ))
+            : mode === 'shell'
+              && state.namespaces.some((lease) => (
+                lease.sandboxPolicyKey !== undefined
+                && lease.sandboxPolicyKey !== sandboxPolicyKey
+              ))
+        );
+        if (incompatibleSandboxPolicy) return 'sandbox-policy-conflict' as const;
+        const sandboxAclTransition = state.direct.length === 0 && (
+          mode === 'namespace'
+            ? sandboxPolicyKey !== undefined
+              && state.shells.every((lease) => (
+                !shellConflictsWithNamespace(lease, sandboxPolicyKey)
+              ))
+              && state.namespaces.length > 0
+              && state.namespaces.every((lease) => (
+                lease.sandboxPolicyKey === sandboxPolicyKey
+              ))
+            : mode === 'shell'
+              && sandboxPolicyKey === undefined
+              && state.namespaces.length > 0
+              && state.namespaces.every((lease) => (
+                lease.sandboxPolicyKey !== undefined
+              ))
+        );
+        return sandboxAclTransition
+          ? 'sandbox-acl-transition' as const
+          : false;
+      }
       await writeEffectLeaseState(storage, mode === 'shell'
         ? { direct: state.direct, namespaces: state.namespaces, shells: [...state.shells, owner] }
         : mode === 'direct'
@@ -303,7 +384,13 @@ async function acquireEffectLease(mode: EffectLeaseMode): Promise<FileSystemMuta
           : { direct: state.direct, namespaces: [...state.namespaces, owner], shells: state.shells });
       return true;
     });
-    if (acquired) break;
+    if (acquired === true) break;
+    if (acquired === 'sandbox-policy-conflict') {
+      throw new Error('A different sandbox policy is already active.');
+    }
+    const deadline = acquired === 'sandbox-acl-transition'
+      ? policyTransitionDeadline
+      : conflictDeadline;
     if (Date.now() >= deadline) {
       throw new Error('A model filesystem effect is already active; retry after it finishes.');
     }
@@ -497,13 +584,17 @@ async function acquireEffectLease(mode: EffectLeaseMode): Promise<FileSystemMuta
  * This closes the symlink/junction retarget window between canonical policy
  * checks and the actual filesystem operation.
  */
-export function acquireFileSystemMutationLease(): Promise<FileSystemMutationLeaseRelease> {
-  return acquireEffectLease('shell');
+export function acquireFileSystemMutationLease(
+  sandboxPolicyKey?: string,
+): Promise<FileSystemMutationLeaseRelease> {
+  return acquireEffectLease('shell', sandboxPolicyKey);
 }
 
 /** Excludes every model-started shell while a temporary host namespace is visible. */
-export function acquireExclusiveFileSystemEffectLease(): Promise<FileSystemMutationLeaseRelease> {
-  return acquireEffectLease('namespace');
+export function acquireExclusiveFileSystemEffectLease(
+  sandboxPolicyKey?: string,
+): Promise<FileSystemMutationLeaseRelease> {
+  return acquireEffectLease('namespace', sandboxPolicyKey);
 }
 
 function acquireDirectFileMutationLease(): Promise<FileSystemMutationLeaseRelease> {
@@ -655,4 +746,12 @@ export function _peekFileMutationQueueSizeForTests(): number {
  */
 export function _resetFileMutationQueueForTests(): void {
   fileMutationQueue.clear();
+}
+
+export async function _resetFileSystemEffectLeasesForTests(): Promise<void> {
+  if (process.env.VITEST_WORKER_ID === undefined) {
+    throw new Error('Filesystem-effect lease reset is only available under Vitest.');
+  }
+  const storage = captureEffectLeaseStorage();
+  await rm(storage.statePath, { force: true });
 }
