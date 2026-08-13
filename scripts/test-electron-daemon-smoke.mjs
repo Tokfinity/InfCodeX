@@ -332,7 +332,6 @@ wait();
   const workerEnvironment = {
     ...baseEnvironment,
     APPDATA: path.join(isolatedAppData, 'Roaming'),
-    LOCALAPPDATA: path.join(isolatedAppData, 'Local'),
     ProgramData: programDataDir,
     KODAX_HOME: path.join(crossProcessHome, '.kodax'),
     KODAX_CROSS_PROCESS_WORKSPACE: workspace,
