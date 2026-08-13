@@ -2299,6 +2299,7 @@ describe('ASRT workspace shell adapter', () => {
       )) as { readonly policyKey?: string };
       expect(localOwner.policyKey).toMatch(/^[a-f0-9]{64}$/);
       await first.cleanup();
+      await resetAsrtWorkspaceSessionsForTest({ preserveAclPoison: true });
 
       const holder = actualChildProcess.spawn(process.execPath, [
         '-e',
@@ -2328,10 +2329,17 @@ describe('ASRT workspace shell adapter', () => {
         await expect(prepare('bash-unverified-foreign-policy')).resolves.toBeUndefined();
         processIdentityMock.unreadablePids.delete(holder.pid);
 
+        const recoveriesBeforeCompatible = capturedSyncSpawns.filter((spawn) => (
+          spawn.args.includes('acl') && spawn.args.includes('recover')
+        )).length;
         const compatible = await prepare('bash-compatible-foreign-policy');
         if (!compatible) throw new Error('expected compatible cross-process policy admission');
         expect(compatible.fileSystemEffectPolicyKey).toBe(localOwner.policyKey);
         await compatible.cleanup();
+        expect(capturedSyncSpawns.filter((spawn) => (
+          spawn.args.includes('acl') && spawn.args.includes('recover')
+        ))).toHaveLength(recoveriesBeforeCompatible);
+        expect(statSync(foreignMarker).isFile()).toBe(true);
 
         const observation = vi.fn();
         const incompatible = await sandbox.prepare({

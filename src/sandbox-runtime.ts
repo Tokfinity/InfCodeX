@@ -1602,7 +1602,8 @@ function withWindowsSandboxAclSetupBlock(
 
 function ensureWindowsSandboxAclRecoveryWithLock(policyKey?: string): void {
   assertWindowsSandboxAclProcessSafe();
-  const poisoned = readWindowsSandboxAclPoisonOwners().filter(
+  const owners = readWindowsSandboxAclPoisonOwners();
+  const poisoned = owners.filter(
     ({ file, owner }) => !isCompatibleWindowsSandboxAclOwner(file, owner, policyKey),
   );
   if (windowsSandboxAclStartupRecovered) {
@@ -1621,6 +1622,10 @@ function ensureWindowsSandboxAclRecoveryWithLock(policyKey?: string): void {
     if (!allFromEarlierBoot) {
       throw windowsSandboxAclPoisonSnapshotError(poisoned, currentBootIdentity);
     }
+  }
+  if (owners.length > 0) {
+    windowsSandboxAclStartupRecovered = true;
+    return;
   }
   recoverWindowsSandboxAcls();
   for (const marker of poisoned) rmSync(marker.file, { force: true });
@@ -1685,6 +1690,21 @@ async function confirmWindowsSandboxAclRecovery(
       await withKodaXFileLock(
         windowsSandboxAclRecoveryLockFile(),
         async () => {
+          const legacy = legacyWindowsSandboxAclOwnerMarkers.get(marker);
+          const ownedFiles = new Set([marker, legacy].filter((file) => file !== undefined));
+          const remaining = readWindowsSandboxAclPoisonOwners().filter(
+            ({ file }) => !ownedFiles.has(file),
+          );
+          const incompatible = remaining.filter(
+            ({ file, owner }) => !isCompatibleWindowsSandboxAclOwner(file, owner, policyKey),
+          );
+          if (incompatible.length > 0) {
+            throw windowsSandboxAclPoisonSnapshotError(incompatible);
+          }
+          if (remaining.length > 0) {
+            confirmWindowsSandboxAclOwnerStopped(marker);
+            return;
+          }
           recoverWindowsSandboxAcls();
           confirmWindowsSandboxAclOwnerStopped(marker);
         },
