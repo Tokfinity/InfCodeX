@@ -112,7 +112,10 @@ includes all commits after `v0.7.85`, including:
   retain the one-second fail-closed admission boundary;
 - POSIX workspace-session safety latching, so an unconfirmed process-tree or
   cleanup failure blocks replacement sandbox sessions instead of allowing a
-  stale owner to race a new one;
+  stale owner to race a new one. Fresh `KODAX_HOME` policy roots are initialized
+  before policy identity capture, concrete admission waits only for its
+  workspace-local warm-up within the Shell abort/deadline, and failed lease
+  cleanup retires the invalid cached session;
 - explicit aggregation of spawn, lease-release, and sandbox-cleanup failures,
   with lifecycle safety diagnostics and retained recovery evidence;
 - packaged Electron sandbox probes and regression coverage for all of the above.

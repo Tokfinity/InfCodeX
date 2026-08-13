@@ -1,6 +1,6 @@
 # KodaX Architecture Decision Records
 
-> Last updated: 2026-08-12
+> Last updated: 2026-08-14
 >
 > **v0.7.86 release addendum:** Runtime owner recovery is atomic and
 > fail-closed: only a provably abandoned inline owner fence may be removed,
@@ -9,6 +9,10 @@
 > termination proof before ACL recovery, serialize durable owner markers across
 > Runtime profiles, and fence later filesystem effects when attestation is
 > missing. Lifecycle failures remain observable and are never replayed.
+> POSIX workspace admission initializes fresh Runtime-owned policy roots before
+> identity capture, settles only workspace-local warm-up within the Shell
+> abort/deadline, and retires invalid cached sessions after lease-cleanup failure
+> before allowing replacement.
 > Issue 256 remains open; the Worker owner-lease portion is scheduled for
 > v0.7.87.
 >

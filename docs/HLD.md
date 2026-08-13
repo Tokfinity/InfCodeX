@@ -1,6 +1,6 @@
 # KodaX High-Level Design
 
-> Last updated: 2026-08-12
+> Last updated: 2026-08-14
 >
 > Current published baseline: `v0.7.86`
 > (`@kodax-ai/kodax@0.7.86`; npm publication remains manual)
@@ -101,7 +101,10 @@ cannot preserve stale ownership. Windows sandbox effects now require a
 termination proof before ACL recovery; durable owner markers and a shared
 recovery lock serialize one active sandbox owner per KodaX home across Runtime
 profiles. Missing termination proof fences later filesystem effects and never
-replays a possibly side-effecting command.
+replays a possibly side-effecting command. POSIX workspace admission initializes
+fresh `KODAX_HOME` policy roots before identity capture, waits only for its
+workspace-local warm-up within the Shell abort/deadline, and retires a cached
+session when lease cleanup fails.
 
 ## 2. Layering
 

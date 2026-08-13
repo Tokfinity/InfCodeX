@@ -2739,7 +2739,10 @@ combined in the lifecycle diagnostic for operator recovery.
 
 POSIX workspace sessions use the same replacement fence: an unconfirmed
 process-tree or cleanup failure latches the sandbox safety state and prevents a
-new workspace session from racing the retained one.
+new workspace session from racing the retained one. A fresh `KODAX_HOME` has
+its Runtime-owned policy roots initialized before identity capture, concrete
+admission waits only for workspace-local warm-up within the Shell abort/deadline,
+and lease-cleanup failure retires the invalid cached session before replacement.
 
 Windows workspace Shell execution also preserves case-insensitive `PATH`/`Path`
 and `PATHEXT` values through both Runtime broker layers. Read grants are derived

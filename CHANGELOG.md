@@ -8,7 +8,7 @@ All notable changes to this project will be documented in this file.
 
 ---
 
-## [0.7.86] - 2026-08-13
+## [0.7.86] - 2026-08-14
 
 > Git tag and GitHub Release are created by the release workflow. npm
 > publication remains a separate manual operator step.
@@ -94,7 +94,11 @@ All notable changes to this project will be documented in this file.
   whose effect process was not proven drained.
 - POSIX sandbox workspace sessions now latch an unconfirmed process-tree or
   cleanup failure and reject replacement sessions until the safety state is
-  reset, matching the fail-closed lifecycle contract across platforms.
+  reset, matching the fail-closed lifecycle contract across platforms. Fresh
+  `KODAX_HOME` policy roots are initialized before policy identity is captured,
+  concrete admissions wait only for their workspace-local warm-up within the
+  existing Shell abort/deadline, and a failed lease cleanup retires the invalid
+  cached session before replacement.
 
 ---
 

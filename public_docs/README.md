@@ -5,8 +5,10 @@ Public documentation for KodaX users and SDK integrators.
 The current release is `v0.7.86`. Its SDK guidance covers atomic Runtime owner
 recovery, process-start identity locks, Windows sandbox termination attestation,
 durable ACL owner markers, and Windows workspace Shell PATH/executable scoping
-with quoted `cmd.exe` argument preservation. POSIX workspace sessions also fail closed when
-process-tree cleanup is unconfirmed, in addition to the v0.7.85 Session-scoped
+with quoted `cmd.exe` argument preservation. POSIX workspace sessions initialize
+fresh-home policy roots, settle workspace-local warm-up within the Shell
+abort/deadline, retire invalid sessions after lease-cleanup failure, and fail closed when process-tree cleanup is unconfirmed,
+in addition to the v0.7.85 Session-scoped
 Runtime Event Journals, the `sessionEventJournal:1` daemon contract,
 conversation-first Memory management, the additive experimental Memory
 management facade, and the startup/Worker lifecycle boundaries. Issue 256's

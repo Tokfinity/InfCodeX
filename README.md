@@ -662,8 +662,10 @@ learning locks, and Windows sandbox lifecycle attestation. Sandbox ACL owner
 markers are durable and serialized across Runtime profiles; stop waits for
 termination proof before ACL recovery, preserves combined cleanup failures, and
 fences later filesystem effects instead of replaying a command whose process
-tree was not proven drained. POSIX workspace sessions apply the same
-fail-closed replacement rule when process-tree cleanup is unconfirmed. Windows
+tree was not proven drained. POSIX workspace sessions initialize fresh
+`KODAX_HOME` policy roots before admission, settle workspace-local warm-up
+within the Shell abort/deadline, and retire invalid sessions after lease-cleanup failure while
+applying the same fail-closed replacement rule. Windows
 workspace Shell calls also preserve the case-insensitive `PATH`/`Path` contract,
 derive bounded PATH/executable read grants, and carry quoted `cmd.exe` arguments
 through the broker without re-parsing. Commands with the same canonical

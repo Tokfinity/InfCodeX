@@ -1,6 +1,6 @@
 # KodaX Product Requirements
 
-> Last updated: 2026-08-12
+> Last updated: 2026-08-14
 >
 > Current implementation baseline: `v0.7.86` release
 > (`@kodax-ai/kodax@0.7.86` workspace package; npm publication remains manual)
@@ -49,6 +49,9 @@ The v0.7.86 hardening baseline adds atomic abandoned-inline-owner recovery,
 process-start identity checks for ownership locks, Windows sandbox termination
 attestation, durable ACL owner markers, cross-profile recovery serialization,
 and fail-closed no-replay behavior when Shell effects are not proven drained.
+POSIX workspace admission initializes fresh `KODAX_HOME` policy roots before
+identity capture, keeps warm-up waits within the Shell abort/deadline, and
+retires an invalid cached session after lease-cleanup failure before replacement.
 
 ## 2. Target Users
 

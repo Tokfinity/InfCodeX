@@ -550,7 +550,10 @@ adds atomic abandoned-inline-owner recovery, process-start identity records for
 Runtime and learning locks, durable Windows ACL owner markers, cross-profile
 recovery serialization, termination-proof-before-ACL-recovery, combined
 lifecycle diagnostics, and fail-closed no-replay behavior when Shell effects
-are not proven drained. Issue 291 is resolved by the inline-owner recovery
+are not proven drained. POSIX workspace admission also stabilizes fresh
+`KODAX_HOME` policy roots, waits only for workspace-local warm-up within the
+Shell abort/deadline, and retires invalid cached sessions after lease-cleanup
+failure. Issue 291 is resolved by the inline-owner recovery
 slice. Issue 256 remains Open: its Worker owner-lease portion is not included
 and is scheduled for `v0.7.87`.
 

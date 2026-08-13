@@ -1,6 +1,6 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-08-12
+> Last updated: 2026-08-14
 >
 > Current published baseline: `v0.7.86`
 > (`@kodax-ai/kodax@0.7.86`; npm publication remains manual)
@@ -51,6 +51,10 @@ serialize recovery across Runtime profiles, wait for process-tree termination
 proof before ACL recovery, and fence later filesystem effects when attestation
 is missing. Spawn, lease-release, and cleanup failures are preserved together
 as lifecycle safety errors instead of being collapsed or triggering a replay.
+POSIX workspace admission initializes Runtime-owned `KODAX_HOME` policy roots
+before hashing the policy, waits only for workspace-local warm-up within the
+Shell abort/deadline, and asynchronously retires a cached session after lease-cleanup failure; later
+admission waits for that reset and remains fail-closed if reset is unconfirmed.
 
 The same release implements Session-scoped event journals and cursor-bound
 replay, the F289/F290 Memory review and lesson pipelines, and F292's
