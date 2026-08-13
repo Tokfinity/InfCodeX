@@ -322,6 +322,8 @@ wait();
     ProgramData: _ignoredProgramData,
     PROGRAMDATA: _ignoredUpperProgramData,
     VITEST: _ignoredVitest,
+    PATH: _ignoredPath,
+    Path: _ignoredPathAlias,
     ...baseEnvironment
   } = process.env;
   const workerEnvironment = {
