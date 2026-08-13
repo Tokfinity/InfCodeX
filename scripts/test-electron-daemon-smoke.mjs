@@ -333,8 +333,6 @@ wait();
     ...baseEnvironment,
     APPDATA: path.join(isolatedAppData, 'Roaming'),
     LOCALAPPDATA: path.join(isolatedAppData, 'Local'),
-    HOME: crossProcessHome,
-    USERPROFILE: crossProcessHome,
     ProgramData: programDataDir,
     KODAX_HOME: path.join(crossProcessHome, '.kodax'),
     KODAX_CROSS_PROCESS_WORKSPACE: workspace,
