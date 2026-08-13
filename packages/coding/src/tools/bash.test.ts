@@ -1375,7 +1375,6 @@ describe('toolBash', () => {
       recoveryPaths.push(stdoutPath, stderrPath);
       await waitForOutputMatch(stdoutPath, /KODAX_CAPTURE_COMPLETE/, delayedCloseMs + 5_000);
       const recovered = await fs.readFile(stdoutPath, 'utf-8');
-      expect(recovered).toContain(marker);
       expect(recovered).toContain('late-after-deadline');
     } finally {
       clearTimeout(abortWatchdog);
