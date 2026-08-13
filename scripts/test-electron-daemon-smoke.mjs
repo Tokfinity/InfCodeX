@@ -282,6 +282,7 @@ async function preparePackagedApplication(electronVersion) {
 async function verifyIndependentWindowsSandboxPolicySharing() {
   const crossProcessHome = path.join(temporaryRoot, 'cross-process-home');
   const workspace = path.join(crossProcessHome, 'workspace');
+  const isolatedAppData = path.join(crossProcessHome, 'AppData');
   const crossProcessNode = path.join(
     workspace,
     process.platform === 'win32' ? 'node.exe' : 'node',
@@ -290,6 +291,8 @@ async function verifyIndependentWindowsSandboxPolicySharing() {
   const worker = path.join(repoRoot, 'tests', 'fixtures', 'windows-sandbox-policy-worker.mts');
   const tsxCli = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
   await mkdir(workspace, { recursive: true });
+  await mkdir(path.join(isolatedAppData, 'Roaming'), { recursive: true });
+  await mkdir(path.join(isolatedAppData, 'Local'), { recursive: true });
   // The hosted Windows Node installation may live below AppData, whose parent
   // is intentionally not exposed to the restricted shell. Keep the command
   // fixture inside the admitted workspace instead of broadening production
@@ -328,6 +331,10 @@ wait();
   } = process.env;
   const workerEnvironment = {
     ...baseEnvironment,
+    APPDATA: path.join(isolatedAppData, 'Roaming'),
+    LOCALAPPDATA: path.join(isolatedAppData, 'Local'),
+    HOME: crossProcessHome,
+    USERPROFILE: crossProcessHome,
     ProgramData: programDataDir,
     KODAX_HOME: path.join(crossProcessHome, '.kodax'),
     KODAX_CROSS_PROCESS_WORKSPACE: workspace,
