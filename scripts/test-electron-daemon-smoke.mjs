@@ -282,10 +282,19 @@ async function preparePackagedApplication(electronVersion) {
 async function verifyIndependentWindowsSandboxPolicySharing() {
   const crossProcessHome = path.join(temporaryRoot, 'cross-process-home');
   const workspace = path.join(crossProcessHome, 'workspace');
+  const crossProcessNode = path.join(
+    workspace,
+    process.platform === 'win32' ? 'node.exe' : 'node',
+  );
   const barrierScript = path.join(workspace, 'policy-barrier.cjs');
   const worker = path.join(repoRoot, 'tests', 'fixtures', 'windows-sandbox-policy-worker.mts');
   const tsxCli = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
   await mkdir(workspace, { recursive: true });
+  // The hosted Windows Node installation may live below AppData, whose parent
+  // is intentionally not exposed to the restricted shell. Keep the command
+  // fixture inside the admitted workspace instead of broadening production
+  // runtime read grants for the runner installation.
+  await cp(process.execPath, crossProcessNode);
   await writeFile(barrierScript, String.raw`
 const fs = require('node:fs');
 const path = require('node:path');
@@ -321,10 +330,7 @@ wait();
     KODAX_HOME: path.join(crossProcessHome, '.kodax'),
     KODAX_CROSS_PROCESS_WORKSPACE: workspace,
     KODAX_CROSS_PROCESS_BARRIER: barrierScript,
-    PATH: [
-      path.dirname(process.execPath),
-      process.env.PATH ?? process.env.Path ?? '',
-    ].filter(Boolean).join(path.delimiter),
+    PATH: workspace,
   };
   const runWorker = async (participant, expected, barrierName, preflightDirectory) => {
     const barrierDirectory = path.join(workspace, '.policy-barriers', barrierName);
