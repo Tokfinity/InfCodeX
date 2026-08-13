@@ -49,10 +49,11 @@ import {
 } from '../../permissions/agent-home-policy.js';
 
 const fileMutationQueue = new Map<string, Promise<unknown>>();
-// This lock protects only the small state-file transaction. A one-second
-// budget is too tight under a parallel Vitest/daemon workload, where several
-// same-category shell admissions can legitimately serialize here.
-const FILE_SYSTEM_EFFECT_COORDINATOR_TIMEOUT_MS = 5_000;
+// This lock protects only the small state-file transaction. Its wait budget
+// must cover the lock implementation's 30-second stale-owner safety window so
+// a rapid process handoff can recover instead of failing before recovery is
+// permitted.
+const FILE_SYSTEM_EFFECT_COORDINATOR_TIMEOUT_MS = 30_000;
 // A real cross-category conflict remains a short fail-closed admission error.
 const FILE_SYSTEM_EFFECT_CONFLICT_TIMEOUT_MS = 1_000;
 // Exact-policy ACL setup/reset is serialized, not rejected. Real Windows

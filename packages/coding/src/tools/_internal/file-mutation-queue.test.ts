@@ -292,6 +292,24 @@ describe('cross-process filesystem effect lease', () => {
     await releaseFirst();
   });
 
+  it('waits through a coordinator handoff longer than five seconds', async () => {
+    const coordinatorPath = path.join(
+      effectRuntimeDirectory(),
+      'model-filesystem-effects.lock',
+    );
+    const releaseCoordinator = await acquireKodaXFileLock(coordinatorPath, 1_000);
+    const releaseTimer = setTimeout(() => {
+      void releaseCoordinator();
+    }, 5_500);
+    try {
+      const releaseEffect = await acquireFileSystemMutationLease();
+      await releaseEffect();
+    } finally {
+      clearTimeout(releaseTimer);
+      await releaseCoordinator();
+    }
+  });
+
   it('lets sandbox ACL coordination overlap only with its exact policy', async () => {
     const releaseSamePolicy = await acquireFileSystemMutationLease('policy-a');
     const releaseCoordination = await acquireExclusiveFileSystemEffectLease('policy-a');
