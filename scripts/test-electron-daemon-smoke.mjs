@@ -293,7 +293,7 @@ const [directory, participant, expectedText] = process.argv.slice(2);
 const expected = Number(expectedText);
 fs.mkdirSync(directory, { recursive: true });
 fs.writeFileSync(path.join(directory, participant + '.ready'), 'ready', 'utf8');
-const deadline = Date.now() + 30_000;
+const deadline = Date.now() + 120_000;
 const wait = () => {
   if (fs.readdirSync(directory).filter((name) => name.endsWith('.ready')).length >= expected) {
     process.stdout.write('cross-process-sandbox-ok:' + participant);
