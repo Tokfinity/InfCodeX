@@ -280,24 +280,12 @@ async function preparePackagedApplication(electronVersion) {
 }
 
 async function verifyIndependentWindowsSandboxPolicySharing() {
-  const crossProcessHome = path.join(temporaryRoot, 'cross-process-home');
+  const crossProcessHome = path.join(homeDir, 'cross-process-home');
   const workspace = path.join(crossProcessHome, 'workspace');
-  const isolatedAppData = path.join(crossProcessHome, 'AppData');
-  const crossProcessNode = path.join(
-    workspace,
-    process.platform === 'win32' ? 'node.exe' : 'node',
-  );
   const barrierScript = path.join(workspace, 'policy-barrier.cjs');
   const worker = path.join(repoRoot, 'tests', 'fixtures', 'windows-sandbox-policy-worker.mts');
   const tsxCli = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
   await mkdir(workspace, { recursive: true });
-  await mkdir(path.join(isolatedAppData, 'Roaming'), { recursive: true });
-  await mkdir(path.join(isolatedAppData, 'Local'), { recursive: true });
-  // The hosted Windows Node installation may live below AppData, whose parent
-  // is intentionally not exposed to the restricted shell. Keep the command
-  // fixture inside the admitted workspace instead of broadening production
-  // runtime read grants for the runner installation.
-  await cp(process.execPath, crossProcessNode);
   await writeFile(barrierScript, String.raw`
 const fs = require('node:fs');
 const path = require('node:path');
@@ -325,19 +313,18 @@ wait();
     ProgramData: _ignoredProgramData,
     PROGRAMDATA: _ignoredUpperProgramData,
     VITEST: _ignoredVitest,
-    PATH: _ignoredPath,
-    Path: _ignoredPathAlias,
     ...baseEnvironment
   } = process.env;
   const workerEnvironment = {
     ...baseEnvironment,
-    APPDATA: path.join(isolatedAppData, 'Roaming'),
-    KODAX_A2A_NODE: crossProcessNode,
     ProgramData: programDataDir,
     KODAX_HOME: path.join(crossProcessHome, '.kodax'),
     KODAX_CROSS_PROCESS_WORKSPACE: workspace,
     KODAX_CROSS_PROCESS_BARRIER: barrierScript,
-    PATH: workspace,
+    PATH: [
+      path.dirname(process.execPath),
+      process.env.PATH ?? process.env.Path ?? '',
+    ].filter(Boolean).join(path.delimiter),
   };
   const runWorker = async (participant, expected, barrierName, preflightDirectory) => {
     const barrierDirectory = path.join(workspace, '.policy-barriers', barrierName);
@@ -345,7 +332,7 @@ wait();
     await mkdir(barrierDirectory, { recursive: true });
     let launchError;
     try {
-      await run(crossProcessNode, [tsxCli, worker], repoRoot, 120_000, {
+      await run(process.execPath, [tsxCli, worker], repoRoot, 120_000, {
         ...workerEnvironment,
         KODAX_CROSS_PROCESS_PARTICIPANT: participant,
         KODAX_CROSS_PROCESS_EXPECTED: String(expected),
@@ -443,7 +430,7 @@ function startElectron(executable, files) {
       KODAX_CONSOLE_PROBE_QUERY: files.consoleProbe.queryFile,
       KODAX_CONSOLE_PROBE_EXECUTABLE: files.consoleProbe.executable,
       KODAX_SMOKE_NODE_EXECUTABLE: process.execPath,
-      KODAX_SMOKE_PROFILE_TOOLCHAIN: path.join(temporaryRoot, 'profile-toolchain'),
+      KODAX_SMOKE_PROFILE_TOOLCHAIN: path.join(homeDir, 'profile-toolchain'),
       KODAX_TRACING: '0',
       PATH: [
         files.consoleProbe.binaryDir,
