@@ -203,6 +203,14 @@ vi.mock('node:child_process', async (importOriginal) => {
         cwd: options?.cwd,
         input: options?.input,
       });
+      if (command === process.execPath && args.length === 1 && args[0] === '--version') {
+        return {
+          status: 0,
+          signal: null,
+          stdout: `${process.version}\n`,
+          stderr: '',
+        };
+      }
       const encodedIndex = args.indexOf('-EncodedCommand');
       if (encodedIndex >= 0) {
         const script = Buffer.from(args[encodedIndex + 1] ?? '', 'base64').toString('utf16le');
@@ -333,11 +341,9 @@ vi.mock('node:child_process', async (importOriginal) => {
       });
       const requestFile = Array.isArray(argsOrOptions) ? argsOrOptions.at(-1) : undefined;
       const workspaceSession = Array.isArray(argsOrOptions)
-        && argsOrOptions.some((arg) => {
-          const basename = path.basename(arg);
-          return arg === '__asrt-workspace-session'
-            || /^sandbox-workspace-session(?:-entry)?\.(?:js|ts)$/.test(basename);
-        });
+        && typeof requestFile === 'string'
+        && path.basename(requestFile).startsWith('workspace-')
+        && requestFile.endsWith('.json');
       if (workspaceSession) {
         if (typeof requestFile === 'string') {
           const init = JSON.parse(readFileSync(requestFile, 'utf8')) as {
