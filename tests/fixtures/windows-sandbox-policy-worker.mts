@@ -22,6 +22,10 @@ const barrierDirectory = path.resolve(requiredEnvironment('KODAX_CROSS_PROCESS_B
 const participant = requiredEnvironment('KODAX_CROSS_PROCESS_PARTICIPANT');
 const expectedParticipants = Number(requiredEnvironment('KODAX_CROSS_PROCESS_EXPECTED'));
 const resultFile = path.resolve(requiredEnvironment('KODAX_CROSS_PROCESS_RESULT'));
+const nodeExecutable = path.join(
+  workspace,
+  process.platform === 'win32' ? 'node.exe' : 'node',
+);
 
 const observations: unknown[] = [];
 const diagnostics: unknown[] = [];
@@ -66,7 +70,7 @@ try {
     shouldSandbox: () => true,
   });
   const command = [
-    'node',
+    JSON.stringify(nodeExecutable),
     JSON.stringify(barrierScript),
     JSON.stringify(barrierDirectory),
     JSON.stringify(participant),
