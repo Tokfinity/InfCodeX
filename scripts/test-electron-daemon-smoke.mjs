@@ -270,7 +270,7 @@ async function preparePackagedApplication(electronVersion) {
   await runNpm([
     'install', '--save-exact', '--ignore-scripts', '--omit=dev', '--no-audit', '--no-fund',
     path.join(temporaryRoot, filename),
-  ], appDir, 300_000);
+  ], appDir, 600_000);
   await writeFile(
     path.join(appDir, 'electron-builder.json'),
     JSON.stringify(createBuilderConfig(electronVersion), null, 2),
@@ -629,7 +629,9 @@ function run(command, args, cwd, timeoutMs = 120_000, env = process.env) {
       if (settled) return;
       settled = true;
       child.kill();
-      reject(new Error(`${command} timed out after ${timeoutMs}ms.`));
+      reject(new Error(
+        `${JSON.stringify({ command, args })} timed out after ${timeoutMs}ms.`,
+      ));
     }, timeoutMs);
     child.once('error', (error) => {
       if (settled) return;
