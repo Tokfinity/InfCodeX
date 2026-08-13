@@ -2161,6 +2161,7 @@ function networkEndpoints(network: CreateSkillScriptRunnerInput['network']): San
 function sanitizedEnvironment(): NodeJS.ProcessEnv {
   const names = [
     'PATH',
+    'Path',
     'PATHEXT',
     'SystemRoot',
     'COMSPEC',
