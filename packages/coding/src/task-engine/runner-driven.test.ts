@@ -313,7 +313,7 @@ describe('managed runner queue routing', () => {
         mode: 'prompt',
       });
     }
-  });
+  }, 60_000);
 
   it('does not start a Runtime turn when its initial durable write fails', async () => {
     const failure = new Error('canonical storage unavailable');

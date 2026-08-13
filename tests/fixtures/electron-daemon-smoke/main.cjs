@@ -44,6 +44,7 @@ async function run() {
   fs.mkdirSync(quotedCommandDirectory, { recursive: true });
   fs.writeFileSync(path.join(quotedCommandDirectory, 'quoted-command-ok.txt'), 'ok', 'utf8');
   fs.copyFileSync(consoleProbeExecutable, path.join(profileToolchainVersion, 'profile-tool.exe'));
+  fs.copyFileSync(consoleProbeExecutable, path.join(profileToolchainVersion, 'git.exe'));
   fs.copyFileSync(nodeExecutable, path.join(profileToolchainVersion, 'node.exe'));
   if (!fs.existsSync(profileToolchainActive)) {
     fs.symlinkSync(profileToolchainVersion, profileToolchainActive, 'junction');
