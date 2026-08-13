@@ -340,7 +340,7 @@ wait();
     await mkdir(barrierDirectory, { recursive: true });
     let launchError;
     try {
-      await run(process.execPath, [tsxCli, worker], repoRoot, 120_000, {
+      await run(crossProcessNode, [tsxCli, worker], repoRoot, 120_000, {
         ...workerEnvironment,
         KODAX_CROSS_PROCESS_PARTICIPANT: participant,
         KODAX_CROSS_PROCESS_EXPECTED: String(expected),
