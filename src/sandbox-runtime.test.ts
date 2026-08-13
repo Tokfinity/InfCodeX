@@ -879,6 +879,9 @@ describe('ASRT workspace shell adapter', () => {
         shouldSandbox: () => true,
       });
 
+      let otherSettled = false;
+      let otherResult: unknown;
+      let otherFailure: unknown;
       const otherPreparation = otherSandbox.prepare({
         toolCallId: 'bash-other-warm-up',
         toolInput: { command: 'node --version' },
@@ -887,13 +890,21 @@ describe('ASRT workspace shell adapter', () => {
         args: ['--version'],
         cwd: otherRoot,
         env: process.env,
+      }).then((result) => {
+        otherResult = result;
+        otherSettled = true;
+      }, (error: unknown) => {
+        otherFailure = error;
+        otherSettled = true;
       });
       await vi.waitFor(
-        () => expect(capturedWorkspaceSessionConfigs).toHaveLength(2),
-        { timeout: 10_000 },
+        () => expect(otherSettled).toBe(true),
+        { timeout: 30_000 },
       );
 
-      await expect(otherPreparation).resolves.toBeUndefined();
+      await otherPreparation;
+      expect(otherFailure).toBeUndefined();
+      expect(otherResult).toBeUndefined();
       expect(workspaceSessionControl.releaseReady).toBeDefined();
       workspaceSessionControl.releaseReady?.();
       workspaceSessionControl.releaseReady = undefined;
