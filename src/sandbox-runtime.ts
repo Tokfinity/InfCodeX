@@ -1355,6 +1355,28 @@ function isVerifiedActiveWindowsSandboxAclOwner(
   return activeWindowsSandboxAclOwnerMarkers.has(file);
 }
 
+type WindowsSandboxAclOwnerLiveness = 'live' | 'stale' | 'unknown';
+
+function windowsSandboxAclOwnerLiveness(
+  owner: WindowsSandboxAclPoisonOwner,
+): WindowsSandboxAclOwnerLiveness {
+  if (
+    owner.state !== 'active'
+    || owner.holderPid === undefined
+    || owner.holderProcessStartIdentity === undefined
+  ) return 'stale';
+  const identity = readProcessStartIdentity(owner.holderPid);
+  if (identity !== undefined) {
+    return identity === owner.holderProcessStartIdentity ? 'live' : 'stale';
+  }
+  try {
+    process.kill(owner.holderPid, 0);
+    return 'unknown';
+  } catch (error: unknown) {
+    return isFileSystemError(error, 'ESRCH') ? 'stale' : 'unknown';
+  }
+}
+
 function assertNoPersistentWindowsSandboxAclPoison(): void {
   const poisoned = readWindowsSandboxAclPoisonOwners().filter(
     ({ file, owner }) => !isVerifiedActiveWindowsSandboxAclOwner(file, owner),
@@ -1476,9 +1498,7 @@ function windowsSandboxAclPoisonSnapshotError(
     currentBootIdentity,
   );
   const foreignActiveContention = poisoned.every(({ file, owner }) => (
-    owner.state === 'active'
-    && owner.holderPid !== undefined
-    && owner.holderProcessStartIdentity !== undefined
+    windowsSandboxAclOwnerLiveness(owner) !== 'stale'
     && !activeWindowsSandboxAclOwnerMarkers.has(file)
   ));
   return foreignActiveContention
@@ -1501,7 +1521,7 @@ function windowsSandboxAclSetupBlockWithLock(): Error | undefined {
     assertNoPersistentWindowsSandboxAclPoison();
     return undefined;
   }
-  if (owners.some(({ owner }) => owner.state === 'active')) {
+  if (owners.every(({ owner }) => windowsSandboxAclOwnerLiveness(owner) !== 'stale')) {
     return new WindowsSandboxAclAdmissionError(
       'Windows sandbox setup cannot run while a sandbox owner is active for the shared Windows sandbox account; '
       + 'wait for sandboxed commands to finish and stop other KodaX or KodaX Space processes, then retry.',
@@ -4029,10 +4049,13 @@ async function startWorkspaceSessionClientWithFence(
         if (activeLeases > 0) {
           await new Promise<void>((resolve) => { resolveDrained = resolve; });
         }
-        await withExclusiveFileSystemEffectFence(closeAclFenceHeld, async () => {
+        await withExclusiveFileSystemEffectFence(
+          commandFenceHeld || closeAclFenceHeld,
+          async () => {
           await terminate();
           await confirmCleanReset();
-        });
+          },
+        );
       })().catch(async (error: unknown) => {
         await retainWindowsSandboxAclOwnerPoison(windowsAclOwnerMarker, error);
         throw error;
@@ -4306,13 +4329,13 @@ export function createAsrtShellSandbox(
       let exclusiveEffectLease:
         | Awaited<ReturnType<typeof acquireExclusiveFileSystemEffectLease>>
         | undefined;
-      let exclusiveReleaseReady = !ephemeralSession;
+      let exclusiveReleaseReady = process.platform !== 'win32';
       let exclusiveReleased = false;
       let exclusiveRelease: Promise<void> | undefined;
       const releaseExclusiveAfterReset = async (): Promise<void> => {
         if (!exclusiveEffectLease) return;
         if (!exclusiveReleaseReady) {
-          throw new Error('Review-only Agent Home ACL reset is not confirmed.');
+          throw new Error('Windows workspace ACL reset is not confirmed.');
         }
         exclusiveRelease ??= exclusiveEffectLease();
         await exclusiveRelease;
@@ -4329,8 +4352,8 @@ export function createAsrtShellSandbox(
               release: releaseExclusiveAfterReset,
             }
       );
-      const closeReviewSession = async (): Promise<void> => {
-        if (!ephemeralSession || !workspaceSession) return;
+      const closeWindowsCommandSession = async (): Promise<void> => {
+        if (process.platform !== 'win32' || !workspaceSession) return;
         await workspaceSession.close(true);
         exclusiveReleaseReady = true;
         await releaseExclusiveAfterReset();
@@ -4359,17 +4382,57 @@ export function createAsrtShellSandbox(
             throw error;
           }
         }
-        const session = await waitForWorkspacePreparation(
-          getWorkspaceSession(
-            workspaceRoot,
-            agentHomeAccess,
-            runtimeReadScopes,
-            baselineReadScopes,
-            exclusiveEffectLease !== undefined,
-          ),
-          shellInput.signal,
-          shellInput.deadlineAt,
+        const pendingSession = getWorkspaceSession(
+          workspaceRoot,
+          agentHomeAccess,
+          runtimeReadScopes,
+          baselineReadScopes,
+          exclusiveEffectLease !== undefined,
         );
+        let session: WorkspaceSessionClient | undefined;
+        try {
+          session = await waitForWorkspacePreparation(
+            pendingSession,
+            shellInput.signal,
+            shellInput.deadlineAt,
+          );
+        } catch (error: unknown) {
+          if (
+            process.platform === 'win32'
+            && (
+              shellInput.signal?.aborted
+              || (
+                shellInput.deadlineAt !== undefined
+                && Date.now() >= shellInput.deadlineAt
+              )
+            )
+          ) {
+            const lateRollback = pendingSession.then(
+              async (lateSession) => {
+                if (lateSession) await lateSession.close(true);
+                exclusiveReleaseReady = true;
+                await releaseExclusiveAfterReset();
+              },
+              async (sessionError: unknown) => {
+                if (!(sessionError instanceof ForeignWindowsSandboxAclOwnerContentionError)) {
+                  assertWindowsSandboxAclSafe();
+                }
+                exclusiveReleaseReady = true;
+                await releaseExclusiveAfterReset();
+              },
+            );
+            trackWorkspaceSessionReset(lateRollback);
+            void lateRollback.catch((closeError: unknown) => {
+              emitKodaXDiagnostic({
+                source: 'sandbox:workspace-session',
+                level: 'warn',
+                message: 'Late cancelled workspace session rollback failed.',
+                detail: closeError,
+              });
+            });
+          }
+          throw error;
+        }
         if (!session) {
           if (exclusiveEffectLease) {
             exclusiveReleaseReady = true;
@@ -4506,9 +4569,9 @@ export function createAsrtShellSandbox(
             } catch (error: unknown) {
               cleanupFailures.push(error);
             }
-            if (ephemeralSession) {
+            if (process.platform === 'win32') {
               try {
-                await closeReviewSession();
+                await closeWindowsCommandSession();
               } catch (error: unknown) {
                 cleanupFailures.push(error);
               }
@@ -4551,13 +4614,16 @@ export function createAsrtShellSandbox(
         };
       } catch (error: unknown) {
         const failures: unknown[] = [error];
-        let leaseReleaseFailed = false;
         let aclResetConfirmed = true;
+        const preparationStopped = shellInput.signal?.aborted
+          || (
+            shellInput.deadlineAt !== undefined
+            && Date.now() >= shellInput.deadlineAt
+          );
         if (lease) {
           try {
             await lease.release();
           } catch (releaseError: unknown) {
-            leaseReleaseFailed = true;
             failures.push(releaseError);
             emitKodaXDiagnostic({
               source: 'sandbox:workspace-session',
@@ -4567,11 +4633,25 @@ export function createAsrtShellSandbox(
             });
           }
         }
-        if (leaseReleaseFailed && !ephemeralSession && workspaceSession) {
+        if (
+          preparationStopped
+          && process.platform === 'win32'
+          && workspaceSession
+          && lease === undefined
+        ) {
+          void closeWindowsCommandSession().catch((closeError: unknown) => {
+            emitKodaXDiagnostic({
+              source: 'sandbox:workspace-session',
+              level: 'warn',
+              message: 'Cancelled workspace preparation cleanup could not retire its session.',
+              detail: closeError,
+            });
+          });
+          throw error;
+        }
+        if (process.platform === 'win32' && workspaceSession) {
           try {
-            await workspaceSession.close(
-              process.platform === 'win32' && !exclusiveReleased,
-            );
+            await closeWindowsCommandSession();
           } catch (closeError: unknown) {
             aclResetConfirmed = false;
             failures.push(closeError);
@@ -4583,19 +4663,12 @@ export function createAsrtShellSandbox(
             });
           }
         }
-        if (ephemeralSession && workspaceSession) {
-          try {
-            await closeReviewSession();
-          } catch (closeError: unknown) {
-            failures.push(closeError);
-            emitKodaXDiagnostic({
-              source: 'sandbox:workspace-session',
-              level: 'warn',
-              message: 'Review-only Agent Home sandbox rollback failed.',
-              detail: closeError,
-            });
-          }
-        } else if (exclusiveEffectLease && aclResetConfirmed) {
+        if (
+          exclusiveEffectLease
+          && workspaceSession === undefined
+          && aclResetConfirmed
+          && !(preparationStopped && process.platform === 'win32')
+        ) {
           exclusiveReleaseReady = true;
           try {
             await releaseExclusiveAfterReset();
@@ -4617,15 +4690,7 @@ export function createAsrtShellSandbox(
               .join(' | ')}`,
           );
         }
-        if (
-          shellInput.signal?.aborted
-          || (
-            shellInput.deadlineAt !== undefined
-            && Date.now() >= shellInput.deadlineAt
-          )
-        ) {
-          throw error;
-        }
+        if (preparationStopped) throw error;
         if (input.failClosed === true) throw error;
         emitKodaXDiagnostic({
           source: 'sandbox:workspace-session',

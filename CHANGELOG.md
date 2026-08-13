@@ -42,6 +42,15 @@ All notable changes to this project will be documented in this file.
 - Clean Windows workspace-session shutdown now honors the sandbox runtime's full
   ACL reset budget before escalating to process-tree termination, while unclean
   or unverified exits remain durably fail-closed.
+- Windows Shell commands now close their command-scoped workspace session and
+  confirm ACL reset before releasing the filesystem-effect fence. A completed
+  command therefore cannot leave an idle Runtime holding the machine-wide
+  sandbox owner and blocking Shell calls from another KodaX or KodaX Space
+  process. Preparation failures follow the same rollback order, while an
+  unreadable live owner remains retryable contention instead of sticky poison.
+  A live background Shell deliberately retains its command scope and fence
+  until its process tree exits; concurrent Windows Shell effects are rejected
+  rather than combining scopes on the shared restricted-user identity.
 - The packaged Electron regression smoke now runs 20 Runtime Shell commands
   through a profile-added junction toolchain, resolves the packaged Node binary
   through its version-manager ancestry, exercises a quoted `cmd.exe` path, and

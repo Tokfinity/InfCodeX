@@ -88,6 +88,9 @@ try {
   assert.match(directPowerShellProbe?.stdout ?? '', /direct-powershell-ok/);
   assert.equal(directPowerShellProbe?.stderr, '');
   await verifyConsoleProbe(consoleProbe);
+  await assertNoAclPoisonMarkers(
+    'Completed Shell commands must release every ACL owner while the packaged daemon remains active.',
+  );
   const sdk = await importInstalledRuntimeSdk();
   await verifyAttachDetachAndOwnerFence(
     sdk,
@@ -344,7 +347,7 @@ async function verifyAttachDetachAndOwnerFence(
   await management.close();
   await waitForUnowned(sdk);
   await assertNoAclPoisonMarkers('A clean packaged-daemon stop must remove every ACL owner marker.');
-  assert.equal(sdk.enableKodaXDaemonOwner({ homeDir, profile }).mode, 'daemon');
+  assert.equal((await enableDaemonOwnerWhenReady(sdk)).mode, 'daemon');
 
   const restartResultFile = path.join(temporaryRoot, 'restart-result.json');
   const restartDetachFile = path.join(temporaryRoot, 'restart-detach');
@@ -386,7 +389,7 @@ async function verifyAttachDetachAndOwnerFence(
   await restartManagement.close();
   await waitForUnowned(sdk);
   await assertNoAclPoisonMarkers('The restarted daemon must also confirm clean ACL teardown.');
-  assert.equal(sdk.enableKodaXDaemonOwner({ homeDir, profile }).mode, 'daemon');
+  assert.equal((await enableDaemonOwnerWhenReady(sdk)).mode, 'daemon');
 }
 
 async function assertNoAclPoisonMarkers(message) {
@@ -419,6 +422,20 @@ async function waitForUnowned(sdk) {
     300_000,
     'an unowned Runtime fence',
   );
+}
+
+async function enableDaemonOwnerWhenReady(sdk) {
+  let ownerPolicy;
+  await waitUntil(() => {
+    try {
+      ownerPolicy = sdk.enableKodaXDaemonOwner({ homeDir, profile });
+      return true;
+    } catch (error) {
+      if (!String(error).includes('owner transition is already in progress')) throw error;
+      return false;
+    }
+  }, 10_000, 'the Runtime owner transition fence to drain');
+  return ownerPolicy;
 }
 
 async function waitForJson(file, timeoutMs) {
