@@ -107,6 +107,9 @@ includes all commits after `v0.7.85`, including:
   already-authorized normal permission path, while started/unknown commands
   are never replayed. Runtime sandbox capability v3 fences older daemon policy
   revisions;
+- filesystem-effect coordinator handoff waits through the lock protocol's
+  30-second stale-owner proof window, while incompatible effect categories
+  retain the one-second fail-closed admission boundary;
 - POSIX workspace-session safety latching, so an unconfirmed process-tree or
   cleanup failure blocks replacement sandbox sessions instead of allowing a
   stale owner to race a new one;

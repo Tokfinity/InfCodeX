@@ -668,7 +668,10 @@ workspace Shell calls also preserve the case-insensitive `PATH`/`Path` contract,
 derive bounded PATH/executable read grants, and carry quoted `cmd.exe` arguments
 through the broker without re-parsing. Commands with the same canonical
 workspace, Agent Home, filesystem, toolchain, and network policy can share one
-Windows sandbox policy group across KodaX processes. An incompatible policy or
+Windows sandbox policy group across KodaX processes. The filesystem-effect
+coordinator now waits through its 30-second stale-owner proof window during a
+legitimate process handoff, without extending the one-second fail-closed
+boundary for conflicting effect categories. An incompatible policy or
 pre-start sandbox infrastructure failure returns the already-authorized command
 to normal permission execution; a command that started or may have started is
 never replayed. Runtime sandbox capability v3 fences upgrades from older daemon

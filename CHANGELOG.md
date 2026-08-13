@@ -57,6 +57,10 @@ All notable changes to this project will be documented in this file.
   to the already-authorized ordinary execution path instead of blocking on a
   machine-wide sandbox fence. Preparation failures use the same fallback, while
   a command that started or may have started is never replayed implicitly.
+- Filesystem-effect coordinator handoff now waits through the lock protocol's
+  30-second stale-owner safety window. Slow or rapid cross-process handoffs no
+  longer fail at five seconds, while real cross-category effect conflicts keep
+  their existing one-second fail-closed admission boundary.
 - Runtime Shell containment is now sandbox-first rather than sandbox-required.
   Auto[LLM] remains the single authorization decision, successful allow results
   are cached only for the same Runtime-session intent revision, and unavailable
