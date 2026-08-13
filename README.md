@@ -663,7 +663,10 @@ markers are durable and serialized across Runtime profiles; stop waits for
 termination proof before ACL recovery, preserves combined cleanup failures, and
 fences later filesystem effects instead of replaying a command whose process
 tree was not proven drained. POSIX workspace sessions apply the same
-fail-closed replacement rule when process-tree cleanup is unconfirmed. Issue
+fail-closed replacement rule when process-tree cleanup is unconfirmed. Windows
+workspace Shell calls also preserve the case-insensitive `PATH`/`Path` contract,
+derive bounded PATH/executable read grants, and carry quoted `cmd.exe` arguments
+through the broker without re-parsing. Issue
 256's remaining Worker owner-lease boundary
 stays open and is scheduled for v0.7.87. See the
 [v0.7.86 release checklist](docs/release.md#v0786-release-preparation).

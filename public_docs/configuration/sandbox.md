@@ -52,6 +52,20 @@ is exact (case-insensitive on Windows), and execution-control variables such as
 Restart KodaX after changing the host variables or this setting; stop/restart a
 persistent KodaX daemon so it receives the new environment and configuration.
 
+## Windows workspace Shell behavior (v0.7.86)
+
+Windows workspace Shell calls preserve the case-insensitive `PATH`/`Path` and
+`PATHEXT` environment contract across the Runtime and sandbox brokers. KodaX
+derives read grants from the final resolved PATH and shell executable, including
+the bounded traversal needed by profile-manager junctions, rather than granting
+the whole user application tree. `cmd.exe` command arguments retain their
+verbatim-argument contract, so quoted paths and profile-managed executables are
+not re-parsed by an intermediate broker.
+
+The packaged Electron and Runtime smoke paths exercise this behavior. A missing
+or unprovable sandbox lifecycle attestation remains fail-closed; KodaX does not
+retry a command that may already have started.
+
 ## SDK sandbox
 
 SDK callers pass the same shape per Run as `KodaXOptions.sandbox`, so concurrent

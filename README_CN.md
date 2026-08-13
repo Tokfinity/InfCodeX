@@ -247,6 +247,10 @@ v0.7.93。详见 [v0.7.83 发布清单](docs/release.md#v0783-release-preparatio
 
 **v0.7.86 加固发布**：本补丁版本加入 abandoned inline Runtime owner 的原子恢复、Runtime 与 learning lock 的 OS process-start identity 校验，以及 Windows sandbox 生命周期 attestation。Sandbox ACL owner marker 持久化并在不同 Runtime profile 间串行恢复；停止流程在 ACL 恢复前等待 process-tree termination proof，保留组合清理错误；如果 Shell effect 未证明已 drain，则继续 fence 后续文件系统 effect，绝不重放可能已经产生副作用的命令。POSIX workspace session 在进程树或清理结果无法确认时同样保持 fail-closed，不允许旧 session 与替换 session 竞态。Issue 256 剩余的 Worker owner lease 边界仍未关闭，改期到 v0.7.87。详见 [v0.7.86 发布清单](docs/release.md#v0786-release-preparation)。
 
+Windows workspace Shell 还会保留大小写不敏感的 `PATH`/`Path` 与 `PATHEXT` 约定，
+按最终 PATH 和 shell executable 生成有界读取授权，并在 broker 层之间保留 `cmd.exe`
+的 verbatim-argument 约定，确保 profile 管理的可执行文件和带引号路径不会被重复解析。
+
 v0.7.77 还增加了由宿主显式配置的 Shell Execution Contract。Runtime Session
 设置或单次 Run 可以选择 `pwsh`、Windows PowerShell、`cmd`、`bash`、`zsh`
 或 Git Bash 的绝对路径；KodaX 会在实际项目 cwd 中解析 shell 环境，再通过同一

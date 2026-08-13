@@ -4,7 +4,8 @@ Public documentation for KodaX users and SDK integrators.
 
 The current release is `v0.7.86`. Its SDK guidance covers atomic Runtime owner
 recovery, process-start identity locks, Windows sandbox termination attestation,
-and durable ACL owner markers. POSIX workspace sessions also fail closed when
+durable ACL owner markers, and Windows workspace Shell PATH/executable scoping
+with quoted `cmd.exe` argument preservation. POSIX workspace sessions also fail closed when
 process-tree cleanup is unconfirmed, in addition to the v0.7.85 Session-scoped
 Runtime Event Journals, the `sessionEventJournal:1` daemon contract,
 conversation-first Memory management, the additive experimental Memory

@@ -2741,6 +2741,13 @@ POSIX workspace sessions use the same replacement fence: an unconfirmed
 process-tree or cleanup failure latches the sandbox safety state and prevents a
 new workspace session from racing the retained one.
 
+Windows workspace Shell execution also preserves case-insensitive `PATH`/`Path`
+and `PATHEXT` values through both Runtime broker layers. Read grants are derived
+from the final shell PATH and executable, including only bounded junction
+ancestors for profile-managed toolchains. The `cmd.exe` verbatim-argument
+contract is retained for quoted paths and executable lookup; a missing lifecycle
+attestation remains fail-closed and is never repaired by replaying the command.
+
 `homeDir` and `KODAX_HOME` deliberately name different levels. Runtime SDK and
 CLI daemon `--home` accept the **base directory that contains `.kodax`**;
 lower-level `KODAX_HOME` points at the **data directory itself** and need not be
@@ -5748,19 +5755,16 @@ unsandboxed script. Embedded and daemon Runtime capability metadata expose
 `sandboxRuntime` with the platform backend, ASRT version, supported control
 dimensions, elevation behavior, and fallback semantics.
 
-Local workspace commands reuse one long-lived ASRT session per canonical
-workspace. Session-level ACL/WFP initialization is warmed once; the owner
-coordinates short wrap/cleanup RPCs without locking across the target process
-lifetime, so concurrent and background targets do not block later preparation.
-Per-command target attestation and fallback remain independent. Session reset
-happens only after an idle drain or host-process shutdown, never on the
-interactive command critical path. A cold first command may still wait for
-platform initialization, but later commands must not repeatedly pay that
-setup/reset cost. Abort signals and the command deadline cover that prepare
-wait; a cancelled/timed-out prepare never starts the target or changes to the
-ordinary fallback path. Explicit
-Windows system-temp operations that ASRT cannot safely ACL-manage are not
-selected for containment and keep the already-approved normal execution path.
+Local workspace commands reuse prepared ASRT state per canonical workspace, but
+Windows still serializes one command scope at a time and confirms the previous
+owner's ACL reset before switching PATH grants. Per-command target attestation
+and fallback remain independent. A cold first command may still wait for
+platform initialization, while later commands reuse the prepared state. Abort
+signals and the command deadline cover that prepare wait; a cancelled/timed-out
+prepare never starts the target or changes to the ordinary fallback path.
+Explicit Windows system-temp operations that ASRT cannot safely ACL-manage are
+not selected for containment and keep the already-approved normal execution
+path.
 
 An unhealthy session fails the current prepare immediately so the host can use
 its normal permission fallback. Cleanup continues out of band. On Windows the

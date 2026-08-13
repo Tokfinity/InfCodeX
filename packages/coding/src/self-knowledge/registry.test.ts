@@ -109,6 +109,9 @@ describe('FEATURE_218 manual registry', () => {
     expect(sandbox).toContain('default');
     expect(sandbox).toContain('KodaXOptions.sandbox');
     expect(sandbox).toContain('Run-scoped');
+    expect(sandbox).toContain('case-insensitive PATH/Path');
+    expect(sandbox).toContain('verbatim-argument contract');
+    expect(sandbox).toContain('capability metadata is version 2');
   });
 
   it('documents the v0.7.77 adaptive AMA and governed memory intervention contracts', () => {

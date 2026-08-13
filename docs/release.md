@@ -96,6 +96,10 @@ includes all commits after `v0.7.85`, including:
 - Windows sandbox lifecycle attestation, termination-proof-before-recovery,
   durable ACL owner markers, cross-profile recovery locking, and no-replay
   behavior when a Shell effect is not proven drained;
+- Windows workspace Shell execution now preserves the case-insensitive
+  `PATH`/`Path` environment contract, derives bounded read grants from the
+  final shell PATH and executable, and carries quoted `cmd.exe` arguments
+  through both broker layers without re-parsing them;
 - POSIX workspace-session safety latching, so an unconfirmed process-tree or
   cleanup failure blocks replacement sandbox sessions instead of allowing a
   stale owner to race a new one;
