@@ -799,7 +799,7 @@ async function markSandboxRuntimeUnavailable(): Promise<void> {
 }
 
 describe('ASRT workspace shell adapter', () => {
-  it('avoids an eager Windows ACL owner and keeps POSIX workspace warm-up', async () => {
+  it('avoids an eager Windows ACL owner and starts POSIX warm-up with a fresh KODAX_HOME', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-shell-warm-'));
     tempRoots.push(root);
 
@@ -825,6 +825,80 @@ describe('ASRT workspace shell adapter', () => {
       }
     }, { timeout: 5_000 });
   });
+
+  it.skipIf(process.platform === 'win32').each(['abort', 'timeout'] as const)(
+    'honors a Shell %s while waiting for POSIX workspace warm-up',
+    async (stopKind) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), `kodax-asrt-warm-${stopKind}-`));
+      tempRoots.push(root);
+      workspaceSessionControl.delayReady = true;
+      const sandbox = createAsrtShellSandbox({
+        workspaceRoot: root,
+        shouldSandbox: () => true,
+      });
+      await vi.waitFor(() => expect(workspaceSessionControl.releaseReady).toBeDefined());
+      const controller = new AbortController();
+      const preparing = sandbox.prepare({
+        toolCallId: `bash-warm-${stopKind}`,
+        toolInput: { command: 'node --version' },
+        command: 'node --version',
+        executable: process.execPath,
+        args: ['--version'],
+        cwd: root,
+        env: process.env,
+        signal: controller.signal,
+        ...(stopKind === 'timeout' ? { deadlineAt: Date.now() + 25 } : {}),
+      });
+      if (stopKind === 'abort') controller.abort();
+
+      await expect(preparing).rejects.toMatchObject({
+        name: stopKind === 'abort' ? 'AbortError' : 'TimeoutError',
+      });
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(1);
+      workspaceSessionControl.delayReady = false;
+      workspaceSessionControl.releaseReady?.();
+      workspaceSessionControl.releaseReady = undefined;
+    },
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    "does not wait for another workspace's POSIX warm-up",
+    async () => {
+      const slowRoot = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-warm-slow-'));
+      const otherRoot = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-warm-other-'));
+      tempRoots.push(slowRoot, otherRoot);
+      workspaceSessionControl.delayReady = true;
+      createAsrtShellSandbox({
+        workspaceRoot: slowRoot,
+        shouldSandbox: () => true,
+      });
+      await vi.waitFor(() => expect(workspaceSessionControl.releaseReady).toBeDefined());
+      workspaceSessionControl.delayReady = false;
+      const otherSandbox = createAsrtShellSandbox({
+        workspaceRoot: otherRoot,
+        shouldSandbox: () => true,
+      });
+
+      const otherPreparation = otherSandbox.prepare({
+        toolCallId: 'bash-other-warm-up',
+        toolInput: { command: 'node --version' },
+        command: 'node --version',
+        executable: process.execPath,
+        args: ['--version'],
+        cwd: otherRoot,
+        env: process.env,
+      });
+      await vi.waitFor(
+        () => expect(capturedWorkspaceSessionConfigs).toHaveLength(2),
+        { timeout: 10_000 },
+      );
+
+      await expect(otherPreparation).resolves.toBeUndefined();
+      expect(workspaceSessionControl.releaseReady).toBeDefined();
+      workspaceSessionControl.releaseReady?.();
+      workspaceSessionControl.releaseReady = undefined;
+    },
+  );
 
   it('falls back without initializing ACLs while an ordinary filesystem effect is active', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-acl-fence-'));
@@ -2515,7 +2589,17 @@ describe('ASRT workspace shell adapter', () => {
     workspaceSessionControl.closeExitCode = 1;
     const cleanup = unattested.cleanup({ execution: 'started_or_unknown' }).then(
       () => undefined,
-      (error: unknown) => error,
+      async (cleanupError: unknown) => {
+        try {
+          await unattested.retire?.();
+          return cleanupError;
+        } catch (retirementError: unknown) {
+          return new AggregateError(
+            [cleanupError, retirementError],
+            'Sandbox cleanup and workspace-session retirement both failed.',
+          );
+        }
+      },
     );
     await vi.waitFor(() => expect(workspaceSessionControl.releaseClose).toBeDefined());
     const replacementPending = prepare('bash-retire-after-unclean');
@@ -2524,12 +2608,15 @@ describe('ASRT workspace shell adapter', () => {
 
     const cleanupFailure = await cleanup;
     expect(cleanupFailure).toBeInstanceOf(AggregateError);
-    expect((cleanupFailure as AggregateError).errors.map(String)).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining('could not be attested'),
+    const cleanupMessages = (cleanupFailure as AggregateError).errors.map(String);
+    expect(cleanupMessages).toEqual(expect.arrayContaining([
+      expect.stringContaining('could not be attested'),
+    ]));
+    if (process.platform === 'win32') {
+      expect(cleanupMessages).toEqual(expect.arrayContaining([
         expect.stringContaining('ASRT workspace session ACL reset was not confirmed'),
-      ]),
-    );
+      ]));
+    }
     await expect(replacementPending).resolves.toBeUndefined();
     expect(capturedWorkspaceSessionConfigs).toHaveLength(1);
   });
@@ -2680,7 +2767,9 @@ describe('ASRT workspace shell adapter', () => {
     const replacement = await prepare('bash-after-request-write-failure');
     if (!replacement) throw new Error('expected replacement after request write failure');
     await replacement.cleanup();
-    expect(capturedWorkspaceSessionConfigs).toHaveLength(3);
+    expect(capturedWorkspaceSessionConfigs).toHaveLength(
+      process.platform === 'win32' ? 3 : 2,
+    );
   });
 
   it.runIf(process.platform === 'win32')(
@@ -3499,7 +3588,7 @@ describe('ASRT workspace shell adapter', () => {
     expect(capturedSpawnArgv.filter((argv) => argv.some((arg) => (
       arg.includes('sandbox-workspace-session')
       || arg === '__asrt-workspace-session'
-    )))).toHaveLength(2);
+    )))).toHaveLength(process.platform === 'win32' ? 2 : 3);
   });
 
   it('uses the compiled KodaX internal session entry in bundled builds', async () => {

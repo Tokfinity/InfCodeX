@@ -344,6 +344,11 @@ const WORKSPACE_SHELL_SENSITIVE_AGENT_HOME_PATHS = [
   'credentials.json',
   'application_default_credentials.json',
 ] as const;
+const WORKSPACE_SHELL_INTERNAL_AGENT_HOME_DIRECTORIES = [
+  'runtime',
+  'processes',
+  'learned',
+] as const;
 const WINDOWS_ACL_GUARD_SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
 $payload = [Console]::In.ReadToEnd() | ConvertFrom-Json
@@ -2993,7 +2998,9 @@ function windowsAgentHomeAccessRoot(
         if (topLevel === 'sandbox-runtime') return undefined;
         if (
           write
-          && ['runtime', 'processes', 'learned'].includes(topLevel ?? '')
+          && WORKSPACE_SHELL_INTERNAL_AGENT_HOME_DIRECTORIES.some(
+            (directory) => directory === topLevel,
+          )
         ) return undefined;
         return canonicalCandidate;
       } catch (error: unknown) {
@@ -3228,9 +3235,9 @@ function workspaceShellSandboxConfig(
       allowWrite: writeRoots,
       denyWrite: [
         controlDirectory,
-        path.join(agentHome, 'runtime'),
-        path.join(agentHome, 'processes'),
-        path.join(agentHome, 'learned'),
+        ...WORKSPACE_SHELL_INTERNAL_AGENT_HOME_DIRECTORIES.map(
+          (directory) => path.join(agentHome, directory),
+        ),
         ...existingWorkspaceDenyWrites(workspaceRoot),
       ],
     },
@@ -4357,13 +4364,30 @@ async function getWorkspaceSession(
   baselineReadScopes: readonly string[] = runtimeReadScopes,
   aclFenceHeld = false,
 ): Promise<WorkspaceSessionClient | undefined> {
-  if (
-    pendingWorkspaceSessionResets.size > 0
-    || pendingWindowsSandboxAclTransitions.size > 0
-  ) return undefined;
+  if (process.platform === 'win32') {
+    if (
+      pendingWorkspaceSessionResets.size > 0
+      || pendingWindowsSandboxAclTransitions.size > 0
+    ) return undefined;
+  } else {
+    await waitForWorkspaceSessionResets();
+  }
   assertWindowsSandboxAclProcessSafe();
   const doctor = await doctorSandboxRuntime();
   if (!doctor.ready && !doctorHasWindowsSandboxAclCleanupBlock(doctor)) return undefined;
+  if (process.platform !== 'win32') {
+    // The sandbox and filesystem-effect coordinator create internal state under
+    // KODAX_HOME. Make that expected initialization visible before capturing the
+    // fail-closed policy identity so a fresh POSIX home is not mistaken for path
+    // retargeting while the coordinator fence is acquired.
+    const agentHome = getAgentConfigHome();
+    await Promise.all([
+      sandboxControlDirectory(),
+      ...WORKSPACE_SHELL_INTERNAL_AGENT_HOME_DIRECTORIES.map((directory) => (
+        mkdir(path.join(agentHome, directory), { recursive: true, mode: 0o700 })
+      )),
+    ]);
+  }
   const policyKey = workspaceShellPolicyKey(
     workspaceRoot,
     process.platform === 'win32' ? agentHomeAccess : undefined,
@@ -4530,14 +4554,16 @@ export function createAsrtShellSandbox(
     process.platform === 'win32' ? {} : process.env,
     workspaceShellExecutable(),
   );
-  if (process.platform !== 'win32') {
-    const workspaceWarmup = getWorkspaceSession(
+  const workspaceWarmup = process.platform === 'win32'
+    ? undefined
+    : getWorkspaceSession(
       workspaceRoot,
       undefined,
       undefined,
       baselineReadScopes,
       baselineReadScopes,
     );
+  if (workspaceWarmup !== undefined) {
     pendingWorkspaceSessionWarmups.add(workspaceWarmup);
     void workspaceWarmup.then(
       () => pendingWorkspaceSessionWarmups.delete(workspaceWarmup),
@@ -4614,6 +4640,14 @@ export function createAsrtShellSandbox(
       let lease: WorkspaceSessionLease | undefined;
       let workspaceSession: WorkspaceSessionClient | undefined;
       try {
+        if (workspaceWarmup !== undefined) {
+          await waitForWorkspacePreparation(
+            workspaceWarmup.then(() => undefined, () => undefined),
+            shellInput.signal,
+            shellInput.deadlineAt,
+          );
+          throwIfWorkspacePreparationStopped(shellInput.signal, shellInput.deadlineAt);
+        }
         const pendingSession = getWorkspaceSession(
           workspaceRoot,
           agentHomeAccess,
@@ -4818,10 +4852,12 @@ export function createAsrtShellSandbox(
             shellInput.deadlineAt !== undefined
             && Date.now() >= shellInput.deadlineAt
           );
+        let leaseReleaseFailed = false;
         if (lease) {
           try {
             await lease.release();
           } catch (releaseError: unknown) {
+            leaseReleaseFailed = true;
             failures.push(releaseError);
             emitKodaXDiagnostic({
               source: 'sandbox:workspace-session',
@@ -4859,6 +4895,15 @@ export function createAsrtShellSandbox(
               detail: closeError,
             });
           }
+        } else if (leaseReleaseFailed && workspaceSession) {
+          void workspaceSession.close().catch((closeError: unknown) => {
+            emitKodaXDiagnostic({
+              source: 'sandbox:workspace-session',
+              level: 'warn',
+              message: 'Failed workspace lease cleanup could not retire its session.',
+              detail: closeError,
+            });
+          });
         }
         if (preparationStopped) throw error;
         const diagnostic = failures.length === 1
