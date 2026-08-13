@@ -203,6 +203,14 @@ vi.mock('node:child_process', async (importOriginal) => {
         cwd: options?.cwd,
         input: options?.input,
       });
+      if (command === process.execPath && args.length === 1 && args[0] === '--version') {
+        return {
+          status: 0,
+          signal: null,
+          stdout: `${process.version}\n`,
+          stderr: '',
+        };
+      }
       const encodedIndex = args.indexOf('-EncodedCommand');
       if (encodedIndex >= 0) {
         const script = Buffer.from(args[encodedIndex + 1] ?? '', 'base64').toString('utf16le');
