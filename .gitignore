@@ -29,6 +29,7 @@ Thumbs.db
 
 # Project specific
 .kodax/
+.dsh/
 .agent/
 .repointel/
 .claude/
