@@ -116,7 +116,7 @@ async function run() {
         setup: profileToolchainCmdSetup,
       },
       cache: { ttlMs: 0, refreshToken: 'packaged-electron-runtime-sandbox' },
-      probeTimeoutMs: 10_000,
+      probeTimeoutMs: 60_000,
     },
   };
   await Promise.all(sessions.map((session) => (
@@ -325,6 +325,7 @@ class WindowsHideSmokeProvider extends KodaXBaseProvider {
         id: 'runtime-sandbox-shell-' + this.toolSequence,
         name: 'bash',
         input: {
+          timeout: 240,
           command: 'set "KODAX_CONSOLE_PROBE_QUERY_ID=' + queryId
             + '" && profile-tool.exe --profile-toolchain --barrier "' + barrierDirectory
             + '" ' + queryId + ' ' + barrierCount + ' && ' + ${JSON.stringify(

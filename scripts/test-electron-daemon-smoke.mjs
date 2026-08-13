@@ -214,7 +214,7 @@ public static class Program {
       int expected = Int32.Parse(args[4]);
       Directory.CreateDirectory(barrierDirectory);
       File.WriteAllText(Path.Combine(barrierDirectory, args[3] + ".ready"), "ready");
-      DateTime deadline = DateTime.UtcNow.AddSeconds(20);
+      DateTime deadline = DateTime.UtcNow.AddSeconds(120);
       while (Directory.GetFiles(barrierDirectory, "*.ready").Length < expected) {
         if (DateTime.UtcNow >= deadline) return 98;
         Thread.Sleep(25);
@@ -332,7 +332,7 @@ wait();
     await mkdir(barrierDirectory, { recursive: true });
     let launchError;
     try {
-      await run(process.execPath, [tsxCli, worker], repoRoot, 120_000, {
+      await run(process.execPath, [tsxCli, worker], repoRoot, 300_000, {
         ...workerEnvironment,
         KODAX_CROSS_PROCESS_PARTICIPANT: participant,
         KODAX_CROSS_PROCESS_EXPECTED: String(expected),

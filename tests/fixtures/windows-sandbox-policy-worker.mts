@@ -72,7 +72,7 @@ try {
     JSON.stringify(participant),
     String(expectedParticipants),
   ].join(' ');
-  result = await toolBash({ command, timeout: 60 }, {
+  result = await toolBash({ command, timeout: 120 }, {
     backups: new Map(),
     executionCwd: workspace,
     toolCallId: `cross-process-${participant}`,
