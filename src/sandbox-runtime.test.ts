@@ -203,14 +203,6 @@ vi.mock('node:child_process', async (importOriginal) => {
         cwd: options?.cwd,
         input: options?.input,
       });
-      if (command === process.execPath && args.length === 1 && args[0] === '--version') {
-        return {
-          status: 0,
-          signal: null,
-          stdout: `${process.version}\n`,
-          stderr: '',
-        };
-      }
       const encodedIndex = args.indexOf('-EncodedCommand');
       if (encodedIndex >= 0) {
         const script = Buffer.from(args[encodedIndex + 1] ?? '', 'base64').toString('utf16le');
@@ -341,10 +333,9 @@ vi.mock('node:child_process', async (importOriginal) => {
       });
       const requestFile = Array.isArray(argsOrOptions) ? argsOrOptions.at(-1) : undefined;
       const workspaceSession = Array.isArray(argsOrOptions)
-        && argsOrOptions.some((arg) => (
-          arg.includes('sandbox-workspace-session')
-          || arg === '__asrt-workspace-session'
-        ));
+        && typeof requestFile === 'string'
+        && path.basename(requestFile).startsWith('workspace-')
+        && requestFile.endsWith('.json');
       if (workspaceSession) {
         if (typeof requestFile === 'string') {
           const init = JSON.parse(readFileSync(requestFile, 'utf8')) as {
@@ -664,6 +655,15 @@ import {
 } from './sandbox-runtime.js';
 
 const tempRoots: string[] = [];
+
+function isPathInside(parent: string, candidate: string): boolean {
+  const relative = path.relative(parent, candidate);
+  return relative === '' || (
+    relative !== '..'
+    && !relative.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relative)
+  );
+}
 
 beforeEach(async () => {
   processIdentityMock.windowsBootIdentity = 'windows-boot-100';
@@ -1438,7 +1438,11 @@ describe('ASRT workspace shell adapter', () => {
         .not.toContain(path.resolve(customAgentHome));
       expect(request.config.filesystem.allowRead).not.toContain(homePathEntry);
       expect(request.config.filesystem.allowRead).not.toContain(sensitivePathEntry);
-      expect(request.config.filesystem.allowRead).toContain(ordinaryHomePathEntry);
+      if (isPathInside(home, ordinaryHomePathEntry)) {
+        expect(request.config.filesystem.allowRead).toContain(ordinaryHomePathEntry);
+      } else {
+        expect(request.config.filesystem.allowRead).not.toContain(ordinaryHomePathEntry);
+      }
       const sessionConfig = capturedWorkspaceSessionConfigs.at(-1) as {
         readonly filesystem: {
           readonly allowRead: readonly string[];
@@ -5604,7 +5608,9 @@ describe('ASRT Skill-script adapter', () => {
     }
   });
 
-  it('keeps Windows command arguments exact behind an encoded argv bootstrap', async () => {
+  it.runIf(process.platform === 'win32')(
+    'keeps Windows command arguments exact behind an encoded argv bootstrap',
+    async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-broker-argv-test-'));
     tempRoots.push(root);
     const requestFile = path.join(root, 'request.json');
@@ -5654,9 +5660,12 @@ describe('ASRT Skill-script adapter', () => {
     expect(injectedEnvironment.filter((value) => /^pathext=/i.test(value)))
       .toEqual(['PATHEXT=.COM;.EXE;.CMD']);
     expect(injectedEnvironment).toContain('WRAPPED_ONLY=yes');
-  });
+    },
+  );
 
-  it('rejects case-ambiguous Windows child environment names before spawn', async () => {
+  it.runIf(process.platform === 'win32')(
+    'rejects case-ambiguous Windows child environment names before spawn',
+    async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-broker-env-test-'));
     tempRoots.push(root);
     const requestFile = path.join(root, 'request.json');
@@ -5679,7 +5688,8 @@ describe('ASRT Skill-script adapter', () => {
 
     await expect(runAsrtBrokerProcess(requestFile)).resolves.toBe(1);
     expect(capturedSpawnArgv).toHaveLength(spawnCount);
-  });
+    },
+  );
 
   it.each([
     {
