@@ -667,6 +667,35 @@ describe('openai reasoning capability', () => {
     });
   });
 
+  it('maps GLM-5.3 none to low instead of sending unsupported disabled thinking', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedOpenAIStream());
+    const provider = new TestOpenAIProvider('zhipu', 'native-effort', {
+      chat: { completions: { create } },
+    }, {
+      model: 'glm-5.3',
+      reasoningProfile: {
+        reasoningPreset: 'zai-glm-5.3',
+        effortStrategy: 'openai-chat-effort',
+        thinkingStrategy: 'provider-toggle',
+        defaultEffort: 'max',
+        supportedEfforts: [{ value: 'none' }, { value: 'low' }, { value: 'high' }, { value: 'max' }],
+        disabledEfforts: ['none'],
+        supportsReasoningEffort: true,
+        supportsDisabledThinking: false,
+      },
+    });
+
+    await provider.stream(MESSAGES, TOOLS, 'system', {
+      ...reasoning,
+      effort: 'none',
+    });
+
+    expect(create.mock.calls[0]?.[0]).toMatchObject({
+      thinking: { type: 'enabled' },
+      reasoning_effort: 'low',
+    });
+  });
+
   it('sends disabled thinking for OpenAI-compatible disabled efforts through reasoning metadata', async () => {
     const create = vi.fn().mockResolvedValue(createCompletedOpenAIStream());
     const provider = new TestOpenAIProvider('zhipu', 'native-effort', {

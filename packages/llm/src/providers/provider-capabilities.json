@@ -651,6 +651,7 @@
               { "value": "max", "description": "GLM maximum reasoning", "isDefault": true }
             ],
             "effortAliases": {
+              "none": "low",
               "minimal": "low",
               "minimum": "low",
               "light": "low",
@@ -745,6 +746,7 @@
               { "value": "max", "description": "GLM maximum reasoning", "isDefault": true }
             ],
             "effortAliases": {
+              "none": "low",
               "minimal": "low",
               "minimum": "low",
               "light": "low",
@@ -847,6 +849,7 @@
           { "value": "max", "description": "GLM maximum reasoning", "isDefault": true }
         ],
         "effortAliases": {
+          "none": "low",
           "minimal": "low",
           "minimum": "low",
           "light": "low",
@@ -920,6 +923,7 @@
               { "value": "max", "description": "GLM maximum reasoning", "isDefault": true }
             ],
             "effortAliases": {
+              "none": "low",
               "minimal": "low",
               "minimum": "low",
               "light": "low",

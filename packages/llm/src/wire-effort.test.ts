@@ -7,13 +7,27 @@ import { resolveModelCapabilities } from './providers/index.js';
  * narrowing + alias/ceiling/default resolution into one host-facing call.
  */
 describe('resolveWireEffort', () => {
-  it('applies the GLM-5.3 effort buckets documented by Z.AI', () => {
+  it.each([
+    ['none', 'low'],
+    ['minimal', 'low'],
+    ['light', 'low'],
+    ['low', 'low'],
+    ['medium', 'high'],
+    ['high', 'high'],
+    ['xhigh', 'max'],
+    ['max', 'max'],
+    ['ultra', 'max'],
+  ])('maps GLM-5.3 effort %s to %s', (requested, expected) => {
     const profile = resolveModelCapabilities('zai-coding', 'glm-5.3')?.reasoningProfile;
     expect(profile?.effortAliases?.medium, 'test fixture assumption').toBe('high');
 
-    const resolved = resolveWireEffort({ provider: 'zai-coding', model: 'glm-5.3', desiredEffort: 'medium' });
-    expect(resolved.effort).toBe('high');
-    expect(resolved.adjusted).toBe(true);
+    const resolved = resolveWireEffort({
+      provider: 'zai-coding',
+      model: 'glm-5.3',
+      desiredEffort: requested,
+    });
+    expect(resolved.effort).toBe(expected);
+    expect(resolved.adjusted).toBe(requested !== expected);
   });
 
   it('never returns an effort that was rejected — folds rejectedEfforts into the ladder', () => {

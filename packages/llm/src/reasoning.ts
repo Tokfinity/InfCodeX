@@ -108,6 +108,7 @@ function createBaseReasoningProfileFromPreset(
           { value: 'max', description: 'Maximum reasoning', isDefault: true },
         ],
         effortAliases: {
+          none: 'low',
           minimal: 'low',
           minimum: 'low',
           light: 'low',
@@ -652,7 +653,9 @@ function validateReasoningEffort(
       ?? effort;
   }
   if (effort === 'none') {
-    return effort;
+    return capability?.supportsDisabledThinking === false
+      ? applyEffortAlias(effort, capability)
+      : effort;
   }
   if (isSupportedReasoningEffort(effort, capability)) {
     return applyEffortAlias(effort, capability);

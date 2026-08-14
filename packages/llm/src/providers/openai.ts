@@ -687,6 +687,11 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       preset === 'zai-glm-5.3' ||
       preset === 'zai-glm-5.2'
     ) {
+      if (preset === 'zai-glm-5.3' && intent.disabled) {
+        params.thinking = { type: 'enabled' };
+        params.reasoning_effort = 'low';
+        return;
+      }
       params.thinking = { type: intent.disabled ? 'disabled' : 'enabled' };
       if (!intent.disabled && intent.effort) {
         params.reasoning_effort = intent.effort;

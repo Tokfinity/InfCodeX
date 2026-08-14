@@ -261,7 +261,7 @@ describe('ArgumentCompleter', () => {
         const affectedRoutes = [
           ['kimi-code', 'k3-256k'],
           ['zhipu-coding', 'glm-5.3'],
-          ['zai-coding', 'glm-5.3'],
+          ['zai-coding', 'glm-5.2'],
           ['ark-coding', 'glm-5.2'],
         ] as const;
 
