@@ -367,10 +367,15 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
           defaultEffort: 'max',
         }),
       }));
-      // 2026-08: historical GLM-5.2 / GLM-5.1 requests auto-route to GLM-5.3;
-      // the current catalogue is GLM-5.3 / GLM-5 Turbo / GLM-4.7.
+      expect(z.models?.find((m) => m.id === 'glm-5.2')).toEqual(expect.objectContaining({
+        id: 'glm-5.2',
+        contextWindow: 1_000_000,
+        maxOutputTokens: 131_072,
+        reasoningProfile: expect.objectContaining({ reasoningPreset: 'zai-glm-5.2' }),
+      }));
+      // GLM-5.2 remains an explicit rollback choice during the 5.3 rollout.
       expect(z.model).toBe('glm-5.3');
-      expect(z.models?.map((m) => m.id)).toEqual(['glm-5.3', 'glm-5-turbo', 'glm-4.7']);
+      expect(z.models?.map((m) => m.id)).toEqual(['glm-5.3', 'glm-5.2', 'glm-5-turbo', 'glm-4.7']);
       expect(z.models?.find((m) => m.id === 'glm-4.7')).toEqual(expect.objectContaining({
         id: 'glm-4.7',
         displayName: 'GLM-4.7',
@@ -380,6 +385,21 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
           reasoningPreset: 'zai-glm-toggle',
           effortStrategy: 'provider-toggle',
         }),
+      }));
+    });
+
+    it('zai-coding keeps GLM-5.2 as default while retaining GLM-5.3', () => {
+      const z = getProviderSnapshots()['zai-coding'];
+      expect(z.model).toBe('glm-5.2');
+      expect(z.models?.map((m) => m.id)).toEqual(['glm-5.2', 'glm-5.3', 'glm-5-turbo', 'glm-4.7']);
+      expect(z.reasoningProfile).toMatchObject({
+        reasoningPreset: 'zai-glm-5.2',
+        supportsDisabledThinking: true,
+      });
+      expect(z.models?.find((m) => m.id === 'glm-5.3')).toEqual(expect.objectContaining({
+        contextWindow: 1_000_000,
+        maxOutputTokens: 131_072,
+        reasoningProfile: expect.objectContaining({ reasoningPreset: 'zai-glm-5.3' }),
       }));
     });
 

@@ -399,13 +399,15 @@ describe('provider registry', () => {
 
     const zhipuCoding = getProvider('zhipu-coding');
     expect(zhipuCoding.getModel()).toBe('glm-5.3');
-    expect(zhipuCoding.getWireModel()).toBe('glm-5.3[1m]');
-    expect(zhipuCoding.getAvailableModels()).toEqual(['glm-5.3', 'glm-5-turbo', 'glm-4.7']);
+    expect(zhipuCoding.getWireModel()).toBe('glm-5.3');
+    expect(zhipuCoding.getAvailableModels()).toEqual(['glm-5.3', 'glm-5.2', 'glm-5-turbo', 'glm-4.7']);
     expect(zhipuCoding.getEffectiveContextWindow('glm-5.3')).toBe(1_000_000);
     expect(zhipuCoding.getEffectiveMaxOutputTokens('glm-5.3')).toBe(131_072);
+    expect(zhipuCoding.getEffectiveContextWindow('glm-5.2')).toBe(1_000_000);
+    expect(zhipuCoding.getEffectiveMaxOutputTokens('glm-5.2')).toBe(131_072);
     expect(zhipuCoding.getEffectiveContextWindow('glm-5-turbo')).toBe(200_000);
-    // GLM-5.2 / GLM-5.1 now auto-route to GLM-5.3 server-side and are not
-    // advertised as distinct choices. GLM-4.7 inherits the 200K default.
+    // GLM-5.2 remains an explicit rollback choice while 5.3 rolls out.
+    // GLM-5.1 auto-routes upstream; GLM-4.7 inherits the 200K default.
     expect(zhipuCoding.getAvailableModels()).toContain('glm-4.7');
     expect(zhipuCoding.getEffectiveContextWindow('glm-4.7')).toBe(200_000);
   });
@@ -418,9 +420,11 @@ describe('provider registry', () => {
     vi.stubEnv('ZAI_CODING_API_KEY', 'zai-test-key');
     const zai = getProvider('zai-coding');
     expect(zai.name).toBe('zai-coding');
-    expect(zai.getModel()).toBe('glm-5.3');
-    expect(zai.getWireModel()).toBe('glm-5.3[1m]');
-    expect(zai.getAvailableModels()).toEqual(['glm-5.3', 'glm-5-turbo', 'glm-4.7']);
+    expect(zai.getModel()).toBe('glm-5.2');
+    expect(zai.getWireModel()).toBe('glm-5.2');
+    expect(zai.getAvailableModels()).toEqual(['glm-5.2', 'glm-5.3', 'glm-5-turbo', 'glm-4.7']);
+    expect(zai.getEffectiveContextWindow('glm-5.2')).toBe(1_000_000);
+    expect(zai.getEffectiveMaxOutputTokens('glm-5.2')).toBe(131_072);
     expect(zai.getEffectiveContextWindow('glm-5.3')).toBe(1_000_000);
     expect(zai.getEffectiveMaxOutputTokens('glm-5.3')).toBe(131_072);
     expect(zai.getEffectiveContextWindow('glm-5-turbo')).toBe(200_000);

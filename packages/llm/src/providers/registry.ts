@@ -198,12 +198,6 @@ class ZhipuCodingProvider extends KodaXAnthropicCompatProvider {
     // cleanly in bench and need no equivalent cap.
     streamMaxDurationMs: 300_000,
   });
-
-  protected override getWireModelId(modelId?: string): string {
-    const id = modelId ?? this.config.model;
-    // The Coding Plan Anthropic endpoint requires this suffix to activate 1M.
-    return id === 'glm-5.3' ? 'glm-5.3[1m]' : super.getWireModelId(id);
-  }
 }
 
 class ZaiCodingProvider extends KodaXAnthropicCompatProvider {
@@ -218,12 +212,6 @@ class ZaiCodingProvider extends KodaXAnthropicCompatProvider {
     baseUrl: 'https://api.z.ai/api/anthropic',
     streamMaxDurationMs: 300_000,
   });
-
-  protected override getWireModelId(modelId?: string): string {
-    const id = modelId ?? this.config.model;
-    // The overseas Anthropic endpoint uses the same 1M model identifier.
-    return id === 'glm-5.3' ? 'glm-5.3[1m]' : super.getWireModelId(id);
-  }
 }
 
 class KimiCodeProvider extends KodaXAnthropicCompatProvider {
