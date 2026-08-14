@@ -5,6 +5,7 @@
 import path from 'node:path';
 import os from 'node:os';
 import { EventEmitter } from 'node:events';
+import { mkdtempSync, rmSync } from 'node:fs';
 import {
   containWindowsEffectProcess,
   killChildProcessTree,
@@ -286,14 +287,18 @@ describe('toolWorktreeCreate', () => {
 
 describe('toolWorktreeRemove', () => {
   it('hard-denies removing an ancestor that contains the Agent Home root', async () => {
-    const ancestor = path.join(os.tmpdir(), `kodax-worktree-outer-${process.pid}`);
+    const ancestor = mkdtempSync(path.join(os.tmpdir(), 'kodax-worktree-outer-'));
     setAgentConfigHome(path.join(ancestor, 'agent-home'));
 
-    await expect(toolWorktreeRemove({
-      action: 'remove',
-      worktree_path: ancestor,
-      discard_changes: true,
-    }, mockContext)).rejects.toThrow(/protected KodaX state/);
+    try {
+      await expect(toolWorktreeRemove({
+        action: 'remove',
+        worktree_path: ancestor,
+        discard_changes: true,
+      }, mockContext)).rejects.toThrow(/protected KodaX state/);
+    } finally {
+      rmSync(ancestor, { recursive: true, force: true });
+    }
   });
 
   it('refuses to remove the Runtime tree even with discard_changes', async () => {
