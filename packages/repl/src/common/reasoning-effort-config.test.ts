@@ -202,6 +202,27 @@ describe('formatReasoningEffortStatusLabel', () => {
     })).toBe('minimal->low');
   });
 
+  it('classifies GLM-5.3 off as low and hides the impossible off control', () => {
+    const input = {
+      provider: 'zhipu-coding',
+      model: 'glm-5.3',
+      effort: 'off',
+      effortOverride: true,
+      thinking: false,
+      reasoningMode: 'off' as const,
+    };
+
+    expect(formatReasoningEffortStatusLabel(input)).toBe('off->low');
+    expect(resolveProviderReasoningRuntimeEffort(input)).toMatchObject({
+      configuredEffort: 'off',
+      runtimeEffort: 'low',
+    });
+    expect(getProviderReasoningEffortOptions('zhipu-coding', 'glm-5.3'))
+      .toEqual(['auto', 'low', 'medium', 'high', 'xhigh', 'max']);
+    expect(getProviderReasoningEffortCycle('zhipu-coding', 'glm-5.3'))
+      .toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'auto']);
+  });
+
   it('keeps minimal as a real tier where the model supports it (openai)', () => {
     expect(formatReasoningEffortStatusLabel({
       provider: 'openai',

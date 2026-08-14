@@ -624,6 +624,12 @@ export function getProviderReasoningEffortOptions(
     return values;
   }
   for (const preset of presets) {
+    if (
+      preset.value === 'none'
+      && capability?.supportsDisabledThinking === false
+    ) {
+      continue;
+    }
     pushUniqueEffortDisplay(values, preset.value);
   }
   return values;
@@ -636,8 +642,8 @@ export function getProviderReasoningEffortOptions(
  * ones that model actually exposes. Two deliberate shaping rules:
  *
  * - `off` (the canonical disable stop) is included only when the model can
- *   disable thinking (`none` in supportedEfforts or `supportsDisabledThinking`).
- *   Always-on models (kimi-k2.7-code / minimax-m2-always) get no `off` rung.
+ *   disable thinking. A `none` preset on an explicitly always-on profile can be
+ *   an alias to its lowest effort and does not create an `off` rung.
  * - Efforts that merely FOLD to off on this model — e.g. `minimal` on a toggle
  *   or budget provider where it sits in `disabledEfforts` — are dropped from the
  *   cycle so the user doesn't hit a second, redundant disable stop next to
@@ -666,11 +672,15 @@ export function getProviderReasoningEffortCycle(
   } else {
     for (const preset of presets) {
       if (preset.value === 'none') {
-        canDisable = true;
+        if (capability?.supportsDisabledThinking !== false) {
+          canDisable = true;
+        }
         continue;
       }
       if (disabled.has(preset.value)) {
-        canDisable = true;
+        if (capability?.supportsDisabledThinking !== false) {
+          canDisable = true;
+        }
         continue;
       }
       pushUniqueEffortDisplay(concrete, preset.value);
@@ -756,6 +766,7 @@ export function formatReasoningEffortStatusLabel(input: {
     // Reflect that truth so the status reads `minimal->off` instead of a bare
     // `minimal` that lies about thinking still being on.
     const foldsToOff = resolved.configuredEffort !== undefined
+      && capability.supportsDisabledThinking !== false
       && capability.disabledEfforts?.includes(resolved.configuredEffort) === true;
     const effective = foldsToOff
       ? 'off'
