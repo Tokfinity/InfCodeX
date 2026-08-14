@@ -260,8 +260,8 @@ describe('ArgumentCompleter', () => {
       it('should list each provider default model once in two-stage completion', async () => {
         const affectedRoutes = [
           ['kimi-code', 'k3-256k'],
-          ['zhipu-coding', 'glm-5.2'],
-          ['zai-coding', 'glm-5.2'],
+          ['zhipu-coding', 'glm-5.3'],
+          ['zai-coding', 'glm-5.3'],
           ['ark-coding', 'glm-5.2'],
         ] as const;
 

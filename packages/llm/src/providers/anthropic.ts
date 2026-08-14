@@ -290,6 +290,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
     if (intent.disabled) {
       if (
         capability.supportsDisabledThinking === true ||
+        preset === 'zai-glm-5.3' ||
         preset === 'zai-glm-5.2' ||
         preset === 'zai-glm-toggle' ||
         preset === 'deepseek-v4-anthropic' ||
@@ -313,6 +314,14 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       if (intent.effort) {
         rawParams.reasoning_effort = intent.effort;
       }
+      return;
+    }
+
+    if (preset === 'zai-glm-5.3') {
+      params.thinking = {
+        type: 'adaptive',
+      } as Anthropic.Messages.ThinkingConfigParam;
+      setAnthropicOutputEffort(params, intent.effort);
       return;
     }
 

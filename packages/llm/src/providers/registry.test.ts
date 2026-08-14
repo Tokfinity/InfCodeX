@@ -61,7 +61,6 @@ describe('provider registry', () => {
   });
 
   it.each([
-    ['zhipu-coding', 'glm-5.2'],
     ['deepseek', 'deepseek-v4-flash'],
     ['deepseek', 'deepseek-v4-pro'],
     ['kimi-code', 'k3'],
@@ -252,7 +251,7 @@ describe('provider registry', () => {
     ]);
 
     // Per-model context window pins (user-confirmed against Volcengine
-    // console catalog). GLM-5.2 at 1M (matches zhipu-coding/glm-5.2),
+    // console catalog). Ark's independent GLM-5.2 route remains at 1M,
     // Kimi at 256K, MiniMax-M2.7 at 204_800, MiniMax-M3 at 1M
     // (Frontier Coding), DeepSeek V4 at 1M, Doubao Seed 2.0 at 256K.
     expect(ark.getEffectiveContextWindow('glm-5.2')).toBe(1_000_000);
@@ -316,6 +315,23 @@ describe('provider registry', () => {
     expect(flagOf('openai')).toBeUndefined();
   });
 
+  it.each(['zhipu', 'zhipu-coding', 'zai-coding'])(
+    '%s exposes GLM-5.3 as always-thinking with documented effort buckets',
+    (provider) => {
+      expect(getModelCapabilities(provider, 'glm-5.3')?.reasoningProfile).toMatchObject({
+        reasoningPreset: 'zai-glm-5.3',
+        defaultEffort: 'max',
+        disabledEfforts: ['none'],
+        supportsDisabledThinking: false,
+        effortAliases: expect.objectContaining({
+          minimal: 'low',
+          medium: 'high',
+          xhigh: 'max',
+        }),
+      });
+    },
+  );
+
   it('enables cache-affinity fields only for verified built-in endpoints', () => {
     vi.stubEnv('KIMI_CODE_API_KEY', 'test-key');
     vi.stubEnv('KIMI_API_KEY', 'test-key');
@@ -367,6 +383,10 @@ describe('provider registry', () => {
 
     const zhipu = getProvider('zhipu');
     expect(zhipu.getEffectiveContextWindow('glm-5')).toBe(200_000);
+    expect(zhipu.getAvailableModels()).toContain('glm-5.3');
+    expect(zhipu.getWireModel('glm-5.3')).toBe('glm-5.3');
+    expect(zhipu.getEffectiveContextWindow('glm-5.3')).toBe(1_000_000);
+    expect(zhipu.getEffectiveMaxOutputTokens('glm-5.3')).toBe(131_072);
     expect(zhipu.getAvailableModels()).toContain('glm-5.2');
     expect(zhipu.getEffectiveContextWindow('glm-5.2')).toBe(1_000_000);
     expect(zhipu.getEffectiveMaxOutputTokens('glm-5.2')).toBe(131_072);
@@ -378,13 +398,14 @@ describe('provider registry', () => {
     expect(zhipu.getEffectiveContextWindow('glm-5-turbo')).toBe(200_000);
 
     const zhipuCoding = getProvider('zhipu-coding');
-    expect(zhipuCoding.getAvailableModels()).toContain('glm-5.2');
-    expect(zhipuCoding.getEffectiveContextWindow('glm-5.2')).toBe(1_000_000);
-    expect(zhipuCoding.getEffectiveMaxOutputTokens('glm-5.2')).toBe(131_072);
+    expect(zhipuCoding.getModel()).toBe('glm-5.3');
+    expect(zhipuCoding.getWireModel()).toBe('glm-5.3[1m]');
+    expect(zhipuCoding.getAvailableModels()).toEqual(['glm-5.3', 'glm-5-turbo', 'glm-4.7']);
+    expect(zhipuCoding.getEffectiveContextWindow('glm-5.3')).toBe(1_000_000);
+    expect(zhipuCoding.getEffectiveMaxOutputTokens('glm-5.3')).toBe(131_072);
     expect(zhipuCoding.getEffectiveContextWindow('glm-5-turbo')).toBe(200_000);
-    // 2026-06: Zhipu Coding Plan now serves GLM-5.2 / GLM-5 Turbo / GLM-4.7
-    // on every tier; GLM-5 and GLM-5.1 are retired and auto-routed to
-    // GLM-5.2 server-side. GLM-4.7 inherits the 200K provider default.
+    // GLM-5.2 / GLM-5.1 now auto-route to GLM-5.3 server-side and are not
+    // advertised as distinct choices. GLM-4.7 inherits the 200K default.
     expect(zhipuCoding.getAvailableModels()).toContain('glm-4.7');
     expect(zhipuCoding.getEffectiveContextWindow('glm-4.7')).toBe(200_000);
   });
@@ -397,9 +418,11 @@ describe('provider registry', () => {
     vi.stubEnv('ZAI_CODING_API_KEY', 'zai-test-key');
     const zai = getProvider('zai-coding');
     expect(zai.name).toBe('zai-coding');
-    expect(zai.getAvailableModels()).toContain('glm-5.2');
-    expect(zai.getEffectiveContextWindow('glm-5.2')).toBe(1_000_000);
-    expect(zai.getEffectiveMaxOutputTokens('glm-5.2')).toBe(131_072);
+    expect(zai.getModel()).toBe('glm-5.3');
+    expect(zai.getWireModel()).toBe('glm-5.3[1m]');
+    expect(zai.getAvailableModels()).toEqual(['glm-5.3', 'glm-5-turbo', 'glm-4.7']);
+    expect(zai.getEffectiveContextWindow('glm-5.3')).toBe(1_000_000);
+    expect(zai.getEffectiveMaxOutputTokens('glm-5.3')).toBe(131_072);
     expect(zai.getEffectiveContextWindow('glm-5-turbo')).toBe(200_000);
     expect(zai.getAvailableModels()).toContain('glm-4.7');
     expect(zai.getEffectiveContextWindow('glm-4.7')).toBe(200_000);
@@ -407,6 +430,6 @@ describe('provider registry', () => {
     // proxies to the same upstream, so the kill-window characteristic
     // applies identically.
     expect(zai.getStreamMaxDurationMs?.()).toBe(300_000);
-    expect(getProviderConfiguredReasoningCapability('zai-coding', 'glm-5.2')).toBe('native-effort');
+    expect(getProviderConfiguredReasoningCapability('zai-coding', 'glm-5.3')).toBe('native-effort');
   });
 });

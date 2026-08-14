@@ -560,6 +560,40 @@ describe('anthropic reasoning capability', () => {
     expect(kwargs.reasoning_effort).toBe('max');
   });
 
+  it('sends GLM-5.3 effort through the Anthropic output_config contract', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
+    const provider = new TestAnthropicProvider('native-effort', {
+      messages: { create },
+    }, {
+      model: 'glm-5.3',
+      reasoningProfile: {
+        reasoningPreset: 'zai-glm-5.3',
+        effortStrategy: 'openai-chat-effort',
+        thinkingStrategy: 'provider-toggle',
+        defaultEffort: 'max',
+        supportedEfforts: [
+          { value: 'low' },
+          { value: 'high' },
+          { value: 'max', isDefault: true },
+        ],
+        effortAliases: { medium: 'high', xhigh: 'max' },
+        disabledEfforts: ['none'],
+        supportsReasoningEffort: true,
+        supportsDisabledThinking: false,
+      },
+    });
+
+    await provider.stream(MESSAGES, TOOLS, 'system', {
+      ...reasoning,
+      effort: 'medium',
+    });
+
+    const kwargs = create.mock.calls[0]?.[0];
+    expect(kwargs.thinking).toEqual({ type: 'adaptive' });
+    expect(kwargs.output_config).toEqual({ effort: 'high' });
+    expect(kwargs).not.toHaveProperty('reasoning_effort');
+  });
+
   it('enables thinking for the always-on Kimi K2.7 Code preset (v0.7.57 regression fix)', async () => {
     const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
     const provider = new TestAnthropicProvider('native-toggle', {

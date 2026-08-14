@@ -102,13 +102,17 @@ export const DEFAULT_COST_RATES: Readonly<Record<string, Readonly<Record<string,
     'deepseek-v4-pro': { inputPer1M: 0.005, outputPer1M: 0.015 },
   },
   zhipu: {
+    // GLM-5.3 public API pricing is not published yet; keep the existing
+    // flagship nominal rate so pre-registered selections never look free.
+    'glm-5.3': { inputPer1M: 0.05, outputPer1M: 0.1 },
     'glm-5': { inputPer1M: 0.05, outputPer1M: 0.1 },
     'glm-5.1': { inputPer1M: 0.05, outputPer1M: 0.1 },
     'glm-5-turbo': { inputPer1M: 0.01, outputPer1M: 0.03 },
   },
   'zhipu-coding': {
-    // 2026-06: GLM-5 / GLM-5.1 retired (auto-routed to GLM-5.2 upstream).
-    // Coding Plan now serves GLM-5.2 / GLM-5 Turbo / GLM-4.7.
+    // Subscription routes use nominal rates for local accounting; actual
+    // billing is plan/quota based. Historical GLM-5.2 requests auto-route to 5.3.
+    'glm-5.3': { inputPer1M: 0.05, outputPer1M: 0.1 },
     'glm-5.2': { inputPer1M: 0.05, outputPer1M: 0.1 },
     'glm-5-turbo': { inputPer1M: 0.01, outputPer1M: 0.03 },
     'glm-4.7': { inputPer1M: 0.01, outputPer1M: 0.03 },
@@ -118,6 +122,7 @@ export const DEFAULT_COST_RATES: Readonly<Record<string, Readonly<Record<string,
     // and per-token rates as zhipu-coding — both routes proxy to the
     // same upstream backend. Mirror keeps cost-tracker output
     // comparable when users split between the CN and overseas endpoint.
+    'glm-5.3': { inputPer1M: 0.05, outputPer1M: 0.1 },
     'glm-5.2': { inputPer1M: 0.05, outputPer1M: 0.1 },
     'glm-5-turbo': { inputPer1M: 0.01, outputPer1M: 0.03 },
     'glm-4.7': { inputPer1M: 0.01, outputPer1M: 0.03 },

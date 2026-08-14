@@ -191,15 +191,15 @@ describe('formatReasoningEffortStatusLabel', () => {
     })).toBe('max->medium');
   });
 
-  it('folds a disabled-thinking effort (minimal on glm) to off', () => {
+  it('maps minimal to low for GLM-5.3', () => {
     expect(formatReasoningEffortStatusLabel({
       provider: 'zhipu-coding',
-      model: 'glm-5.2',
+      model: 'glm-5.3',
       effort: 'minimal',
       effortOverride: true,
       thinking: true,
       reasoningMode: 'auto',
-    })).toBe('minimal->off');
+    })).toBe('minimal->low');
   });
 
   it('keeps minimal as a real tier where the model supports it (openai)', () => {

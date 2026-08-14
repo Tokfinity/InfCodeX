@@ -6,6 +6,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- `zhipu-coding` and `zai-coding` now default to GLM-5.3 with its 1M context,
+  128K output, `glm-5.3[1m]` Anthropic wire ID, and low/high/max effort mapping.
+  The `zhipu` public provider advertises the same model metadata without
+  promoting it while the ordinary
+  BigModel API remains marked as upcoming. GLM-5.3 Anthropic-compatible calls
+  use `thinking.type` plus `output_config.effort`; OpenAI-compatible calls use
+  `thinking.type` plus `reasoning_effort`.
+
 ---
 
 ## [0.7.86] - 2026-08-14

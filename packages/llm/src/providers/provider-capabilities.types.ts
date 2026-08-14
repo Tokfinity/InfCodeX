@@ -134,6 +134,7 @@ const VALID_THINKING_STRATEGIES: readonly KodaXThinkingWireStrategy[] = [
 ];
 
 const VALID_REASONING_PRESETS: readonly KodaXReasoningPresetName[] = [
+  'zai-glm-5.3',
   'zai-glm-5.2',
   'zai-glm-toggle',
   'deepseek-v4-flash-openai',

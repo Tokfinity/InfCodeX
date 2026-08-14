@@ -110,37 +110,42 @@ describe('built-in provider model capabilities (no API key required)', () => {
     expect(publicK3?.reasoningProfile).toEqual(subscriptionK3?.reasoningProfile);
   });
 
-  it('exposes Zhipu GLM-5.2 at 1M context / 128K max output', () => {
-    const glm52 = getModelCapabilities('zhipu', 'glm-5.2');
-    expect(glm52?.contextWindow).toBe(1_000_000);
-    expect(glm52?.maxOutputTokens).toBe(131_072);
+  it('exposes Zhipu GLM-5.3 at 1M context / 128K max output', () => {
+    const glm53 = getModelCapabilities('zhipu', 'glm-5.3');
+    expect(glm53?.contextWindow).toBe(1_000_000);
+    expect(glm53?.maxOutputTokens).toBe(131_072);
+    expect(glm53?.reasoningProfile).toMatchObject({
+      reasoningPreset: 'zai-glm-5.3',
+      defaultEffort: 'max',
+    });
   });
 
   it('honors a models[] override even when the model IS the provider default (R3 regression)', () => {
     // Invariant: ANY provider whose default model ALSO has a models[] entry must
     // return that entry's override, not the bare provider defaults. zhipu-coding,
-    // zai-coding AND ark-coding all default to glm-5.2 (which declares a 1M window).
+    // zai-coding defaults to glm-5.3 (1M), while ark-coding still defaults to
+    // its independent glm-5.2 route (also 1M).
     // The pre-fix resolver used a bare default descriptor and returned the 200K/16K
     // provider defaults (the "context window shows 200K" bug); getEffective* already
     // returned the right values, so these metadata resolvers must now agree.
-    for (const { provider, maxOut } of [
-      { provider: 'zhipu-coding', maxOut: 131_072 },
-      { provider: 'zai-coding', maxOut: 131_072 },
-      { provider: 'ark-coding', maxOut: 128_000 },
+    for (const { provider, model, maxOut } of [
+      { provider: 'zhipu-coding', model: 'glm-5.3', maxOut: 131_072 },
+      { provider: 'zai-coding', model: 'glm-5.3', maxOut: 131_072 },
+      { provider: 'ark-coding', model: 'glm-5.2', maxOut: 128_000 },
     ] as const) {
-      const caps = getModelCapabilities(provider, 'glm-5.2');
+      const caps = getModelCapabilities(provider, model);
       expect(caps?.contextWindow, `${provider} ctx`).toBe(1_000_000);
       expect(caps?.maxOutputTokens, `${provider} maxOut`).toBe(maxOut);
       expect(caps?.reasoningCapability, `${provider} reasoning`).toBe('native-effort');
-      // The override does not disturb the default flag — glm-5.2 is still the default.
+      // The override does not disturb the provider's default flag.
       expect(caps?.isDefault, `${provider} isDefault`).toBe(true);
       // resolveModelCapabilities (the unified dispatcher hosts call) agrees.
-      expect(resolveModelCapabilities(provider, 'glm-5.2')?.contextWindow).toBe(1_000_000);
+      expect(resolveModelCapabilities(provider, model)?.contextWindow).toBe(1_000_000);
       // C3: getProviderModelDescriptors must NOT double-list the self-colliding
-      // default — glm-5.2 appears exactly once, carrying its override.
-      const glm52Descriptors = getProviderModelDescriptors(provider).filter((d) => d.id === 'glm-5.2');
-      expect(glm52Descriptors, `${provider} glm-5.2 descriptor count`).toHaveLength(1);
-      expect(glm52Descriptors[0]?.contextWindow).toBe(1_000_000);
+      // default model appears exactly once, carrying its override.
+      const defaultDescriptors = getProviderModelDescriptors(provider).filter((d) => d.id === model);
+      expect(defaultDescriptors, `${provider} ${model} descriptor count`).toHaveLength(1);
+      expect(defaultDescriptors[0]?.contextWindow).toBe(1_000_000);
     }
   });
 

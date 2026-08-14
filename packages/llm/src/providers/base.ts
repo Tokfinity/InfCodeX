@@ -65,6 +65,7 @@ function shouldLowerAutoReasoningEffort(
   capability: KodaXReasoningProfile,
 ): boolean {
   switch (capability.reasoningPreset) {
+    case 'zai-glm-5.3':
     case 'zai-glm-5.2':
     case 'deepseek-v4-flash-openai':
     case 'deepseek-v4-pro-openai':

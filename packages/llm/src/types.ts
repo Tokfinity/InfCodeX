@@ -255,6 +255,7 @@ export type KodaXStableEffortIntent =
 export type KodaXWireReasoningEffort = string;
 
 export type KodaXReasoningPresetName =
+  | 'zai-glm-5.3'
   | 'zai-glm-5.2'
   | 'zai-glm-toggle'
   | 'deepseek-v4-flash-openai'

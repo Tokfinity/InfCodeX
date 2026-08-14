@@ -92,6 +92,33 @@ function createBaseReasoningProfileFromPreset(
   preset: KodaXReasoningPresetName,
 ): KodaXReasoningProfile {
   switch (preset) {
+    case 'zai-glm-5.3':
+      return {
+        reasoningPreset: preset,
+        effortStrategy: 'openai-chat-effort',
+        thinkingStrategy: 'provider-toggle',
+        defaultEffort: 'max',
+        supportedEfforts: [
+          { value: 'none', description: 'Maps to low reasoning' },
+          { value: 'minimal', description: 'Alias to low', isUserVisible: false },
+          { value: 'low', description: 'Low reasoning' },
+          { value: 'medium', description: 'Alias to high' },
+          { value: 'high', description: 'High reasoning' },
+          { value: 'xhigh', description: 'Alias to max' },
+          { value: 'max', description: 'Maximum reasoning', isDefault: true },
+        ],
+        effortAliases: {
+          minimal: 'low',
+          minimum: 'low',
+          light: 'low',
+          medium: 'high',
+          xhigh: 'max',
+          ultra: 'max',
+        },
+        disabledEfforts: ['none'],
+        supportsReasoningEffort: true,
+        supportsDisabledThinking: false,
+      };
     case 'zai-glm-5.2':
       return {
         reasoningPreset: preset,

@@ -684,6 +684,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       preset === 'deepseek-v4-flash-openai' ||
       preset === 'deepseek-v4-pro-openai' ||
       preset === 'deepseek-v4-openai' ||
+      preset === 'zai-glm-5.3' ||
       preset === 'zai-glm-5.2'
     ) {
       params.thinking = { type: intent.disabled ? 'disabled' : 'enabled' };

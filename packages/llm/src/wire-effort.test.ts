@@ -7,12 +7,11 @@ import { resolveModelCapabilities } from './providers/index.js';
  * narrowing + alias/ceiling/default resolution into one host-facing call.
  */
 describe('resolveWireEffort', () => {
-  it('applies the model reasoning-profile effort alias (e.g. GLM-5.2 low → high)', () => {
-    // Precondition: this model's profile aliases low → high (zai-glm-5.2 preset).
-    const profile = resolveModelCapabilities('zai-coding', 'glm-5.2')?.reasoningProfile;
-    expect(profile?.effortAliases?.low, 'test fixture assumption').toBe('high');
+  it('applies the GLM-5.3 effort buckets documented by Z.AI', () => {
+    const profile = resolveModelCapabilities('zai-coding', 'glm-5.3')?.reasoningProfile;
+    expect(profile?.effortAliases?.medium, 'test fixture assumption').toBe('high');
 
-    const resolved = resolveWireEffort({ provider: 'zai-coding', model: 'glm-5.2', desiredEffort: 'low' });
+    const resolved = resolveWireEffort({ provider: 'zai-coding', model: 'glm-5.3', desiredEffort: 'medium' });
     expect(resolved.effort).toBe('high');
     expect(resolved.adjusted).toBe(true);
   });
@@ -21,7 +20,7 @@ describe('resolveWireEffort', () => {
     // 'high' would otherwise be selected; rejecting it forces a different rung.
     const resolved = resolveWireEffort({
       provider: 'zai-coding',
-      model: 'glm-5.2',
+      model: 'glm-5.3',
       desiredEffort: 'high',
       rejectedEfforts: ['high'],
     });
@@ -34,7 +33,7 @@ describe('resolveWireEffort', () => {
   it('omits the effort (undefined) rather than returning a rejected rung when every rung is rejected (C8)', () => {
     const resolved = resolveWireEffort({
       provider: 'zai-coding',
-      model: 'glm-5.2',
+      model: 'glm-5.3',
       desiredEffort: 'high',
       rejectedEfforts: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
     });

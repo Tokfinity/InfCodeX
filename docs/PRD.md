@@ -274,8 +274,8 @@ model, API key env var, effort-first reasoning profile/preset, request timeout
 normalization, and multimodal capability flags where needed. The current
 provider capability snapshot is maintained in
 `packages/llm/src/providers/provider-capabilities.json` and includes the
-2026-07-25 model refresh for GPT-5.4, Kimi K3/K2.7 Code/HighSpeed/K2.6/K2.5,
-GLM-5.2, MiniMax M3/M2.7, DeepSeek V4, and Doubao Seed 2.0 routes where
+2026-08-14 model refresh for GPT-5.4, Kimi K3/K2.7 Code/HighSpeed/K2.6/K2.5,
+GLM-5.3, MiniMax M3/M2.7, DeepSeek V4, and Doubao Seed 2.0 routes where
 supported. Public Kimi routes use their exact 262,144-token limits and
 route-specific thinking contract. The separate Kimi For Coding subscription
 alias defaults to the official `k3-256k` Model ID while retaining

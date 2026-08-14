@@ -140,6 +140,15 @@ describe('cost-rates', () => {
       });
     });
 
+    it('should keep GLM-5.3 accounting non-zero on all three Zhipu routes', () => {
+      for (const provider of ['zhipu', 'zhipu-coding', 'zai-coding'] as const) {
+        expect(DEFAULT_COST_RATES[provider]['glm-5.3']).toEqual({
+          inputPer1M: 0.05,
+          outputPer1M: 0.1,
+        });
+      }
+    });
+
     it('should have empty entries for CLI bridge providers', () => {
       expect(DEFAULT_COST_RATES['gemini-cli']).toEqual({});
       expect(DEFAULT_COST_RATES['codex-cli']).toEqual({});

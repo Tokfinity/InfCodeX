@@ -324,21 +324,30 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
       );
     });
 
-    it('zhipu: GLM-5.2 model descriptor carries its 1M context override', () => {
+    it('zhipu: GLM-5.3 model descriptor carries the documented 1M / 128K limits', () => {
       const z = getProviderSnapshots().zhipu;
-      expect(z.models?.find((m) => m.id === 'glm-5.2')).toEqual(expect.objectContaining({
-        id: 'glm-5.2',
-        displayName: 'GLM-5.2',
+      expect(z.models?.find((m) => m.id === 'glm-5.3')).toEqual(expect.objectContaining({
+        id: 'glm-5.3',
+        displayName: 'GLM-5.3',
         contextWindow: 1_000_000,
         maxOutputTokens: 131_072,
         reasoningCapability: 'native-effort',
         reasoningProfile: expect.objectContaining({
-          reasoningPreset: 'zai-glm-5.2',
+          reasoningPreset: 'zai-glm-5.3',
           effortStrategy: 'openai-chat-effort',
           defaultEffort: 'max',
-          effortAliases: { low: 'high', medium: 'high', xhigh: 'max' },
+          effortAliases: expect.objectContaining({
+            minimal: 'low',
+            light: 'low',
+            medium: 'high',
+            xhigh: 'max',
+            ultra: 'max',
+          }),
         }),
       }));
+      // The ordinary BigModel API is still marked "coming soon" for GLM-5.3;
+      // registering the model must not silently promote it to the live default.
+      expect(z.model).toBe('glm-5');
     });
 
     it('zhipu-coding: bench-tuned 16K maxOutputTokens + thinkingBudgetCap', () => {
@@ -346,22 +355,22 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
       expect(z.maxOutputTokens).toBe(16000);
       expect(z.thinkingBudgetCap).toBe(16000);
       expect(z.contextWindow).toBe(200000);
-      expect(z.models?.find((m) => m.id === 'glm-5.2')).toEqual(expect.objectContaining({
-        id: 'glm-5.2',
-        displayName: 'GLM-5.2',
+      expect(z.models?.find((m) => m.id === 'glm-5.3')).toEqual(expect.objectContaining({
+        id: 'glm-5.3',
+        displayName: 'GLM-5.3',
         contextWindow: 1_000_000,
         maxOutputTokens: 131_072,
         reasoningCapability: 'native-effort',
         reasoningProfile: expect.objectContaining({
-          reasoningPreset: 'zai-glm-5.2',
+          reasoningPreset: 'zai-glm-5.3',
           effortStrategy: 'openai-chat-effort',
           defaultEffort: 'max',
         }),
       }));
-      // 2026-06: GLM-5 / GLM-5.1 retired (auto-routed to GLM-5.2 upstream);
-      // catalogue is now GLM-5.2 / GLM-5 Turbo / GLM-4.7, default GLM-5.2.
-      expect(z.model).toBe('glm-5.2');
-      expect(z.models?.map((m) => m.id)).toEqual(['glm-5.2', 'glm-5-turbo', 'glm-4.7']);
+      // 2026-08: historical GLM-5.2 / GLM-5.1 requests auto-route to GLM-5.3;
+      // the current catalogue is GLM-5.3 / GLM-5 Turbo / GLM-4.7.
+      expect(z.model).toBe('glm-5.3');
+      expect(z.models?.map((m) => m.id)).toEqual(['glm-5.3', 'glm-5-turbo', 'glm-4.7']);
       expect(z.models?.find((m) => m.id === 'glm-4.7')).toEqual(expect.objectContaining({
         id: 'glm-4.7',
         displayName: 'GLM-4.7',
