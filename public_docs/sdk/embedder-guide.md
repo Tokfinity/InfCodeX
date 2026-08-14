@@ -1530,8 +1530,8 @@ wire mechanism, not user-facing reasoning depth.
 > **v0.7.58 fix — per-model overrides on a provider's DEFAULT model.**
 > `resolveModelCapabilities(provider, model)` previously dropped a model's own
 > `contextWindow` / `maxOutputTokens` / `reasoningProfile` override when that
-> model happened to be the provider's default (e.g. `zhipu-coding` / `zai-coding`
-> default to `glm-5.2`, which declares a 1M window — the resolver returned the
+> model happened to be the provider's default (for v0.7.87,
+> `zhipu-coding/glm-5.3` and `zai-coding/glm-5.2` each declare a 1M window — the resolver returned the
 > 200K provider default). It now merges the `models[]` override regardless of
 > default-model status, so `resolveModelCapabilities` agrees with the runtime
 > `provider.getEffectiveContextWindow()` / `getEffectiveMaxOutputTokens()`.
@@ -1548,12 +1548,17 @@ rules AND any learned hard-rejections. `resolveWireEffort` (from
 import { resolveWireEffort } from '@kodax-ai/kodax/llm';
 
 const { effort, adjusted } = resolveWireEffort({
-  provider: 'zai-coding',
-  model: 'glm-5.2',
-  desiredEffort: 'low',   // GLM-5.2 aliases low → high
+  provider: 'zhipu-coding',
+  model: 'glm-5.3',
+  desiredEffort: 'minimal', // GLM-5.3 aliases minimal → low
 });
-// effort === 'high', adjusted === true
+// effort === 'low', adjusted === true
 ```
+
+GLM-5.2 keeps its independent mapping, including low → high. For GLM-5.3,
+none/minimal/light/low → low, medium/high → high, and xhigh/max/ultra → max.
+Because GLM-5.3 cannot disable thinking, a disabled or `none` intent is emitted
+as enabled low-effort thinking.
 
 `effort` is `undefined` when the model omits a wire effort (e.g. anthropic
 adaptive) — send no `reasoning_effort` in that case; do **not** substitute a
@@ -2683,7 +2688,8 @@ relaunch it before requiring the capability. The CLI's `kodax daemon stop
 --json` follows the same daemon-plus-supervisor boundary.
 
 The daemon-owned slice does not close the Worker-owned child lifetime gap in
-Issue 256; that owner-lease work remains open and is scheduled for v0.7.87. Worker and
+Issue 256; that owner-lease work remains open after v0.7.87, without a
+replacement target assigned by this release. Worker and
 executor cleanup still use identity-checked evidence and fail closed when a
 descendant cannot be proven gone.
 
@@ -2766,6 +2772,19 @@ exact resolved `KODAX_HOME`. Passing `os.homedir()` explicitly instead selects
 isolated embedder namespace, pass a private base directory and expect data at
 `<homeDir>/.kodax`. Passing `~/.kodax` as `homeDir` would instead select
 `~/.kodax/.kodax` and a different daemon namespace.
+
+### v0.7.87 GLM Coding Plan boundaries
+
+The built-in model catalog exposes both `glm-5.3` and `glm-5.2` for
+`zhipu-coding` and `zai-coding`. The China Coding Plan alias defaults to 5.3;
+the overseas alias defaults to 5.2 and keeps 5.3 as an explicit, entitlement-
+dependent selection. Capability metadata still records the 1M context locally,
+but the provider sends the model ID verbatim and never appends `[1m]`.
+
+GLM-5.3 is always-thinking. Hosts may continue to express a stable `off` /
+`none` intent; KodaX normalizes it to low effort. Anthropic-compatible requests
+use adaptive thinking plus `output_config.effort`, while OpenAI-compatible
+requests use enabled thinking plus `reasoning_effort`.
 
 ### Worker-hosted embedded usage
 

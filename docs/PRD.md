@@ -2,8 +2,8 @@
 
 > Last updated: 2026-08-14
 >
-> Current implementation baseline: `v0.7.86` release
-> (`@kodax-ai/kodax@0.7.86` workspace package; npm publication remains manual)
+> Current implementation baseline: `v0.7.87` release
+> (`@kodax-ai/kodax@0.7.87` workspace package; npm publication remains manual)
 >
 > This document describes the current product. Historical pre-v0.7.43
 > chain/harness designs have been removed from this current PRD because they no
@@ -28,8 +28,9 @@ On Windows, a daemon-backed Runtime now establishes kernel process containment
 before daemon application code runs. The daemon is placed in a kill-on-close Job
 Object, and shutdown is considered verified only after the durable cleanup
 outcome, daemon exit, and containment-supervisor exit are all observed. The
-broader Worker owner-lease boundary tracked by Issue 256 remains planned for
-v0.7.87; the v0.7.86 daemon, per-effect Job, ACL-owner, and termination-
+broader Worker owner-lease boundary tracked by Issue 256 remains open after
+v0.7.87, with no replacement target assigned by this release; the v0.7.86
+daemon, per-effect Job, ACL-owner, and termination-
 attestation boundaries do not claim to close
 that remaining Worker-owned descendant gap.
 
@@ -52,6 +53,12 @@ and fail-closed no-replay behavior when Shell effects are not proven drained.
 POSIX workspace admission initializes fresh `KODAX_HOME` policy roots before
 identity capture, keeps warm-up waits within the Shell abort/deadline, and
 retires an invalid cached session after lease-cleanup failure before replacement.
+
+The v0.7.87 provider baseline adds GLM-5.3 to both Zhipu Coding Plan aliases
+without inventing wire aliases. `zhipu-coding` defaults to `glm-5.3` and keeps
+`glm-5.2`; overseas `zai-coding` defaults to `glm-5.2` and keeps `glm-5.3` for
+accounts with access. Both model IDs are sent verbatim. Because GLM-5.3 cannot
+disable thinking, `off` / `none` is normalized to low effort.
 
 ## 2. Target Users
 

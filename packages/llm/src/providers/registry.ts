@@ -609,8 +609,8 @@ export function getProviderModelDescriptors(
   const snapshot = KODAX_PROVIDER_SNAPSHOTS[name as ProviderName];
   if (!snapshot) return [];
   // Default first, then alternatives. When the default model ALSO has an entry
-  // in models[] (e.g. zhipu-coding/zai-coding default to glm-5.3 and
-  // ark-coding defaults to glm-5.2, each with a 1M-window override), use that entry as the default
+  // in models[] (e.g. zhipu-coding defaults to glm-5.3, while zai-coding and
+  // ark-coding default to glm-5.2; each has a 1M-window override), use that entry as the default
   // descriptor and drop it from the alternatives — otherwise the default is
   // listed TWICE (once as a bare descriptor, once with its override) and a picker
   // UI shows a duplicate row with inconsistent metadata. Matches the custom-
@@ -640,8 +640,8 @@ export function getModelCapabilities(
   if (!snapshot) return undefined;
   // Prefer an explicit models[] entry FIRST, even when modelId is the provider's
   // default model: a provider's default can declare its own per-model overrides
-  // (e.g. zhipu-coding/zai-coding default to glm-5.3, while ark-coding defaults
-  // to glm-5.2; each carries a 1M context + 128-131K output override). Selecting the bare default descriptor
+  // (e.g. zhipu-coding defaults to glm-5.3, while zai-coding and ark-coding
+  // default to glm-5.2; each carries a 1M context + 128-131K output override). Selecting the bare default descriptor
   // ahead of that entry silently dropped those overrides — the "context window
   // shows 200K" bug. This mirrors base.ts getModelDescriptor precedence so
   // resolveModelCapabilities agrees with getEffectiveContextWindow/MaxOutputTokens.

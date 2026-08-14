@@ -24,7 +24,7 @@ import { getProvider } from '@kodax-ai/llm';
 
 ## 内置 Provider Alias
 
-Capability 数据的单一来源是 `src/providers/provider-capabilities.json`（当前更新时间：2026-08-01）。
+Capability 数据的单一来源是 `src/providers/provider-capabilities.json`（当前更新时间：2026-08-14）。
 
 | Alias | Environment variable | Reasoning | Default model |
 |---|---|---|---|
@@ -37,7 +37,7 @@ Capability 数据的单一来源是 `src/providers/provider-capabilities.json`�
 | `qwen-token-plan` | `QWEN_TOKEN_API_KEY` | Yes | `qwen3.8-max` |
 | `zhipu` | `ZHIPU_API_KEY` | Yes | `glm-5` |
 | `zhipu-coding` | `ZHIPU_CODING_API_KEY` | Yes | `glm-5.3` |
-| `zai-coding` | `ZAI_CODING_API_KEY` | Yes | `glm-5.3` |
+| `zai-coding` | `ZAI_CODING_API_KEY` | Yes | `glm-5.2` |
 | `minimax-coding` | `MINIMAX_CODING_API_KEY` | Yes | `MiniMax-M3` |
 | `mimo-coding` | `MIMO_CODING_API_KEY` | Yes | `mimo-v2.5-pro` |
 | `mimo` | `MIMO_API_KEY` | Yes | `mimo-v2.5-pro` |
@@ -53,7 +53,7 @@ Capability 数据的单一来源是 `src/providers/provider-capabilities.json`�
 - Kimi Code 默认使用官方 `k3-256k`（Moderato 及以上，262,144 token），并直接请求同名上游 Model ID；`/model` 仍可选择 `k3`（本地按 Allegretto+ 的 1,048,576 token tier 配置）、`kimi-for-coding`（K2.7 Code）与 `kimi-for-coding-highspeed`。K3 支持 `low` / `high` / `max` 三档思考强度，默认 `high`，也支持显式关闭；`k3-256k` 支持图片但不支持视频输入。
 - `kimi` 使用开放平台 `KIMI_API_KEY`；`kimi-code` 是独立的 Kimi For Coding 订阅端点和 `KIMI_CODE_API_KEY`，两类密钥不可互换。
 - DeepSeek 默认 `deepseek-v4-flash`，并提供 `deepseek-v4-pro`；两者均为 1M context、纯文本模型。Flash 保留 low/high/max 映射，Pro 使用 high/max 映射；cost tracker 分别使用当前基础价与 cache-read 价格。
-- Zhipu 开放平台保留可调用的 `glm-5` 默认路由，并预登记 `glm-5.3`（1M context, 131072 max output）；官方仍标注普通 API 即将上线。Zhipu Coding 和海外 `zai-coding` 均已默认 `glm-5.3`（Anthropic wire ID 为 `glm-5.3[1m]`），并保留 `glm-5-turbo` / `glm-4.7`；历史 GLM-5.2/5.1 请求由上游自动路由至 5.3。GLM-5.3 默认 `max` effort，`minimal/light/low → low`、`medium/high → high`、`xhigh/max/ultra → max`，关闭 thinking 会被上游转换为 `low`。
+- Zhipu 开放平台保留可调用的 `glm-5` 默认路由，并预登记 `glm-5.3`（1M context, 131072 max output）；官方仍标注普通 API 即将上线。`zhipu-coding` 默认 `glm-5.3` 并保留 `glm-5.2` 回退；海外 `zai-coding` 默认 `glm-5.2` 并保留 `glm-5.3` 供已获账号权限时选择。两个 Coding Plan alias 都原样发送 `glm-5.3` / `glm-5.2`，不附加 `[1m]`。GLM-5.3 默认 `max` effort，`none/minimal/light/low → low`、`medium/high → high`、`xhigh/max/ultra → max`；其 thinking 不可关闭，`off` / `none` 会降级为 `low`。
 - MiniMax Coding 默认 `MiniMax-M3`（Frontier Coding, native multimodal, 1M context），并保留 `MiniMax-M2.7` / `MiniMax-M2.7-highspeed` 供显式兼容选择；旧 M2.5/M2.1/M2 路由已移除。
 - Ark Coding 默认 `glm-5.2`（wire alias `glm-latest`）；同一 gateway 暴露 Kimi K2.7 Code/K2.6、MiniMax M3/M2.7、DeepSeek V4 Pro/Flash、Doubao Seed 2.0 Code/Pro/Lite 与 Doubao Seed Code。
 

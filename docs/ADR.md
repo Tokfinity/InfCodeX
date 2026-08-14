@@ -2,6 +2,15 @@
 
 > Last updated: 2026-08-14
 >
+> **v0.7.87 release addendum:** Coding Plan model IDs are transport facts, not
+> capacity annotations. `zhipu-coding` defaults to `glm-5.3` and keeps
+> `glm-5.2`; `zai-coding` defaults to `glm-5.2` and keeps `glm-5.3` for
+> accounts granted overseas access. Both IDs are sent verbatim, without
+> `[1m]`. GLM-5.3 cannot disable thinking, so stable `off` / `none` intent is
+> lowered to enabled low-effort thinking at the protocol boundary. Issue 256
+> remains open after v0.7.87, and this provider release assigns no replacement
+> target.
+>
 > **v0.7.86 release addendum:** Runtime owner recovery is atomic and
 > fail-closed: only a provably abandoned inline owner fence may be removed,
 > and Runtime/learning lock records carry process-start identity to prevent PID
@@ -13,8 +22,8 @@
 > identity capture, settles only workspace-local warm-up within the Shell
 > abort/deadline, and retires invalid cached sessions after lease-cleanup failure
 > before allowing replacement.
-> Issue 256 remains open; the Worker owner-lease portion is scheduled for
-> v0.7.87.
+> Issue 256 remains open; the Worker owner-lease portion was scheduled for
+> v0.7.87 in this historical release disposition.
 >
 > **v0.7.85 release addendum:** the Runtime event authority is now one
 > journal per Session, with `{ sessionId, journalEpoch, seq }` cursors and

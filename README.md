@@ -679,8 +679,20 @@ to normal permission execution; a command that started or may have started is
 never replayed. Runtime sandbox capability v3 fences upgrades from older daemon
 policy revisions. Issue
 256's remaining Worker owner-lease boundary
-stays open and is scheduled for v0.7.87. See the
+stays open and was scheduled for v0.7.87. See the
 [v0.7.86 release checklist](docs/release.md#v0786-release-preparation).
+
+**v0.7.87 GLM provider release:** `zhipu-coding` now defaults to `glm-5.3`
+and retains `glm-5.2` as an explicit rollback route. `zai-coding` retains both
+models but defaults to `glm-5.2`, because GLM-5.3 availability on the overseas
+Coding Plan is account-dependent. Both aliases send the upstream model IDs
+verbatim: `glm-5.3` and `glm-5.2`, without a context suffix. GLM-5.3 is an
+always-thinking model, so an `off` / `none` intent is lowered to `low` instead
+of sending an unsupported disabled-thinking request; REPL controls do not offer
+the impossible off rung and label a legacy saved choice as `off->low`. Issue 256's remaining
+Worker owner-lease boundary is not part of this provider release and remains
+open after v0.7.87; this release assigns no replacement target. See the
+[v0.7.87 release checklist](docs/release.md#v0787-release-preparation).
 
 The v0.7.77 release also adds an opt-in, host-configurable Shell Execution Contract.
 Runtime Session settings or an individual Run can select `pwsh`, Windows
@@ -1636,8 +1648,8 @@ await runInkInteractiveMode({ provider: 'zhipu-coding', effort: 'auto' });
 | qwen | `QWEN_API_KEY` | Native | qwen3.5-plus |
 | qwen-token-plan | `QWEN_TOKEN_API_KEY` | Native | qwen3.8-max (Anthropic-compat; legacy `qwen3.8-max-preview` plus `qwen3.7-max` / `qwen3.7-plus` / `qwen3.6-flash` / `glm-5.2` / `deepseek-v4-pro` via `/model`; all 1M context; image input on both Qwen 3.8 IDs / 3.7 Plus / 3.6 Flash) |
 | zhipu | `ZHIPU_API_KEY` | Native | glm-5 (`glm-5.3` / `glm-5.2` 1M ctx, plus `glm-5.1` / `glm-5-turbo` via `/model`; GLM-5.3 is pre-registered while the public API remains marked upcoming) |
-| zhipu-coding | `ZHIPU_CODING_API_KEY` | Native | glm-5.3 (1M ctx, 128K output; `glm-5-turbo` / `glm-4.7` via `/model`) |
-| zai-coding | `ZAI_CODING_API_KEY` | Native | glm-5.3 (Zhipu Coding Plan overseas mirror via `api.z.ai`, Anthropic-compat — same model lineup as `zhipu-coding`, served from outside CN) |
+| zhipu-coding | `ZHIPU_CODING_API_KEY` | Native | glm-5.3 (1M ctx, 128K output; `glm-5.2` rollback plus `glm-5-turbo` / `glm-4.7` via `/model`; raw upstream IDs) |
+| zai-coding | `ZAI_CODING_API_KEY` | Native | glm-5.2 (`glm-5.3` remains selectable when the overseas Coding Plan account has access; raw upstream IDs) |
 | minimax-coding | `MINIMAX_CODING_API_KEY` | Native | MiniMax-M3 (Frontier Coding, native multimodal + 1M ctx; legacy `MiniMax-M2.7` / `MiniMax-M2.7-highspeed` remain selectable via `/model`) |
 | mimo | `MIMO_API_KEY` | Native | mimo-v2.5-pro (Xiaomi MiMo pay-per-token, Anthropic-compat) |
 | mimo-coding | `MIMO_CODING_API_KEY` | Native | mimo-v2.5-pro (Xiaomi Token Plan, Anthropic-compat) |

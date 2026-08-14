@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-08-12_
+_Last Updated: 2026-08-14_
 
 ---
 
@@ -49,7 +49,7 @@ _Last Updated: 2026-08-12_
 | 259 | Medium | Resolved | REPL startup persists zero-message sessions before the first prompt | v0.7.72 Runtime REPL bridge | v0.7.79 development | 2026-08-02 | 2026-08-02 |
 | 258 | Medium | Resolved | TodoList content and labels can ignore the query and UI locale | v0.7.79 development | v0.7.79 development | 2026-08-01 | 2026-08-01 |
 | 257 | High | Resolved | Legacy compaction copies cannot be safely folded by hosts | legacy compaction/resume persistence | v0.7.79 development | 2026-08-01 | 2026-08-01 |
-| 256 | High | Open | Windows child containment cannot prove descendant closure after an intermediate parent exits | Windows LLM, MCP, daemon-startup, and Worker-owned child processes | v0.7.86 partial mitigation; v0.7.87 closure target | 2026-08-01 | - |
+| 256 | High | Open | Windows child containment cannot prove descendant closure after an intermediate parent exits | Windows LLM, MCP, daemon-startup, and Worker-owned child processes | v0.7.86 partial mitigation; post-v0.7.87 follow-up unassigned | 2026-08-01 | - |
 | 255 | High | Resolved | Runtime teardown and cancellation could report completion across indeterminate lifecycle boundaries | Runtime SDK lifecycle and daemon protocol | v0.7.79 development | 2026-08-01 | 2026-08-01 |
 | 254 | High | Resolved | First v0.7.78 Session reconciliation replays historical messages as new lineage entries | v0.7.78 lineage reconciliation | v0.7.79 development | 2026-07-31 | 2026-07-31 |
 | 253 | Medium | Resolved | Parallel quality-strategy admissions conflict on unrelated Actor progress | v0.7.77 quality-strategy admission | v0.7.79 development | 2026-07-31 | 2026-07-31 |
@@ -2603,7 +2603,7 @@ show duplicates or silently delete real user input.
 - **Priority**: High
 - **Status**: Open
 - **Introduced**: Windows LLM, MCP, daemon-startup, and Worker-owned child processes
-- **Fixed**: v0.7.86 (partial mitigation; remaining closure scheduled for v0.7.87)
+- **Fixed**: v0.7.86 partial mitigation; post-v0.7.87 follow-up unassigned
 - **Created**: 2026-08-01
 - **Resolved**: -
 
@@ -2703,7 +2703,14 @@ resolves Issue 291's abandoned-inline-owner recovery boundary.
 These slices narrow the observable and per-effect risks but do not add the
 host-issued Worker owner lease required to prove descendant closure after an
 intermediate parent exits. Issue 256 remains Open and its remaining closure
-work is scheduled for v0.7.87.
+work was scheduled for v0.7.87 in this release disposition.
+
+#### 2026-08-14 v0.7.87 release disposition
+
+The v0.7.87 release is limited to GLM provider compatibility and documentation.
+It does not add the host-issued Worker owner lease required for descendant
+closure. Issue 256 therefore remains Open after v0.7.87, and this release does
+not assign a replacement target.
 
 ### 255: Runtime teardown and cancellation could report completion across indeterminate lifecycle boundaries
 

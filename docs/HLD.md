@@ -2,8 +2,8 @@
 
 > Last updated: 2026-08-14
 >
-> Current published baseline: `v0.7.86`
-> (`@kodax-ai/kodax@0.7.86`; npm publication remains manual)
+> Current published baseline: `v0.7.87`
+> (`@kodax-ai/kodax@0.7.87`; npm publication remains manual)
 >
 > This HLD is intentionally current-state only. The old pre-v0.7.43
 > chain/harness model has been removed from this active design document because
@@ -188,9 +188,9 @@ metafile.
 Windows descendant cleanup is identity-checked and exposes observable
 uncertainty instead of bare-PID success. Its current Toolhelp/CIM snapshot model
 is still observation rather than containment: a descendant can become
- unreachable after an intermediate parent exits. Issue 256 is scheduled for
-v0.7.87, when the remaining host-issued Worker owner lease is targeted for the
-missing closure guarantee. The v0.7.86 daemon/per-effect Job and sandbox owner
+unreachable after an intermediate parent exits. Issue 256 remains open after
+v0.7.87; this provider release assigns no replacement target for the remaining
+host-issued Worker owner lease. The v0.7.86 daemon/per-effect Job and sandbox owner
 attestation slices narrow the risk but do not close that Worker-owned boundary.
 
 The same published worker preserves Sidecar terminal meaning end to end:
@@ -329,6 +329,13 @@ The separate `kimi-code` subscription alias defaults to the direct upstream
 `k3-256k` Model ID, retains `kimi-for-coding` for K2.7 Code, and offers a
 1,048,576-token `k3` tier. Both K3 routes use `thinking.effort` for reasoning
 intent, defaulting to `high`.
+
+The v0.7.87 Zhipu Coding Plan routes keep logical model capacity separate from
+the upstream model identifier. `zhipu-coding` defaults to `glm-5.3` and keeps
+`glm-5.2`; `zai-coding` defaults to `glm-5.2` and keeps `glm-5.3` for entitled
+accounts. The Anthropic-compatible wire receives those IDs verbatim, without a
+synthetic `[1m]` suffix. GLM-5.3's always-thinking contract lowers `off` /
+`none` to low effort at the provider boundary.
 
 Provider-specific logic belongs at the provider boundary: request shape,
 reasoning parameters, token caps, image support, forced tool choice support,

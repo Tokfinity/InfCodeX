@@ -69,6 +69,19 @@ describe('FEATURE_218 manual registry', () => {
     expect(content).toContain('defaults to high');
   });
 
+  it('documents the v0.7.87 GLM Coding Plan routes', () => {
+    const content = resolveKodaXManual({ topic: 'providers' }).content;
+
+    expect(content).toContain('`zhipu-coding` defaults to `glm-5.3`');
+    expect(content).toContain('`zai-coding` defaults to `glm-5.2`');
+    expect(content).toContain('keeps `glm-5.2`');
+    expect(content).toContain('keeps `glm-5.3`');
+    expect(content).toContain('sent verbatim');
+    expect(content).toContain('never append `[1m]`');
+    expect(content).toContain('cannot disable thinking');
+    expect(content).toContain('none/minimal/light/low');
+  });
+
   it('documents the v0.7.79 provider, A2A, Session, and Runtime contracts', () => {
     const providers = resolveKodaXManual({ topic: 'providers' }).content;
     const customProviders = resolveKodaXManual({ topic: 'custom-providers' }).content;
@@ -198,7 +211,7 @@ describe('FEATURE_218 manual registry', () => {
     expect(sdk).toContain('never replays the command');
     expect(sdk).toContain('initialize fresh KODAX_HOME policy roots');
     expect(sdk).toContain('lease-cleanup failure');
-    expect(sdk).toContain('scheduled for v0.7.87');
+    expect(sdk).toContain('remains open after v0.7.87');
   });
 
   it('documents the v0.7.78 evidence-gated background Skill learning boundary', () => {

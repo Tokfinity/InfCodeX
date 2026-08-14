@@ -15,7 +15,7 @@ dedicated environment variable — no key is ever stored in config files.
 | `qwen` | `QWEN_API_KEY` | Yes | `qwen3.5-plus` |
 | `qwen-token-plan` | `QWEN_TOKEN_API_KEY` | Yes | `qwen3.8-max` |
 | `zhipu` | `ZHIPU_API_KEY` | Yes | `glm-5` |
-| `zhipu-coding` | `ZHIPU_CODING_API_KEY` | Yes | `glm-5.2` |
+| `zhipu-coding` | `ZHIPU_CODING_API_KEY` | Yes | `glm-5.3` |
 | `zai-coding` | `ZAI_CODING_API_KEY` | Yes | `glm-5.2` |
 | `minimax-coding` | `MINIMAX_CODING_API_KEY` | Yes | `MiniMax-M3` |
 | `mimo-coding` | `MIMO_CODING_API_KEY` | Yes | `mimo-v2.5-pro` |
@@ -24,7 +24,19 @@ dedicated environment variable — no key is ever stored in config files.
 | `gemini-cli` | `GEMINI_API_KEY` | No | CLI bridge default |
 | `codex-cli` | `OPENAI_API_KEY` | No | CLI bridge default |
 
-> Model snapshot date: 2026-08-03. Run `kodax setup --help` for the latest list.
+> Model snapshot date: 2026-08-14. Run `kodax setup --help` for the latest list.
+
+## GLM Coding Plan routes
+
+`zhipu-coding` defaults to `glm-5.3` and keeps `glm-5.2` as an explicit
+rollback route. The overseas `zai-coding` alias defaults to `glm-5.2` and keeps
+`glm-5.3` selectable for accounts whose Coding Plan has received access.
+
+KodaX sends both upstream model IDs verbatim: `glm-5.3` and `glm-5.2`. Do not
+append `[1m]`; the context window belongs to local capability metadata, not the
+wire model name. GLM-5.3 cannot disable thinking, so `off` / `none` maps to
+`low`. Its complete stable-intent mapping is none/minimal/light/low → low,
+medium/high → high, and xhigh/max/ultra → max.
 
 ## Set an API key
 

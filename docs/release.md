@@ -81,6 +81,74 @@ version smoke is:
 dist/binary/linux-x64/kodax --version
 ```
 
+## v0.7.87 release preparation
+
+Release state: the root package, all four workspace packages, and every
+`package-lock.json` workspace entry must be version `0.7.87`. This release is
+prepared for the `v0.7.87` tag and GitHub Release; npm publication remains a
+separate manual operator step. It includes every commit after `v0.7.86`:
+
+- GLM-5.3 capability, cost, context, output, and reasoning metadata for the
+  public Zhipu and both Coding Plan aliases;
+- `zhipu-coding` defaults to `glm-5.3` while retaining `glm-5.2` as an explicit
+  rollback route;
+- `zai-coding` defaults to `glm-5.2` while retaining `glm-5.3` for accounts
+  granted overseas Coding Plan access;
+- Coding Plan sends `glm-5.3` / `glm-5.2` verbatim, removing the invalid
+  synthetic `[1m]` suffix;
+- GLM-5.3 maps none/minimal/light/low to low, medium/high to high, and
+  xhigh/max/ultra to max; `off` / `none` becomes enabled low-effort thinking
+  because the upstream model does not support disabling thought. REPL controls
+  hide the impossible off rung and report legacy saved intent as `off->low`;
+- synchronized README/README_CN, package guide, PRD/HLD/DD/ADR, feature and
+  issue records, public documentation, release checklist, feature-design
+  submodule, regression guide, and `kodax_manual` content.
+
+The provider registry, capability metadata, reasoning normalization, and
+Anthropic/OpenAI-compatible serializers are intentional `packages/llm` system-
+code changes, not test-only or release-process changes. Issue 256's remaining
+Worker owner-lease boundary is not included and remains Open after v0.7.87;
+this release assigns no replacement target.
+
+Before tagging, all of the following must be true:
+
+1. version metadata, changelog, README/README_CN, PRD/HLD/DD/ADR, feature
+   tracker, known-issue record, this checklist, public SDK/package guides,
+   `docs/features`, and `kodax_manual` agree on the v0.7.87 contract;
+2. focused provider tests prove both models remain selectable, exact wire IDs
+   contain no `[1m]` suffix, and GLM-5.3 off/none lowers to low for both
+   Anthropic- and OpenAI-compatible transports;
+3. minimal live probes confirm `zhipu-coding/glm-5.3`,
+   `zhipu-coding/glm-5.2`, and `zai-coding/glm-5.2`; a
+   `zai-coding/glm-5.3` 1220 response is recorded as account entitlement rather
+   than model-ID failure;
+4. both the root repository and `docs/features` submodule are clean, and the
+   parent points to a submodule commit reachable from its remote;
+5. the exact release commit passes the deterministic gate:
+
+   ```bash
+   npm ci
+   npm run config:templates:check
+   npm run build:packages
+   npm run build:bundle
+   npm run build:dts
+   npm run test:full
+   npm run test:electron-daemon:built
+   node scripts/release.mjs --pack-only
+   ```
+
+6. the exact `kodax-ai-kodax-0.7.87.tgz` is hashed, inspected, and installed
+   into an empty consumer that imports the root plus all 12 SDK subpaths;
+7. the human checks in
+   `docs/test-guides/ISSUE_GLM53_v0.7.87_REGRESSION_GUIDE.md` pass;
+8. GitHub `CI` is green for the exact commit on Node 20/22, Unix Runtime
+   socket, Windows Shell Contract, and packaged Electron jobs;
+9. the tag-triggered release workflow is green and the GitHub Release contains
+   all five archives, their five `.sha256` files, and `SHA256SUMS`. npm
+   publication is left to the maintainer.
+
+Only after these gates pass may the exact commit be tagged `v0.7.87`.
+
 ## v0.7.86 release preparation
 
 Release state: the root package, all four workspace packages, and every

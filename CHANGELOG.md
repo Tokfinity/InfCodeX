@@ -6,15 +6,37 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+---
+
+## [0.7.87] - 2026-08-14
+
+> Git tag and GitHub Release are created by the release workflow. npm
+> publication remains a separate manual operator step.
+
 ### Changed
 
-- `zhipu-coding` and `zai-coding` now default to GLM-5.3 with its 1M context,
-  128K output, `glm-5.3[1m]` Anthropic wire ID, and low/high/max effort mapping.
-  The `zhipu` public provider advertises the same model metadata without
-  promoting it while the ordinary
-  BigModel API remains marked as upcoming. GLM-5.3 Anthropic-compatible calls
-  use `thinking.type` plus `output_config.effort`; OpenAI-compatible calls use
-  `thinking.type` plus `reasoning_effort`.
+- `zhipu-coding` now defaults to GLM-5.3 with its 1M context and 128K output,
+  while retaining GLM-5.2 as an explicit rollback route. `zai-coding` retains
+  both models but defaults to GLM-5.2 until the overseas account/plan rollout
+  grants GLM-5.3 access. The ordinary `zhipu` provider pre-registers the same
+  GLM-5.3 metadata without promoting it while the public pay-per-token API is
+  still marked as upcoming.
+- GLM-5.3 exposes the upstream low/high/max effort contract: none, minimal,
+  light, and low lower to `low`; medium/high lower to `high`; xhigh/max/ultra
+  lower to `max`. Anthropic-compatible calls use adaptive thinking plus
+  `output_config.effort`; OpenAI-compatible calls use enabled thinking plus
+  `reasoning_effort`.
+
+### Fixed
+
+- Zhipu Coding Plan model IDs are sent verbatim (`glm-5.3` / `glm-5.2`). The
+  invalid `[1m]` suffix previously caused upstream `1214 modelCode does not
+  exist` failures even though the logical model was available.
+- GLM-5.3 `off` / `none` no longer sends the unsupported disabled-thinking
+  shape. It lowers to enabled low-effort thinking, matching the always-thinking
+  upstream contract and preventing `1210` request failures.
+- REPL effort controls no longer offer an impossible `off` rung for GLM-5.3;
+  legacy saved `off` intent is classified and displayed as `off->low`.
 
 ---
 

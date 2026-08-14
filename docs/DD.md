@@ -2,8 +2,8 @@
 
 > Last updated: 2026-08-14
 >
-> Current published baseline: `v0.7.86`
-> (`@kodax-ai/kodax@0.7.86`; npm publication remains manual)
+> Current published baseline: `v0.7.87`
+> (`@kodax-ai/kodax@0.7.87`; npm publication remains manual)
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -20,7 +20,7 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The published package is `@kodax-ai/kodax@0.7.86`. The v0.7.85 release
+The published package is `@kodax-ai/kodax@0.7.87`. The v0.7.85 release
 established
 controller-wide bounded Actor progress
 persistence, queue-aware terminal deadlines, root fail-closed fencing, and
@@ -42,7 +42,8 @@ durable cleanup outcome, while the `daemonShutdownVerification:1` capability
 lets hosts require it. Legacy daemons are deliberately not upgraded in place
 for this contract. The patch retains v0.7.82's causality and input-admission
 contracts; FEATURE_287 remains planned for v0.7.93 and the Worker owner-lease
-portion of Issue 256 remains open and is scheduled for v0.7.87.
+portion of Issue 256 remains open after v0.7.87 without a replacement target
+assigned by this release.
 
 The v0.7.86 hardening adds atomic abandoned-inline-owner recovery, process-start
 identity records for Runtime and learning locks, and a Windows sandbox owner
@@ -395,6 +396,16 @@ serializers carry K3 reasoning through `thinking.effort`, default omitted
 effort to `high`, and preserve explicit disable semantics. Media capability
 metadata keeps `k3-256k` image-capable and video-unsupported. Public Kimi and
 Kimi For Coding credentials remain separate.
+
+For the Zhipu Coding Plan aliases, `provider-capabilities.json` defines both
+`glm-5.3` and `glm-5.2` as 1M-context routes. `zhipu-coding` defaults to 5.3;
+`zai-coding` defaults to 5.2 and exposes 5.3 only as an explicit selection
+because overseas rollout is account-dependent. `registry.ts` sends the chosen
+ID verbatim. The GLM-5.3 reasoning preset maps none/minimal/light/low to low,
+medium/high to high, and xhigh/max/ultra to max. Its Anthropic-compatible
+serializer emits adaptive thinking plus `output_config.effort`; an attempted
+disable is normalized to low because this model does not support disabled
+thinking.
 
 OpenAI-compatible provider configuration carries
 `maxOutputTokensField: 'max_tokens' | 'max_completion_tokens'`. A model
