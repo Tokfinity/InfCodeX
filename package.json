@@ -8,7 +8,7 @@
     "access": "public"
   },
   "kodaxRuntimeContracts": {
-    "actorSettlementConvergence": 1,
+    "actorSettlementConvergence": 2,
     "daemonShutdownVerification": 1,
     "integrationConfigResilience": 1,
     "managedRunDurability": 1,

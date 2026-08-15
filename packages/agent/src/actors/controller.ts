@@ -13,6 +13,8 @@ import type {
   AgentActorClient,
   AgentActorOwner,
   AgentArtifactDescriptor,
+  AgentActorSaveAttempt,
+  AgentActorSavePhase,
   AgentActorSnapshot,
   AgentActorStore,
   AgentBudgetPort,
@@ -66,6 +68,16 @@ class AgentSettlementAttemptExpiredError extends Error {
   constructor() {
     super('Actor settlement persistence finished after its deadline.');
     this.name = 'AgentSettlementAttemptExpiredError';
+  }
+}
+
+class AgentSettlementBlockingSaveError extends Error {
+  constructor(
+    readonly attempt: AgentActorSaveAttempt,
+    readonly persistenceCause: unknown,
+  ) {
+    super('An earlier Actor mutation did not reach a canonical result.');
+    this.name = 'AgentSettlementBlockingSaveError';
   }
 }
 
@@ -130,11 +142,25 @@ interface UnknownQuiesceIntent {
   readonly reason: string;
 }
 
+interface UnknownSettlementReconciliation {
+  readonly queueDrained: Promise<void>;
+  readonly completion: Promise<void>;
+}
+
 interface StartPlan {
   readonly actor: AgentActor;
   readonly turn: AgentTurn;
   readonly createdActor: boolean;
   readonly abortController: AbortController;
+}
+
+interface ActorMutationPersistenceOptions {
+  readonly allowOwnershipClaim?: boolean;
+  readonly commitStillValid?: () => boolean;
+  readonly allowWhileClosing?: boolean;
+  readonly onMutationReady?: () => void;
+  readonly onSaveAttempt?: (attempt: AgentActorSaveAttempt) => void;
+  readonly returnAtCanonical?: boolean;
 }
 
 const UNLIMITED_BUDGET: AgentBudgetPort = {
@@ -162,6 +188,10 @@ export class AgentActorController {
   private readonly now: () => string;
   private readonly admissionScope = Object.freeze({});
   private mutationTail: Promise<void> = Promise.resolve();
+  private activeMutationSaveAttempt?: AgentActorSaveAttempt;
+  private readonly mutationSaveAttemptWaiters = new Set<
+    (attempt: AgentActorSaveAttempt) => void
+  >();
   private activeProgress?: ReadonlyMap<string, PendingProgress>;
   private progressMutation?: Promise<void>;
   private progressDrainScheduled = false;
@@ -174,7 +204,7 @@ export class AgentActorController {
   private settlementPersistenceUnknown = false;
   private readonly pendingSettlementIntents = new Map<string, UnknownSettlementIntent>();
   private unknownQuiesceIntent?: UnknownQuiesceIntent;
-  private unknownSettlementReconciliation?: Promise<void>;
+  private unknownSettlementReconciliation?: UnknownSettlementReconciliation;
   private ownershipReleased = false;
   private closing = false;
   private settlementGeneration = 0;
@@ -646,10 +676,10 @@ export class AgentActorController {
           return changed;
         },
         (changed) => changed,
-        false,
-        () => attempt.active,
-        false,
-        () => markMutationReady?.(),
+        {
+          commitStillValid: () => attempt.active,
+          onMutationReady: () => markMutationReady?.(),
+        },
       );
       // mutate() may fail its initial owner assertion before onMutationReady runs. Attach a
       // rejection observer immediately so the bounded readiness wait cannot surface a delayed
@@ -744,7 +774,10 @@ export class AgentActorController {
         if (this.options.owner) {
           this.durableOwner = undefined;
         }
-      }, () => true, false, () => attempt.active, true),
+      }, () => true, {
+        commitStillValid: () => attempt.active,
+        allowWhileClosing: true,
+      }),
         Date.now() + SETTLEMENT_SHUTDOWN_TIMEOUT_MS,
       );
       this.ownershipReleased = true;
@@ -1079,42 +1112,82 @@ export class AgentActorController {
       && validityGeneration === this.settlementValidityGeneration
     ) {
       const attempt = { active: true };
+      let currentSaveAttempt: AgentActorSaveAttempt | undefined;
+      let mutation: Promise<boolean> | undefined;
       try {
         let markMutationReady: (() => void) | undefined;
         const mutationReady = new Promise<void>((resolve) => {
           markMutationReady = resolve;
         });
-        const mutation = this.mutate(
+        let markSaveAttemptReady: ((saveAttempt: AgentActorSaveAttempt) => void) | undefined;
+        const saveAttemptReady = new Promise<AgentActorSaveAttempt>((resolve) => {
+          markSaveAttemptReady = resolve;
+        });
+        mutation = this.mutate(
           () => this.applySettlementIntent(settlementIntent),
           (changed) => changed,
-          false,
-          () => (
-            attempt.active
-            && validityGeneration === this.settlementValidityGeneration
-          ),
-          true,
-          () => markMutationReady?.(),
+          {
+            commitStillValid: () => (
+              attempt.active
+              && validityGeneration === this.settlementValidityGeneration
+            ),
+            allowWhileClosing: true,
+            onMutationReady: () => markMutationReady?.(),
+            onSaveAttempt: (saveAttempt) => markSaveAttemptReady?.(saveAttempt),
+            returnAtCanonical: true,
+          },
         );
         void mutation.catch(() => undefined);
         const queueWaitStartedAt = Date.now();
-        try {
+        if (this.options.store?.beginSave) {
+          try {
+            await this.waitForPhaseAwareMutationHead(mutationReady, mutation);
+          } catch (error: unknown) {
+            await Promise.resolve();
+            if (
+              error instanceof AgentSettlementBlockingSaveError
+              && error.attempt.phase() === 'committed'
+            ) {
+              await mutationReady;
+            } else {
+              throw error;
+            }
+          }
+        } else {
           await raceSettlementAttempt(
             mutationReady,
             Date.now() + SETTLEMENT_QUEUE_WAIT_DEADLINE_MS,
           );
-        } catch (error: unknown) {
-          throw error;
         }
-        const mutationReadyAt = Date.now();
-        if (deadline !== undefined) {
-          deadline += Math.max(0, mutationReadyAt - queueWaitStartedAt);
+        const saveAttempt = await Promise.race([
+          saveAttemptReady.then((value) => ({ kind: 'attempt' as const, value })),
+          mutation.then(() => ({ kind: 'settled' as const })),
+        ]);
+        if (saveAttempt.kind === 'attempt') {
+          currentSaveAttempt = saveAttempt.value;
+          if (this.options.store?.beginSave) {
+            try {
+              await this.waitForPhaseAwareSaveAttemptCanonical(
+                saveAttempt.value,
+                this.options.store.eligibilityTimeoutMs
+                  ?? SETTLEMENT_QUEUE_WAIT_DEADLINE_MS,
+              );
+            } catch (error: unknown) {
+              if (saveAttempt.value.phase() === 'not_committed') await mutation;
+              throw error;
+            }
+          }
+        }
+        if (this.options.store?.beginSave) {
+          await mutation;
         } else {
-          deadline = mutationReadyAt + SETTLEMENT_RETRY_DEADLINE_MS;
+          if (deadline === undefined) {
+            deadline = Date.now() + SETTLEMENT_RETRY_DEADLINE_MS;
+          } else {
+            deadline += Math.max(0, Date.now() - queueWaitStartedAt);
+          }
+          await raceSettlementAttempt(mutation, deadline);
         }
-        await raceSettlementAttempt(
-          mutation,
-          deadline,
-        );
         this.settlementRecoveryMessages.delete(turnId);
         if (this.pendingSettlementIntents.get(turnId) === settlementIntent) {
           this.pendingSettlementIntents.delete(turnId);
@@ -1124,7 +1197,29 @@ export class AgentActorController {
           this.publishSettlementHealth();
         }
         return;
-      } catch (error) {
+      } catch (caughtError) {
+        const blockingSaveFailure = caughtError instanceof AgentSettlementBlockingSaveError;
+        const error = caughtError instanceof AgentSettlementBlockingSaveError
+          ? caughtError.persistenceCause
+          : caughtError;
+        if (blockingSaveFailure) {
+          currentSaveAttempt = caughtError.attempt;
+        }
+        if (
+          !blockingSaveFailure
+          && this.options.store?.beginSave !== undefined
+          && currentSaveAttempt?.phase() === 'committed'
+          && mutation !== undefined
+        ) {
+          await mutation;
+          this.settlementRecoveryMessages.delete(turnId);
+          if (this.pendingSettlementIntents.get(turnId) === settlementIntent) {
+            this.pendingSettlementIntents.delete(turnId);
+          }
+          this.scheduleProgressDrain();
+          if (this.health.state !== 'unknown') this.publishSettlementHealth();
+          return;
+        }
         attempt.active = false;
         if (
           error instanceof AgentOwnerConflictError
@@ -1153,13 +1248,30 @@ export class AgentActorController {
           error instanceof Error ? error.message : String(error),
         );
         this.publishSettlementHealth();
-        if (
+        const deadlineExpired = (
           error instanceof AgentSettlementAttemptTimeoutError
           || (deadline !== undefined && Date.now() >= deadline)
-        ) {
+        );
+        const cancelledBeforeCommit = deadlineExpired
+          && currentSaveAttempt?.cancelBeforeCommit() === true;
+        const definitelyNotCommitted = this.options.store?.beginSave !== undefined
+          && currentSaveAttempt?.phase() === 'not_committed';
+        if (cancelledBeforeCommit || definitelyNotCommitted) {
+          await currentSaveAttempt?.completion.catch(() => undefined);
+          await mutation?.catch(() => undefined);
+          deadline = undefined;
+          await waitForSettlementRetry(retryMs);
+          retryMs = Math.min(retryMs * 2, MAX_SETTLEMENT_RETRY_MS);
+          continue;
+        }
+        const ambiguousCommit = this.options.store?.beginSave !== undefined
+          && currentSaveAttempt?.phase() === 'commit_inflight';
+        const legacyDeadlineExpired = deadlineExpired
+          && this.options.store?.beginSave === undefined;
+        if (legacyDeadlineExpired || ambiguousCommit) {
           const persistenceError = new AgentSettlementPersistenceError(
             turnId,
-            error,
+            settlementPersistenceCause(error, currentSaveAttempt),
           );
           this.indeterminateFailure = persistenceError;
           this.fenceUnknownSettlement();
@@ -1662,24 +1774,42 @@ export class AgentActorController {
   private async mutate<T>(
     operation: () => T | Promise<T>,
     shouldCommit: (result: T) => boolean = () => true,
-    allowOwnershipClaim = false,
-    commitStillValid?: () => boolean,
-    allowWhileClosing = false,
-    onMutationReady?: () => void,
+    persistence: ActorMutationPersistenceOptions = {},
   ): Promise<T> {
+    const {
+      allowOwnershipClaim = false,
+      commitStillValid,
+      allowWhileClosing = false,
+      onMutationReady,
+      onSaveAttempt,
+      returnAtCanonical = false,
+    } = persistence;
     if (!allowOwnershipClaim) this.assertWritableOwner();
     if (this.closing && !allowWhileClosing) {
       throw new AgentControlError('actor_closed', 'Actor controller is shutting down.');
     }
     const previousTail = this.mutationTail;
     let release: () => void = () => {};
+    let released = false;
+    let activeSaveAttempt: AgentActorSaveAttempt | undefined;
+    const releaseMutationTail = (): void => {
+      if (released) return;
+      released = true;
+      if (activeSaveAttempt !== undefined) {
+        this.clearActiveMutationSaveAttempt(activeSaveAttempt);
+      }
+      release();
+    };
     this.mutationTail = new Promise<void>((resolve) => { release = resolve; });
     await previousTail;
-    onMutationReady?.();
     const before = this.snapshot();
     const beforeAborts = new Map(this.abortControllers);
     const priorEventSequence = this.eventsLog.at(-1)?.sequence ?? 0;
     try {
+      onMutationReady?.();
+      if (commitStillValid?.() === false) {
+        throw new AgentSettlementAttemptExpiredError();
+      }
       if (!allowOwnershipClaim) this.assertWritableOwner();
       if (this.closing && !allowWhileClosing) {
         throw new AgentControlError('actor_closed', 'Actor controller is shutting down.');
@@ -1696,7 +1826,20 @@ export class AgentActorController {
       const expectedRevision = this.revision;
       this.revision += 1;
       const attemptedSnapshot = this.snapshot();
-      await this.options.store?.save(attemptedSnapshot, expectedRevision);
+      const saveAttempt = beginActorSaveAttempt(
+        this.options.store,
+        attemptedSnapshot,
+        expectedRevision,
+      );
+      activeSaveAttempt = saveAttempt;
+      this.setActiveMutationSaveAttempt(saveAttempt);
+      onSaveAttempt?.(saveAttempt);
+      void saveAttempt.completion.catch((error: unknown) => {
+        if (saveAttempt.phase() === 'committed') {
+          this.reportBackgroundError(actorSaveMaintenanceError(error, saveAttempt));
+        }
+      });
+      await saveAttempt.canonical;
       if (commitStillValid?.() === false) {
         throw new AgentSettlementAttemptExpiredError();
       }
@@ -1706,6 +1849,10 @@ export class AgentActorController {
       }
       for (const event of this.eventsLog) {
         if (event.sequence > priorEventSequence) this.publishCommittedEvent(event);
+      }
+      releaseMutationTail();
+      if (!returnAtCanonical) {
+        await saveAttempt.completion.catch(() => undefined);
       }
       return result;
     } catch (error) {
@@ -1721,7 +1868,138 @@ export class AgentActorController {
       replaceMap(this.abortControllers, [...beforeAborts.entries()]);
       throw error;
     } finally {
-      release();
+      releaseMutationTail();
+    }
+  }
+
+  private setActiveMutationSaveAttempt(attempt: AgentActorSaveAttempt): void {
+    this.activeMutationSaveAttempt = attempt;
+    for (const waiter of this.mutationSaveAttemptWaiters) waiter(attempt);
+    this.mutationSaveAttemptWaiters.clear();
+  }
+
+  private clearActiveMutationSaveAttempt(attempt: AgentActorSaveAttempt): void {
+    if (this.activeMutationSaveAttempt === attempt) {
+      this.activeMutationSaveAttempt = undefined;
+    }
+  }
+
+  private waitForActiveMutationSaveAttempt(): {
+    readonly promise: Promise<AgentActorSaveAttempt>;
+    cancel(): void;
+  } {
+    if (this.activeMutationSaveAttempt !== undefined) {
+      return {
+        promise: Promise.resolve(this.activeMutationSaveAttempt),
+        cancel() {},
+      };
+    }
+    let waiter: ((attempt: AgentActorSaveAttempt) => void) | undefined;
+    const promise = new Promise<AgentActorSaveAttempt>((resolve) => {
+      waiter = resolve;
+      this.mutationSaveAttemptWaiters.add(resolve);
+    });
+    return {
+      promise,
+      cancel: () => {
+        if (waiter !== undefined) this.mutationSaveAttemptWaiters.delete(waiter);
+      },
+    };
+  }
+
+  private async waitForPhaseAwareMutationHead(
+    mutationReady: Promise<void>,
+    mutation: Promise<unknown>,
+  ): Promise<void> {
+    const headReady = Promise.race([
+      mutationReady,
+      mutation.then(() => undefined),
+    ]);
+    while (true) {
+      const observed = this.waitForActiveMutationSaveAttempt();
+      const blockingAttempt = await Promise.race([
+        headReady.then(() => undefined),
+        observed.promise,
+      ]).finally(() => observed.cancel());
+      if (blockingAttempt === undefined) return;
+      try {
+        const dequeued = await Promise.race([
+          headReady.then(() => false),
+          blockingAttempt.dequeued.then(() => true),
+        ]);
+        if (!dequeued) return;
+        const eligible = await Promise.race([
+          headReady.then(() => false),
+          raceSettlementAttempt(
+            blockingAttempt.eligible,
+            Date.now() + (
+              this.options.store?.eligibilityTimeoutMs
+              ?? SETTLEMENT_QUEUE_WAIT_DEADLINE_MS
+            ),
+          ).then(() => true),
+        ]);
+        if (!eligible) return;
+        const canonical = await Promise.race([
+          headReady.then(() => false),
+          raceSettlementAttempt(
+            blockingAttempt.canonical,
+            Date.now() + SETTLEMENT_RETRY_DEADLINE_MS,
+          ).then(() => true),
+        ]);
+        if (!canonical) return;
+        await headReady;
+        return;
+      } catch (error: unknown) {
+        await Promise.resolve();
+        if (blockingAttempt.phase() === 'committed') {
+          await headReady;
+          return;
+        }
+        const cancelled = error instanceof AgentSettlementAttemptTimeoutError
+          && blockingAttempt.cancelBeforeCommit();
+        await Promise.resolve();
+        if (blockingAttempt.phase() === 'committed') {
+          await headReady;
+          return;
+        }
+        if (cancelled || blockingAttempt.phase() === 'not_committed') {
+          await blockingAttempt.completion.catch(() => undefined);
+          continue;
+        }
+        throw new AgentSettlementBlockingSaveError(blockingAttempt, error);
+      }
+    }
+  }
+
+  private async waitForPhaseAwareSaveAttemptCanonical(
+    attempt: AgentActorSaveAttempt,
+    eligibilityTimeoutMs: number,
+  ): Promise<void> {
+    try {
+      await attempt.dequeued;
+      await raceSettlementAttempt(
+        attempt.eligible,
+        Date.now() + eligibilityTimeoutMs,
+      );
+      await raceSettlementAttempt(
+        attempt.canonical,
+        Date.now() + SETTLEMENT_RETRY_DEADLINE_MS,
+      );
+      return;
+    } catch (error: unknown) {
+      await Promise.resolve();
+      if (attempt.phase() === 'committed') return;
+      const cancelled = attempt.cancelBeforeCommit();
+      await Promise.resolve();
+      if (attempt.phase() === 'committed') return;
+      if (cancelled || attempt.phase() === 'not_committed') {
+        await attempt.completion.catch(() => undefined);
+        throw error;
+      }
+      if (attempt.phase() === 'commit_inflight') {
+        throw settlementPersistenceCause(error, attempt);
+      }
+      throw error;
     }
   }
 
@@ -1816,7 +2094,7 @@ export class AgentActorController {
     await this.mutate(() => {
       this.snapshotSchemaVersion = 2;
       this.durableOwner = desired;
-    }, () => true, true);
+    }, () => true, { allowOwnershipClaim: true });
     return true;
   }
 
@@ -1876,18 +2154,43 @@ export class AgentActorController {
   private async reconcileUnknownSettlement(reason: string): Promise<void> {
     let reconciliation = this.unknownSettlementReconciliation;
     if (reconciliation === undefined) {
-      reconciliation = this.performUnknownSettlementReconciliation(reason);
+      let markQueueDrained: (() => void) | undefined;
+      const queueDrained = new Promise<void>((resolve) => {
+        markQueueDrained = resolve;
+      });
+      const completion = this.performUnknownSettlementReconciliation(
+        reason,
+        () => markQueueDrained?.(),
+      );
+      reconciliation = { queueDrained, completion };
       this.unknownSettlementReconciliation = reconciliation;
-      void reconciliation.catch(() => {
+      void completion.catch(() => {
         if (this.unknownSettlementReconciliation === reconciliation) {
           this.unknownSettlementReconciliation = undefined;
         }
       });
     }
-    await raceSettlementAttempt(reconciliation, Date.now() + SETTLEMENT_RETRY_DEADLINE_MS);
+    if (this.options.store?.beginSave) {
+      await raceSettlementAttempt(
+        Promise.race([
+          reconciliation.queueDrained,
+          reconciliation.completion,
+        ]),
+        Date.now() + SETTLEMENT_RETRY_DEADLINE_MS,
+      );
+      await reconciliation.completion;
+      return;
+    }
+    await raceSettlementAttempt(
+      reconciliation.completion,
+      Date.now() + SETTLEMENT_RETRY_DEADLINE_MS,
+    );
   }
 
-  private async performUnknownSettlementReconciliation(reason: string): Promise<void> {
+  private async performUnknownSettlementReconciliation(
+    reason: string,
+    onQueueDrained: () => void,
+  ): Promise<void> {
     const store = this.options.store;
     if (!store) {
       throw new Error('Actor settlement cannot be reconciled without a durable store.');
@@ -1902,6 +2205,7 @@ export class AgentActorController {
     // A timed-out mutation cannot be cancelled. Wait for the sealed queue once,
     // then merge the typed terminal fact onto the exact same-owner snapshot.
     await this.mutationTail;
+    onQueueDrained();
     const latest = await store.load();
     if (!latest) {
       throw new Error('Actor settlement cannot be reconciled because its snapshot is missing.');
@@ -1945,7 +2249,20 @@ export class AgentActorController {
         }
         const expectedRevision = this.revision;
         this.revision += 1;
-        await store.save(this.snapshot(), expectedRevision);
+        const repairAttempt = beginActorSaveAttempt(
+          store,
+          this.snapshot(),
+          expectedRevision,
+        );
+        void repairAttempt.completion.catch((error: unknown) => {
+          if (repairAttempt.phase() === 'committed') {
+            this.reportBackgroundError(actorSaveMaintenanceError(error, repairAttempt));
+          }
+        });
+        await this.waitForPhaseAwareSaveAttemptCanonical(
+          repairAttempt,
+          store.eligibilityTimeoutMs ?? SETTLEMENT_QUEUE_WAIT_DEADLINE_MS,
+        );
       }
       const verified = await store.load();
       if (!verified) {
@@ -2285,12 +2602,88 @@ function moreRestrictedClassification(
   return rank[source] > rank[requested] ? source : requested;
 }
 
+function beginActorSaveAttempt(
+  store: AgentActorStore | undefined,
+  snapshot: AgentActorSnapshot,
+  expectedRevision: number,
+): AgentActorSaveAttempt {
+  if (!store) {
+    return {
+      dequeued: Promise.resolve(),
+      eligible: Promise.resolve(),
+      canonical: Promise.resolve(),
+      completion: Promise.resolve(),
+      phase: () => 'committed',
+      cancelBeforeCommit: () => false,
+      diagnostics: () => ({ attemptId: 'memory', phase: 'committed', timingsMs: {} }),
+    };
+  }
+  if (store.beginSave) return store.beginSave(snapshot, expectedRevision);
+
+  let phase: AgentActorSavePhase = 'commit_inflight';
+  const canonical = Promise.resolve()
+    .then(() => store.save(snapshot, expectedRevision))
+    .then(() => { phase = 'committed'; });
+  return {
+    dequeued: Promise.resolve(),
+    eligible: Promise.resolve(),
+    canonical,
+    completion: canonical,
+    phase: () => phase,
+    cancelBeforeCommit: () => false,
+    diagnostics: () => ({
+      attemptId: `legacy-${expectedRevision + 1}`,
+      phase,
+      timingsMs: {},
+    }),
+  };
+}
+
 function waitForSettlementRetry(delayMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 function normalizeControllerError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
+}
+
+function settlementPersistenceCause(
+  error: unknown,
+  attempt: AgentActorSaveAttempt | undefined,
+): Error {
+  if (!attempt) return normalizeControllerError(error);
+  const diagnostics = attempt.diagnostics();
+  return Object.assign(
+    new Error(
+      `${errorMessage(error)} Actor store attempt ${diagnostics.attemptId} `
+      + `stopped in ${diagnostics.phase}`
+      + `${diagnostics.failedStage ? ` at ${diagnostics.failedStage}` : ''}; `
+      + `${diagnostics.activeStageElapsedMs === undefined
+        ? ''
+        : `activeStageElapsedMs=${diagnostics.activeStageElapsedMs}; `}`
+      + `canonical=${diagnostics.canonicalOutcome ?? diagnostics.phase}; `
+      + `completion=${diagnostics.completionOutcome ?? 'unknown'}; `
+      + `timingsMs=${JSON.stringify(diagnostics.timingsMs)}.`,
+    ),
+    { cause: error },
+  );
+}
+
+function actorSaveMaintenanceError(
+  error: unknown,
+  attempt: AgentActorSaveAttempt,
+): Error {
+  const diagnostics = attempt.diagnostics();
+  return Object.assign(
+    new Error(
+      `${errorMessage(error)} Actor store attempt ${diagnostics.attemptId} committed; `
+      + `post-commit maintenance failed at ${diagnostics.failedStage ?? 'unknown'}; `
+      + `canonical=${diagnostics.canonicalOutcome ?? diagnostics.phase}; `
+      + `completion=${diagnostics.completionOutcome ?? 'failed'}; `
+      + `timingsMs=${JSON.stringify(diagnostics.timingsMs)}.`,
+    ),
+    { cause: error },
+  );
 }
 
 function raceSettlementAttempt<T>(

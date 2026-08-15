@@ -6,6 +6,25 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Issue 292: Actor snapshot persistence now separates Actor mutation order,
+  process-local storage dequeue, writer eligibility, cancellable pre-commit
+  work, the canonical file replacement, and serialized post-commit maintenance.
+  Legal local queue and Session writer waits no longer consume the
+  five-second canonical-commit deadline; pre-commit timeouts cannot write late,
+  rename-in-flight timeouts remain fail-closed, explicit rename errors use
+  authoritative JSON-persisted-shape snapshot readback, and cache/watermark maintenance
+  failures after a successful replacement no longer roll back terminal Actor
+  state. Per-attempt phase timings identify storage queue, file lock, read/CAS,
+  lineage, topology admission/epoch maintenance, temp write, fsync, rename, and
+  post-commit delay without overlapping the nested Session-file stages. Terminal
+  settlement now monitors a predecessor stuck in canonical replacement, and
+  same-owner repair uses the same phased contract instead of a monolithic save.
+- Runtime capability negotiation now exposes `actorSettlementConvergence:2`.
+  New SDK clients replace older v1 daemons, while v2 daemons continue to satisfy
+  clients that require the v1 contract.
+
 ---
 
 ## [0.7.87] - 2026-08-14

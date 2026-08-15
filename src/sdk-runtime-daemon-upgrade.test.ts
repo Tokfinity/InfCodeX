@@ -170,7 +170,7 @@ describe('Runtime daemon capability upgrade', () => {
         calls,
         close: vi.fn(async () => undefined),
         capabilities: {
-          actorSettlementConvergence: { version: 1 },
+          actorSettlementConvergence: { version: 2 },
           daemonManagement: { version: 1 },
           managedRunDurability: { version: 1 },
           runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
@@ -228,7 +228,7 @@ describe('Runtime daemon capability upgrade', () => {
         calls,
         close: vi.fn(async () => undefined),
         capabilities: {
-          actorSettlementConvergence: { version: 1 },
+          actorSettlementConvergence: { version: 2 },
           daemonManagement: { version: 1 },
           managedRunDurability: { version: 1 },
           runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
@@ -340,49 +340,52 @@ describe('Runtime daemon capability upgrade', () => {
     expect(newClose).toHaveBeenCalled();
   });
 
-  it('replaces an idle daemon that lacks Actor settlement convergence', async () => {
-    const calls: string[] = [];
-    const oldTransport = createLegacyTransport({
-      preflight: createPreflight(),
-      calls,
-      close: vi.fn(async () => undefined),
-      capabilities: {
-        actorSettlementConvergence: undefined,
-        daemonManagement: { version: 1 },
-        managedRunDurability: { version: 1 },
-        runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
-        runtimeEventCoalescing: { version: 1 },
-      },
-      onRollback: () => upgradeMocks.readLockOwner.mockReturnValue(undefined),
-    });
-    const newClose = vi.fn(async () => undefined);
-    upgradeMocks.acquireProcessLease
-      .mockResolvedValueOnce(createLease(oldTransport))
-      .mockResolvedValueOnce(createLease(createCurrentTransport(calls, newClose)));
-    upgradeMocks.readLockOwner.mockReturnValue({
-      runtimeId: RUNTIME_ID,
-      pid: 101,
-      createdAt: '2026-07-19T00:00:00.000Z',
-      kind: 'daemon',
-    });
+  it.each([undefined, 1] as const)(
+    'replaces an idle daemon with Actor settlement convergence %s',
+    async (version) => {
+      const calls: string[] = [];
+      const oldTransport = createLegacyTransport({
+        preflight: createPreflight(),
+        calls,
+        close: vi.fn(async () => undefined),
+        capabilities: {
+          actorSettlementConvergence: version === undefined ? undefined : { version },
+          daemonManagement: { version: 1 },
+          managedRunDurability: { version: 1 },
+          runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
+          runtimeEventCoalescing: { version: 1 },
+        },
+        onRollback: () => upgradeMocks.readLockOwner.mockReturnValue(undefined),
+      });
+      const newClose = vi.fn(async () => undefined);
+      upgradeMocks.acquireProcessLease
+        .mockResolvedValueOnce(createLease(oldTransport))
+        .mockResolvedValueOnce(createLease(createCurrentTransport(calls, newClose)));
+      upgradeMocks.readLockOwner.mockReturnValue({
+        runtimeId: RUNTIME_ID,
+        pid: 101,
+        createdAt: '2026-07-19T00:00:00.000Z',
+        kind: 'daemon',
+      });
 
-    const runtime = await connectKodaXRuntime({
-      autoStart: true,
-      profile: PROFILE,
-      homeDir: path.join('C:', 'kodax-upgrade-test'),
-    });
+      const runtime = await connectKodaXRuntime({
+        autoStart: true,
+        profile: PROFILE,
+        homeDir: path.join('C:', 'kodax-upgrade-test'),
+      });
 
-    expect(runtime.identity.runtimeId).toBe('runtime_current');
-    expect(calls).toEqual([
-      'old:initialize',
-      'old:daemon.management.get',
-      'old:daemon.rollbackToInline',
-      'old:close',
-      'new:initialize',
-    ]);
-    await runtime.close();
-    expect(newClose).toHaveBeenCalled();
-  });
+      expect(runtime.identity.runtimeId).toBe('runtime_current');
+      expect(calls).toEqual([
+        'old:initialize',
+        'old:daemon.management.get',
+        'old:daemon.rollbackToInline',
+        'old:close',
+        'new:initialize',
+      ]);
+      await runtime.close();
+      expect(newClose).toHaveBeenCalled();
+    },
+  );
 
   it.skipIf(process.platform !== 'win32')(
     'requires authoritative shutdown verification for a Windows auto-start daemon',
@@ -457,7 +460,7 @@ describe('Runtime daemon capability upgrade', () => {
 
   it('publishes the required pre-spawn daemon capabilities', () => {
     expect(KODAX_RUNTIME_SDK_CAPABILITIES).toEqual({
-      actorSettlementConvergence: 1,
+      actorSettlementConvergence: 2,
       daemonOrphanExit: 1,
       daemonShutdownVerification: 1,
       managedRunDurability: 1,
@@ -707,7 +710,7 @@ function createLegacyTransport(input: {
         return initializeResult(
           RUNTIME_ID,
           {
-            actorSettlementConvergence: { version: 1 },
+            actorSettlementConvergence: { version: 2 },
             managedRunDurability: { version: 1 },
             sessionEventJournal: { version: 1 },
             ...(process.platform === 'win32'
@@ -759,7 +762,7 @@ function createCurrentTransport(
         throw new Error(`Unexpected current daemon request: ${method}`);
       }
       return initializeResult('runtime_current', {
-        actorSettlementConvergence: { version: 1 },
+        actorSettlementConvergence: { version: 2 },
         managedRunDurability: { version: 1 },
         sandboxRuntime: { version: 3 },
         sessionEventJournal: { version: 1 },

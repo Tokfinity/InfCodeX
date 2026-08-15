@@ -1340,7 +1340,7 @@ describe('runtime daemon dispatcher', () => {
             persistenceFailure: 'fail_closed',
           },
           actorSettlementConvergence: {
-            version: 1,
+            version: 2,
             rootFence: 'fail_closed',
             sameOwnerRepair: 'automatic',
             unknownAfterTurnQueue: true,

@@ -29,6 +29,8 @@ import {
   SkillRegistry,
 } from "@kodax-ai/agent";
 import type {
+  AgentActorSaveAttempt,
+  AgentActorSavePhase,
   AgentActorSnapshot,
   AgentExecutorFactory,
   AgentTaskState,
@@ -97,6 +99,84 @@ const replMock = vi.hoisted(() => ({
   beforeLoadSession: null as null | ((call: number) => Promise<void>),
   loadSessionCalls: 0,
 }));
+
+function faultInjectedActorSaveAttempt(
+  operation: Promise<void>,
+): AgentActorSaveAttempt {
+  let phase: AgentActorSavePhase = "commit_inflight";
+  const canonical = operation.then(
+    () => {
+      phase = "committed";
+    },
+    (error: unknown) => {
+      throw error;
+    },
+  );
+  void canonical.catch(() => undefined);
+  return {
+    dequeued: Promise.resolve(),
+    eligible: Promise.resolve(),
+    canonical,
+    completion: canonical,
+    phase: () => phase,
+    cancelBeforeCommit: () => false,
+    diagnostics: () => ({
+      attemptId: "fault-injected",
+      phase,
+      timingsMs: {},
+    }),
+  };
+}
+
+function precommitFaultInjectedActorSaveAttempt(
+  operation: (commitStillValid: () => boolean) => Promise<void>,
+): AgentActorSaveAttempt {
+  let phase: AgentActorSavePhase = "precommit";
+  let active = true;
+  let resolveCanonical: (() => void) | undefined;
+  let rejectCanonical: ((error: unknown) => void) | undefined;
+  const canonical = new Promise<void>((resolve, reject) => {
+    resolveCanonical = resolve;
+    rejectCanonical = reject;
+  });
+  const completion = operation(() => active).then(
+    () => {
+      if (!active) return;
+      phase = "committed";
+      resolveCanonical?.();
+    },
+    (error: unknown) => {
+      if (active) {
+        phase = "not_committed";
+        rejectCanonical?.(error);
+      }
+      throw error;
+    },
+  );
+  void canonical.catch(() => undefined);
+  void completion.catch(() => undefined);
+  return {
+    dequeued: Promise.resolve(),
+    eligible: Promise.resolve(),
+    canonical,
+    completion,
+    phase: () => phase,
+    cancelBeforeCommit: () => {
+      if (phase !== "precommit") return false;
+      active = false;
+      phase = "not_committed";
+      rejectCanonical?.(Object.assign(new Error("fault-injected save cancelled"), {
+        code: "actor_snapshot_save_cancelled" as const,
+      }));
+      return true;
+    },
+    diagnostics: () => ({
+      attemptId: "fault-injected-precommit",
+      phase,
+      timingsMs: {},
+    }),
+  };
+}
 
 function runtimeAutoGuardrail(options: KodaXOptions): AutoModeToolGuardrail {
   const guardrail = options.guardrails?.find(
@@ -230,7 +310,7 @@ describe("createKodaXRuntime", () => {
       persistenceFailure: "fail_closed",
     });
     expect(runtime.capabilities.actorSettlementConvergence).toEqual({
-      version: 1,
+      version: 2,
       rootFence: "fail_closed",
       sameOwnerRepair: "automatic",
       unknownAfterTurnQueue: true,
@@ -4000,7 +4080,7 @@ describe("createKodaXRuntime", () => {
     await expect(
       connectKodaXRuntime({
         transport,
-        requirements: { actorSettlementConvergence: 1 },
+        requirements: { actorSettlementConvergence: 2 },
       }),
     ).rejects.toThrow(/does not support.*actorSettlementConvergence/i);
   });
@@ -9924,7 +10004,7 @@ describe("createKodaXRuntime", () => {
 
   it("restores the latest executor phase after Actor settlement persistence recovers", async () => {
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
-    const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
+    const originalBeginSave = FileSessionStorage.prototype.beginActorSnapshotSave;
     let releaseSettlement: (() => void) | undefined;
     const settlementGate = new Promise<void>((resolve) => {
       releaseSettlement = resolve;
@@ -9932,8 +10012,8 @@ describe("createKodaXRuntime", () => {
     let terminalAttempts = 0;
     const save = vi.spyOn(
       FileSessionStorage.prototype,
-      "saveActorSnapshot",
-    ).mockImplementation(async function (
+      "beginActorSnapshotSave",
+    ).mockImplementation(function (
       this: FileSessionStorage,
       id: string,
       snapshot: AgentActorSnapshot,
@@ -9942,12 +10022,16 @@ describe("createKodaXRuntime", () => {
       const childTerminal = snapshot.turns.some(
         (turn) => turn.actorPath === "/root/worker" && turn.state === "failed",
       );
-      if (childTerminal) {
+      if (!childTerminal) {
+        return originalBeginSave.call(this, id, snapshot, expectedRevision);
+      }
+      return precommitFaultInjectedActorSaveAttempt(async (commitStillValid) => {
         terminalAttempts += 1;
         if (terminalAttempts === 1) throw new Error("transient actor save");
         if (terminalAttempts === 2) await settlementGate;
-      }
-      await originalSave.call(this, id, snapshot, expectedRevision);
+        if (!commitStillValid()) return;
+        await originalBeginSave.call(this, id, snapshot, expectedRevision).completion;
+      });
     });
     const runtime = await createKodaXRuntime({
       homeDir: tempRoot,
@@ -10019,7 +10103,7 @@ describe("createKodaXRuntime", () => {
 
   it("does not restore a stopped Run to active after Actor settlement recovers", async () => {
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
-    const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
+    const originalBeginSave = FileSessionStorage.prototype.beginActorSnapshotSave;
     let releaseSettlement: (() => void) | undefined;
     const settlementGate = new Promise<void>((resolve) => {
       releaseSettlement = resolve;
@@ -10027,8 +10111,8 @@ describe("createKodaXRuntime", () => {
     let terminalAttempts = 0;
     const save = vi.spyOn(
       FileSessionStorage.prototype,
-      "saveActorSnapshot",
-    ).mockImplementation(async function (
+      "beginActorSnapshotSave",
+    ).mockImplementation(function (
       this: FileSessionStorage,
       id: string,
       snapshot: AgentActorSnapshot,
@@ -10037,12 +10121,16 @@ describe("createKodaXRuntime", () => {
       const childTerminal = snapshot.turns.some(
         (turn) => turn.actorPath === "/root/worker" && turn.state === "failed",
       );
-      if (childTerminal) {
+      if (!childTerminal) {
+        return originalBeginSave.call(this, id, snapshot, expectedRevision);
+      }
+      return precommitFaultInjectedActorSaveAttempt(async (commitStillValid) => {
         terminalAttempts += 1;
         if (terminalAttempts === 1) throw new Error("transient actor save");
         if (terminalAttempts === 2) await settlementGate;
-      }
-      await originalSave.call(this, id, snapshot, expectedRevision);
+        if (!commitStillValid()) return;
+        await originalBeginSave.call(this, id, snapshot, expectedRevision).completion;
+      });
     });
     const runtime = await createKodaXRuntime({
       homeDir: tempRoot,
@@ -10100,11 +10188,12 @@ describe("createKodaXRuntime", () => {
   it("keeps an automatic Actor durability fence authoritative over a later external abort", async () => {
     vi.useFakeTimers();
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
-    const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
+    const originalBeginSave = FileSessionStorage.prototype.beginActorSnapshotSave;
+    const unavailableSettlement = new Promise<void>(() => undefined);
     const save = vi.spyOn(
       FileSessionStorage.prototype,
-      "saveActorSnapshot",
-    ).mockImplementation(async function (
+      "beginActorSnapshotSave",
+    ).mockImplementation(function (
       this: FileSessionStorage,
       id: string,
       snapshot: AgentActorSnapshot,
@@ -10113,9 +10202,11 @@ describe("createKodaXRuntime", () => {
       if (snapshot.turns.some(
         (turn) => turn.actorPath === "/root/worker" && turn.state === "failed",
       )) {
-        throw new Error("actor storage remains unavailable");
+        return faultInjectedActorSaveAttempt(
+          unavailableSettlement,
+        );
       }
-      await originalSave.call(this, id, snapshot, expectedRevision);
+      return originalBeginSave.call(this, id, snapshot, expectedRevision);
     });
     const runtime = await createKodaXRuntime({
       homeDir: tempRoot,
@@ -10172,7 +10263,7 @@ describe("createKodaXRuntime", () => {
   it("retries a transient repair load error and restores Session reuse", async () => {
     vi.useFakeTimers();
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
-    const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
+    const originalBeginSave = FileSessionStorage.prototype.beginActorSnapshotSave;
     const originalPeek = FileSessionStorage.prototype.peek;
     let failRepairLoad = false;
     let repairLoadFailures = 0;
@@ -10183,23 +10274,25 @@ describe("createKodaXRuntime", () => {
     let terminalSaveStarted = false;
     const save = vi.spyOn(
       FileSessionStorage.prototype,
-      "saveActorSnapshot",
-    ).mockImplementation(async function (
+      "beginActorSnapshotSave",
+    ).mockImplementation(function (
       this: FileSessionStorage,
       id: string,
       snapshot: AgentActorSnapshot,
       expectedRevision: number,
     ) {
-      if (
-        !terminalSaveStarted
-        && snapshot.turns.some((turn) => (
-          turn.actorPath === "/root/worker" && turn.state === "failed"
-        ))
-      ) {
-        terminalSaveStarted = true;
-        await lateSettlement;
+      const delayedTerminal = !terminalSaveStarted && snapshot.turns.some((turn) => (
+        turn.actorPath === "/root/worker" && turn.state === "failed"
+      ));
+      if (!delayedTerminal) {
+        return originalBeginSave.call(this, id, snapshot, expectedRevision);
       }
-      await originalSave.call(this, id, snapshot, expectedRevision);
+      terminalSaveStarted = true;
+      const operation = (async (): Promise<void> => {
+        await lateSettlement;
+        await originalBeginSave.call(this, id, snapshot, expectedRevision).completion;
+      })();
+      return faultInjectedActorSaveAttempt(operation);
     });
     const peek = vi.spyOn(
       FileSessionStorage.prototype,
@@ -10300,7 +10393,7 @@ describe("createKodaXRuntime", () => {
   it("keeps automatic same-owner repair alive after its first bounded attempt times out", async () => {
     vi.useFakeTimers();
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
-    const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
+    const originalBeginSave = FileSessionStorage.prototype.beginActorSnapshotSave;
     let releaseLateSettlement: (() => void) | undefined;
     const lateSettlement = new Promise<void>((resolve) => {
       releaseLateSettlement = resolve;
@@ -10308,23 +10401,25 @@ describe("createKodaXRuntime", () => {
     let terminalSaveStarted = false;
     const save = vi.spyOn(
       FileSessionStorage.prototype,
-      "saveActorSnapshot",
-    ).mockImplementation(async function (
+      "beginActorSnapshotSave",
+    ).mockImplementation(function (
       this: FileSessionStorage,
       id: string,
       snapshot: AgentActorSnapshot,
       expectedRevision: number,
     ) {
-      if (
-        !terminalSaveStarted
-        && snapshot.turns.some((turn) => (
-          turn.actorPath === "/root/worker" && turn.state === "failed"
-        ))
-      ) {
-        terminalSaveStarted = true;
-        await lateSettlement;
+      const delayedTerminal = !terminalSaveStarted && snapshot.turns.some((turn) => (
+        turn.actorPath === "/root/worker" && turn.state === "failed"
+      ));
+      if (!delayedTerminal) {
+        return originalBeginSave.call(this, id, snapshot, expectedRevision);
       }
-      await originalSave.call(this, id, snapshot, expectedRevision);
+      terminalSaveStarted = true;
+      const operation = (async (): Promise<void> => {
+        await lateSettlement;
+        await originalBeginSave.call(this, id, snapshot, expectedRevision).completion;
+      })();
+      return faultInjectedActorSaveAttempt(operation);
     });
     const runtime = await createKodaXRuntime({
       homeDir: tempRoot,
@@ -10388,7 +10483,7 @@ describe("createKodaXRuntime", () => {
   it("stops automatic Actor repair when durable ownership changes", async () => {
     vi.useFakeTimers();
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
-    const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
+    const originalBeginSave = FileSessionStorage.prototype.beginActorSnapshotSave;
     const originalPeek = FileSessionStorage.prototype.peek;
     let releaseLateSettlement: (() => void) | undefined;
     const lateSettlement = new Promise<void>((resolve) => {
@@ -10399,23 +10494,25 @@ describe("createKodaXRuntime", () => {
     let foreignOwnerLoads = 0;
     const save = vi.spyOn(
       FileSessionStorage.prototype,
-      "saveActorSnapshot",
-    ).mockImplementation(async function (
+      "beginActorSnapshotSave",
+    ).mockImplementation(function (
       this: FileSessionStorage,
       id: string,
       snapshot: AgentActorSnapshot,
       expectedRevision: number,
     ) {
-      if (
-        !terminalSaveStarted
-        && snapshot.turns.some((turn) => (
-          turn.actorPath === "/root/worker" && turn.state === "failed"
-        ))
-      ) {
-        terminalSaveStarted = true;
-        await lateSettlement;
+      const delayedTerminal = !terminalSaveStarted && snapshot.turns.some((turn) => (
+        turn.actorPath === "/root/worker" && turn.state === "failed"
+      ));
+      if (!delayedTerminal) {
+        return originalBeginSave.call(this, id, snapshot, expectedRevision);
       }
-      await originalSave.call(this, id, snapshot, expectedRevision);
+      terminalSaveStarted = true;
+      const operation = (async (): Promise<void> => {
+        await lateSettlement;
+        await originalBeginSave.call(this, id, snapshot, expectedRevision).completion;
+      })();
+      return faultInjectedActorSaveAttempt(operation);
     });
     const peek = vi.spyOn(
       FileSessionStorage.prototype,
@@ -10505,7 +10602,7 @@ describe("createKodaXRuntime", () => {
   it("fails and drains after repair when the fenced root provider never settles", async () => {
     vi.useFakeTimers();
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
-    const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
+    const originalBeginSave = FileSessionStorage.prototype.beginActorSnapshotSave;
     let releaseLateSettlement: (() => void) | undefined;
     const lateSettlement = new Promise<void>((resolve) => {
       releaseLateSettlement = resolve;
@@ -10529,23 +10626,25 @@ describe("createKodaXRuntime", () => {
     const externalExitPlanMode = vi.fn(async () => true);
     const save = vi.spyOn(
       FileSessionStorage.prototype,
-      "saveActorSnapshot",
-    ).mockImplementation(async function (
+      "beginActorSnapshotSave",
+    ).mockImplementation(function (
       this: FileSessionStorage,
       id: string,
       snapshot: AgentActorSnapshot,
       expectedRevision: number,
     ) {
-      if (
-        !terminalSaveStarted
-        && snapshot.turns.some((turn) => (
-          turn.actorPath === "/root/worker" && turn.state === "failed"
-        ))
-      ) {
-        terminalSaveStarted = true;
-        await lateSettlement;
+      const delayedTerminal = !terminalSaveStarted && snapshot.turns.some((turn) => (
+        turn.actorPath === "/root/worker" && turn.state === "failed"
+      ));
+      if (!delayedTerminal) {
+        return originalBeginSave.call(this, id, snapshot, expectedRevision);
       }
-      await originalSave.call(this, id, snapshot, expectedRevision);
+      terminalSaveStarted = true;
+      const operation = (async (): Promise<void> => {
+        await lateSettlement;
+        await originalBeginSave.call(this, id, snapshot, expectedRevision).completion;
+      })();
+      return faultInjectedActorSaveAttempt(operation);
     });
     const runtime = await createKodaXRuntime({
       homeDir: tempRoot,
@@ -10774,7 +10873,7 @@ describe("createKodaXRuntime", () => {
   it("repairs a Stop-before-self-fence race without waiting for its root provider", async () => {
     vi.useFakeTimers();
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
-    const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
+    const originalBeginSave = FileSessionStorage.prototype.beginActorSnapshotSave;
     let releaseLateSettlement: (() => void) | undefined;
     const lateSettlement = new Promise<void>((resolve) => {
       releaseLateSettlement = resolve;
@@ -10786,24 +10885,26 @@ describe("createKodaXRuntime", () => {
     let terminalSaveStarted = false;
     const save = vi.spyOn(
       FileSessionStorage.prototype,
-      "saveActorSnapshot",
-    ).mockImplementation(async function (
+      "beginActorSnapshotSave",
+    ).mockImplementation(function (
       this: FileSessionStorage,
       id: string,
       snapshot: AgentActorSnapshot,
       expectedRevision: number,
     ) {
-      if (
-        !terminalSaveStarted
-        && snapshot.turns.some((turn) => (
-          turn.actorPath === "/root/worker" && turn.state === "failed"
-        ))
-      ) {
-        terminalSaveStarted = true;
-        markTerminalSaveStarted?.();
-        await lateSettlement;
+      const delayedTerminal = !terminalSaveStarted && snapshot.turns.some((turn) => (
+        turn.actorPath === "/root/worker" && turn.state === "failed"
+      ));
+      if (!delayedTerminal) {
+        return originalBeginSave.call(this, id, snapshot, expectedRevision);
       }
-      await originalSave.call(this, id, snapshot, expectedRevision);
+      terminalSaveStarted = true;
+      markTerminalSaveStarted?.();
+      const operation = (async (): Promise<void> => {
+        await lateSettlement;
+        await originalBeginSave.call(this, id, snapshot, expectedRevision).completion;
+      })();
+      return faultInjectedActorSaveAttempt(operation);
     });
     const runtime = await createKodaXRuntime({
       homeDir: tempRoot,
@@ -11000,7 +11101,7 @@ describe("createKodaXRuntime", () => {
   it("terminalizes an unknown Run from its pre-fence executor result after automatic Actor repair", async () => {
     vi.useFakeTimers();
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
-    const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
+    const originalBeginSave = FileSessionStorage.prototype.beginActorSnapshotSave;
     let releaseLateSettlement: (() => void) | undefined;
     const lateSettlement = new Promise<void>((resolve) => {
       releaseLateSettlement = resolve;
@@ -11008,23 +11109,25 @@ describe("createKodaXRuntime", () => {
     let terminalSaveStarted = false;
     const save = vi.spyOn(
       FileSessionStorage.prototype,
-      "saveActorSnapshot",
-    ).mockImplementation(async function (
+      "beginActorSnapshotSave",
+    ).mockImplementation(function (
       this: FileSessionStorage,
       id: string,
       snapshot: AgentActorSnapshot,
       expectedRevision: number,
     ) {
-      if (
-        !terminalSaveStarted
-        && snapshot.turns.some((turn) => (
-          turn.actorPath === "/root/worker" && turn.state === "failed"
-        ))
-      ) {
-        terminalSaveStarted = true;
-        await lateSettlement;
+      const delayedTerminal = !terminalSaveStarted && snapshot.turns.some((turn) => (
+        turn.actorPath === "/root/worker" && turn.state === "failed"
+      ));
+      if (!delayedTerminal) {
+        return originalBeginSave.call(this, id, snapshot, expectedRevision);
       }
-      await originalSave.call(this, id, snapshot, expectedRevision);
+      terminalSaveStarted = true;
+      const operation = (async (): Promise<void> => {
+        await lateSettlement;
+        await originalBeginSave.call(this, id, snapshot, expectedRevision).completion;
+      })();
+      return faultInjectedActorSaveAttempt(operation);
     });
     const runtime = await createKodaXRuntime({
       homeDir: tempRoot,
@@ -11101,7 +11204,7 @@ describe("createKodaXRuntime", () => {
   ) => {
     vi.useFakeTimers();
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
-    const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
+    const originalBeginSave = FileSessionStorage.prototype.beginActorSnapshotSave;
     let releaseLateSettlement: (() => void) | undefined;
     const lateSettlement = new Promise<void>((resolve) => {
       releaseLateSettlement = resolve;
@@ -11109,23 +11212,25 @@ describe("createKodaXRuntime", () => {
     let terminalSaveStarted = false;
     const save = vi.spyOn(
       FileSessionStorage.prototype,
-      "saveActorSnapshot",
-    ).mockImplementation(async function (
+      "beginActorSnapshotSave",
+    ).mockImplementation(function (
       this: FileSessionStorage,
       id: string,
       snapshot: AgentActorSnapshot,
       expectedRevision: number,
     ) {
-      if (
-        !terminalSaveStarted
-        && snapshot.turns.some((turn) => (
-          turn.actorPath === "/root/worker" && turn.state === "failed"
-        ))
-      ) {
-        terminalSaveStarted = true;
-        await lateSettlement;
+      const delayedTerminal = !terminalSaveStarted && snapshot.turns.some((turn) => (
+        turn.actorPath === "/root/worker" && turn.state === "failed"
+      ));
+      if (!delayedTerminal) {
+        return originalBeginSave.call(this, id, snapshot, expectedRevision);
       }
-      await originalSave.call(this, id, snapshot, expectedRevision);
+      terminalSaveStarted = true;
+      const operation = (async (): Promise<void> => {
+        await lateSettlement;
+        await originalBeginSave.call(this, id, snapshot, expectedRevision).completion;
+      })();
+      return faultInjectedActorSaveAttempt(operation);
     });
     const runtime = await createKodaXRuntime({
       homeDir: tempRoot,
@@ -11268,7 +11373,7 @@ describe("createKodaXRuntime", () => {
   ) => {
     vi.useFakeTimers();
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
-    const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
+    const originalBeginSave = FileSessionStorage.prototype.beginActorSnapshotSave;
     let releaseLateSettlement: (() => void) | undefined;
     const lateSettlement = new Promise<void>((resolve) => {
       releaseLateSettlement = resolve;
@@ -11276,23 +11381,25 @@ describe("createKodaXRuntime", () => {
     let terminalSaveStarted = false;
     const save = vi.spyOn(
       FileSessionStorage.prototype,
-      "saveActorSnapshot",
-    ).mockImplementation(async function (
+      "beginActorSnapshotSave",
+    ).mockImplementation(function (
       this: FileSessionStorage,
       id: string,
       snapshot: AgentActorSnapshot,
       expectedRevision: number,
     ) {
-      if (
-        !terminalSaveStarted
-        && snapshot.turns.some((turn) => (
-          turn.actorPath === "/root/worker" && turn.state === "failed"
-        ))
-      ) {
-        terminalSaveStarted = true;
-        await lateSettlement;
+      const delayedTerminal = !terminalSaveStarted && snapshot.turns.some((turn) => (
+        turn.actorPath === "/root/worker" && turn.state === "failed"
+      ));
+      if (!delayedTerminal) {
+        return originalBeginSave.call(this, id, snapshot, expectedRevision);
       }
-      await originalSave.call(this, id, snapshot, expectedRevision);
+      terminalSaveStarted = true;
+      const operation = (async (): Promise<void> => {
+        await lateSettlement;
+        await originalBeginSave.call(this, id, snapshot, expectedRevision).completion;
+      })();
+      return faultInjectedActorSaveAttempt(operation);
     });
     const runtime = await createKodaXRuntime({
       homeDir: tempRoot,
@@ -11345,15 +11452,15 @@ describe("createKodaXRuntime", () => {
 
   it("does not terminalize a Run before its Actor settlements are durable", async () => {
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
-    const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
+    const originalBeginSave = FileSessionStorage.prototype.beginActorSnapshotSave;
     let releaseSettlement: (() => void) | undefined;
     const settlementGate = new Promise<void>((resolve) => {
       releaseSettlement = resolve;
     });
     const save = vi.spyOn(
       FileSessionStorage.prototype,
-      "saveActorSnapshot",
-    ).mockImplementation(async function (
+      "beginActorSnapshotSave",
+    ).mockImplementation(function (
       this: FileSessionStorage,
       id: string,
       snapshot: AgentActorSnapshot,
@@ -11362,9 +11469,13 @@ describe("createKodaXRuntime", () => {
       if (snapshot.turns.some(
         (turn) => turn.actorPath === "/root/worker" && turn.state === "failed",
       )) {
-        await settlementGate;
+        return precommitFaultInjectedActorSaveAttempt(async (commitStillValid) => {
+          await settlementGate;
+          if (!commitStillValid()) return;
+          await originalBeginSave.call(this, id, snapshot, expectedRevision).completion;
+        });
       }
-      await originalSave.call(this, id, snapshot, expectedRevision);
+      return originalBeginSave.call(this, id, snapshot, expectedRevision);
     });
     const runtime = await createKodaXRuntime({
       homeDir: tempRoot,
@@ -11431,11 +11542,12 @@ describe("createKodaXRuntime", () => {
   it("rejects a later Run when Session Actor settlement state is unknown", async () => {
     vi.useFakeTimers();
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
-    const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
+    const originalBeginSave = FileSessionStorage.prototype.beginActorSnapshotSave;
+    const unavailableSettlement = new Promise<void>(() => undefined);
     const save = vi.spyOn(
       FileSessionStorage.prototype,
-      "saveActorSnapshot",
-    ).mockImplementation(async function (
+      "beginActorSnapshotSave",
+    ).mockImplementation(function (
       this: FileSessionStorage,
       id: string,
       snapshot: AgentActorSnapshot,
@@ -11444,9 +11556,11 @@ describe("createKodaXRuntime", () => {
       if (snapshot.turns.some(
         (turn) => turn.actorPath === "/root/worker" && turn.state === "failed",
       )) {
-        throw new Error("actor snapshot storage unavailable");
+        return faultInjectedActorSaveAttempt(
+          unavailableSettlement,
+        );
       }
-      await originalSave.call(this, id, snapshot, expectedRevision);
+      return originalBeginSave.call(this, id, snapshot, expectedRevision);
     });
     const runtime = await createKodaXRuntime({
       homeDir: tempRoot,
@@ -14987,11 +15101,12 @@ describe("createKodaXRuntime", () => {
     vi.useFakeTimers();
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
     const external = deferredExternalAgentFixture("launch-race");
-    const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
+    const originalBeginSave = FileSessionStorage.prototype.beginActorSnapshotSave;
+    const unavailableSettlement = new Promise<void>(() => undefined);
     const save = vi.spyOn(
       FileSessionStorage.prototype,
-      "saveActorSnapshot",
-    ).mockImplementation(async function (
+      "beginActorSnapshotSave",
+    ).mockImplementation(function (
       this: FileSessionStorage,
       id: string,
       snapshot: AgentActorSnapshot,
@@ -15002,9 +15117,11 @@ describe("createKodaXRuntime", () => {
           turn.actorPath === "/root/deferred"
           && turn.state === "completed",
       )) {
-        throw new Error("launch-race Actor storage unavailable");
+        return faultInjectedActorSaveAttempt(
+          unavailableSettlement,
+        );
       }
-      await originalSave.call(this, id, snapshot, expectedRevision);
+      return originalBeginSave.call(this, id, snapshot, expectedRevision);
     });
     const runtime = await createKodaXRuntime({
       homeDir: tempRoot,

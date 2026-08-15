@@ -7,6 +7,8 @@ import {
   AgentLimitReachedError,
   createAgentActorController,
   type AgentBudgetPort,
+  type AgentActorSaveAttempt,
+  type AgentActorSavePhase,
   type AgentActorSnapshot,
   type AgentActorStore,
   type AgentExecutionInput,
@@ -961,6 +963,320 @@ describe('F270 actor tree and scheduler', () => {
       });
     } finally {
       releaseProgressSave?.();
+      await vi.runAllTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not fence a terminal mutation behind a legal phase-aware storage wait', async () => {
+    vi.useFakeTimers();
+    let releaseProgressCompletion: (() => void) | undefined;
+    const progressCompletion = new Promise<void>((resolve) => {
+      releaseProgressCompletion = resolve;
+    });
+    let markProgressCanonical: (() => void) | undefined;
+    const progressCanonical = new Promise<void>((resolve) => {
+      markProgressCanonical = resolve;
+    });
+    let blockedProgress = false;
+    let saved: AgentActorSnapshot | undefined;
+    let storageTail = Promise.resolve();
+    const store: AgentActorStore = {
+      eligibilityTimeoutMs: 65_000,
+      async load() { return saved === undefined ? undefined : structuredClone(saved); },
+      async save() { throw new Error('legacy save must not be used'); },
+      beginSave(snapshot) {
+        const dequeued = storageTail.catch(() => undefined);
+        const progress = snapshot.turns.some((turn) => (
+          turn.state === 'running' && (turn.progress?.length ?? 0) > 0
+        ));
+        const shouldBlockProgress = !blockedProgress && progress;
+        if (shouldBlockProgress) blockedProgress = true;
+        let phase: AgentActorSavePhase = 'queued';
+        const eligible = dequeued.then(() => { phase = 'precommit'; });
+        const canonical = eligible.then(() => {
+          saved = structuredClone(snapshot);
+          phase = 'committed';
+          if (shouldBlockProgress) markProgressCanonical?.();
+        });
+        const completion = canonical.then(() => (
+          shouldBlockProgress ? progressCompletion : undefined
+        ));
+        storageTail = completion.catch(() => undefined);
+        return {
+          dequeued,
+          eligible,
+          canonical,
+          completion,
+          phase: () => phase,
+          cancelBeforeCommit: () => false,
+          diagnostics: () => ({ attemptId: 'serialized', phase, timingsMs: {} }),
+        };
+      },
+    };
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({
+      executor,
+      store,
+      onBackgroundError: vi.fn(),
+    });
+
+    try {
+      const target = await controller.spawn('/root', {
+        taskName: 'target',
+        objective: 'Complete after a legal storage wait.',
+      });
+      const sibling = await controller.spawn('/root', {
+        taskName: 'sibling',
+        objective: 'Remain active.',
+      });
+      const progress = executor.pending[0]!.input.reportProgress({
+        kind: 'status',
+        summary: 'Finishing storage maintenance.',
+      });
+      await progressCanonical;
+      executor.pending[0]?.resolve({ output: 'durable after lock admission' });
+
+      await vi.advanceTimersByTimeAsync(70_000);
+      expect(controller.healthSnapshot()).toMatchObject({ state: 'recovering' });
+      expect(controller.output('/root', sibling.actorPath, sibling.turnId)).toMatchObject({
+        state: 'running',
+      });
+
+      releaseProgressCompletion?.();
+      await vi.runAllTimersAsync();
+      await progress;
+      expect(controller.output('/root', target.actorPath, target.turnId)).toMatchObject({
+        state: 'completed',
+        output: 'durable after lock admission',
+      });
+      expect(controller.healthSnapshot()).toEqual({ state: 'healthy' });
+    } finally {
+      releaseProgressCompletion?.();
+      await vi.runAllTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it('fences a terminal settlement behind a predecessor canonical commit hang', async () => {
+    vi.useFakeTimers();
+    let releaseProgressCommit: (() => void) | undefined;
+    const progressCommit = new Promise<void>((resolve) => {
+      releaseProgressCommit = resolve;
+    });
+    let markProgressCommitStarted: (() => void) | undefined;
+    const progressCommitStarted = new Promise<void>((resolve) => {
+      markProgressCommitStarted = resolve;
+    });
+    let blockedProgress = false;
+    let saved: AgentActorSnapshot | undefined;
+    const store: AgentActorStore = {
+      eligibilityTimeoutMs: 65_000,
+      async load() { return saved === undefined ? undefined : structuredClone(saved); },
+      async save() { throw new Error('legacy save must not be used'); },
+      beginSave(snapshot) {
+        const progress = snapshot.turns.some((turn) => (
+          turn.state === 'running' && (turn.progress?.length ?? 0) > 0
+        ));
+        if (!blockedProgress && progress) {
+          blockedProgress = true;
+          markProgressCommitStarted?.();
+          let phase: AgentActorSavePhase = 'commit_inflight';
+          const canonical = progressCommit.then(() => {
+            saved = structuredClone(snapshot);
+            phase = 'committed';
+          });
+          return {
+            dequeued: Promise.resolve(),
+            eligible: Promise.resolve(),
+            canonical,
+            completion: canonical,
+            phase: () => phase,
+            cancelBeforeCommit: () => false,
+            diagnostics: () => ({
+              attemptId: 'predecessor-rename-hang',
+              phase,
+              activeStage: 'rename',
+              timingsMs: {},
+            }),
+          };
+        }
+        saved = structuredClone(snapshot);
+        return {
+          dequeued: Promise.resolve(),
+          eligible: Promise.resolve(),
+          canonical: Promise.resolve(),
+          completion: Promise.resolve(),
+          phase: () => 'committed',
+          cancelBeforeCommit: () => false,
+          diagnostics: () => ({ attemptId: 'immediate', phase: 'committed', timingsMs: {} }),
+        };
+      },
+    };
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({
+      executor,
+      store,
+      onBackgroundError: vi.fn(),
+    });
+
+    try {
+      const target = await controller.spawn('/root', {
+        taskName: 'target',
+        objective: 'Complete behind a hung progress commit.',
+      });
+      await controller.spawn('/root', {
+        taskName: 'sibling',
+        objective: 'Be interrupted by the durability fence.',
+      });
+      const progress = executor.pending[0]!.input.reportProgress({
+        kind: 'status',
+        summary: 'Entering canonical replacement.',
+      }).catch(() => undefined);
+      await progressCommitStarted;
+      executor.pending[0]?.resolve({ output: 'terminal behind predecessor' });
+
+      await vi.advanceTimersByTimeAsync(5_001);
+      expect(controller.healthSnapshot()).toMatchObject({
+        state: 'unknown',
+        code: 'actor_settlement_not_persisted',
+        turnId: target.turnId,
+      });
+      expect(executor.pending[1]?.input.signal.aborted).toBe(true);
+
+      releaseProgressCommit?.();
+      await vi.runAllTimersAsync();
+      await progress;
+    } finally {
+      releaseProgressCommit?.();
+      await vi.runAllTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it('still watches the terminal save when its predecessor commits at the deadline edge', async () => {
+    vi.useFakeTimers();
+    let saved: AgentActorSnapshot | undefined;
+    let predecessorStarted = false;
+    let predecessorCancelCalls = 0;
+    let terminalStarted = false;
+    let releasePredecessor: (() => void) | undefined;
+    let releaseTerminal: (() => void) | undefined;
+    const predecessorCanonical = new Promise<void>((resolve) => {
+      releasePredecessor = resolve;
+    });
+    const terminalCanonical = new Promise<void>((resolve) => {
+      releaseTerminal = resolve;
+    });
+    let markPredecessorStarted: (() => void) | undefined;
+    const predecessorSaveStarted = new Promise<void>((resolve) => {
+      markPredecessorStarted = resolve;
+    });
+    const store: AgentActorStore = {
+      eligibilityTimeoutMs: 65_000,
+      async load() { return saved === undefined ? undefined : structuredClone(saved); },
+      async save() { throw new Error('legacy save must not be used'); },
+      beginSave(snapshot) {
+        const progress = snapshot.turns.some((turn) => (
+          turn.state === 'running' && (turn.progress?.length ?? 0) > 0
+        ));
+        if (!predecessorStarted && progress) {
+          predecessorStarted = true;
+          markPredecessorStarted?.();
+          let phase: AgentActorSavePhase = 'commit_inflight';
+          const canonical = predecessorCanonical.then(() => {
+            saved = structuredClone(snapshot);
+            phase = 'committed';
+          });
+          return {
+            dequeued: Promise.resolve(),
+            eligible: Promise.resolve(),
+            canonical,
+            completion: canonical,
+            phase: () => phase,
+            cancelBeforeCommit: () => {
+              predecessorCancelCalls += 1;
+              void Promise.resolve().then(() => {
+                releasePredecessor?.();
+              });
+              return false;
+            },
+            diagnostics: () => ({
+              attemptId: 'predecessor-deadline-edge', phase, timingsMs: {},
+            }),
+          };
+        }
+        const terminal = predecessorStarted && snapshot.turns.some((turn) => (
+          turn.actorPath === '/root/target' && turn.state === 'completed'
+        ));
+        if (!terminalStarted && terminal) {
+          terminalStarted = true;
+          let phase: AgentActorSavePhase = 'commit_inflight';
+          const canonical = terminalCanonical.then(() => {
+            saved = structuredClone(snapshot);
+            phase = 'committed';
+          });
+          return {
+            dequeued: Promise.resolve(),
+            eligible: Promise.resolve(),
+            canonical,
+            completion: canonical,
+            phase: () => phase,
+            cancelBeforeCommit: () => false,
+            diagnostics: () => ({
+              attemptId: 'terminal-after-edge', phase, activeStage: 'rename', timingsMs: {},
+            }),
+          };
+        }
+        saved = structuredClone(snapshot);
+        return {
+          dequeued: Promise.resolve(),
+          eligible: Promise.resolve(),
+          canonical: Promise.resolve(),
+          completion: Promise.resolve(),
+          phase: () => 'committed',
+          cancelBeforeCommit: () => false,
+          diagnostics: () => ({ attemptId: 'immediate', phase: 'committed', timingsMs: {} }),
+        };
+      },
+    };
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({ executor, store });
+
+    try {
+      const target = await controller.spawn('/root', {
+        taskName: 'target',
+        objective: 'Hang only in the terminal replacement.',
+      });
+      await controller.spawn('/root', {
+        taskName: 'sibling',
+        objective: 'Be fenced when terminal persistence is ambiguous.',
+      });
+      const progress = executor.pending[0]!.input.reportProgress({
+        kind: 'status',
+        summary: 'Commit exactly as the predecessor watchdog expires.',
+      }).catch(() => undefined);
+      await predecessorSaveStarted;
+      executor.pending[0]?.resolve({ output: 'terminal rename hangs' });
+
+      await vi.advanceTimersByTimeAsync(5_001);
+      expect(predecessorCancelCalls).toBe(1);
+      expect(terminalStarted).toBe(true);
+      expect(controller.healthSnapshot().state).toBe('recovering');
+      await vi.advanceTimersByTimeAsync(5_001);
+      expect(controller.healthSnapshot()).toMatchObject({
+        state: 'unknown',
+        code: 'actor_settlement_not_persisted',
+        turnId: target.turnId,
+      });
+      expect(executor.pending[1]?.input.signal.aborted).toBe(true);
+
+      releaseTerminal?.();
+      await vi.runAllTimersAsync();
+      await progress;
+    } finally {
+      releasePredecessor?.();
+      releaseTerminal?.();
       await vi.runAllTimersAsync();
       vi.useRealTimers();
     }
@@ -2145,6 +2461,276 @@ describe('F270 actor tree and scheduler', () => {
     }
   });
 
+  it('starts the settlement deadline after storage eligibility and not after full completion', async () => {
+    vi.useFakeTimers();
+    try {
+      let saved: AgentActorSnapshot | undefined;
+      let releaseEligibility: (() => void) | undefined;
+      let releaseCanonical: (() => void) | undefined;
+      let releaseCompletion: (() => void) | undefined;
+      const eligibilityGate = new Promise<void>((resolve) => { releaseEligibility = resolve; });
+      const canonicalGate = new Promise<void>((resolve) => { releaseCanonical = resolve; });
+      const completionGate = new Promise<void>((resolve) => { releaseCompletion = resolve; });
+      let terminalAttempt: AgentActorSaveAttempt | undefined;
+      const store: AgentActorStore = {
+        eligibilityTimeoutMs: 65_000,
+        async load() { return saved === undefined ? undefined : structuredClone(saved); },
+        async save() { throw new Error('legacy save must not be used'); },
+        beginSave(snapshot) {
+          const terminal = snapshot.turns.some((turn) => turn.state === 'completed');
+          if (!terminal) {
+            saved = structuredClone(snapshot);
+            return {
+              dequeued: Promise.resolve(),
+              eligible: Promise.resolve(),
+              canonical: Promise.resolve(),
+              completion: Promise.resolve(),
+              phase: () => 'committed',
+              cancelBeforeCommit: () => false,
+              diagnostics: () => ({ attemptId: 'immediate', phase: 'committed', timingsMs: {} }),
+            };
+          }
+          let phase = 'queued' as const | 'precommit' | 'committed';
+          const eligible = eligibilityGate.then(() => { phase = 'precommit'; });
+          const canonical = eligible.then(() => canonicalGate).then(() => {
+            saved = structuredClone(snapshot);
+            phase = 'committed';
+          });
+          terminalAttempt = {
+            dequeued: Promise.resolve(),
+            eligible,
+            canonical,
+            completion: canonical.then(() => completionGate),
+            phase: () => phase,
+            cancelBeforeCommit: () => false,
+            diagnostics: () => ({ attemptId: 'terminal', phase, timingsMs: {} }),
+          };
+          return terminalAttempt;
+        },
+      };
+      const executor = new DeferredExecutor();
+      const controller = await createAgentActorController({
+        executor,
+        store,
+        onBackgroundError: vi.fn(),
+      });
+      const turn = await controller.spawn('/root', {
+        taskName: 'worker',
+        objective: 'Wait for storage eligibility.',
+      });
+
+      executor.pending[0]?.resolve({ output: 'durable at canonical commit' });
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      expect(terminalAttempt?.phase()).toBe('queued');
+      expect(controller.healthSnapshot()).toMatchObject({ state: 'recovering' });
+      releaseEligibility?.();
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(controller.healthSnapshot()).toMatchObject({ state: 'recovering' });
+
+      releaseCanonical?.();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(controller.output('/root', turn.actorPath, turn.turnId)).toMatchObject({
+        state: 'completed',
+        output: 'durable at canonical commit',
+      });
+      expect(controller.healthSnapshot()).toEqual({ state: 'healthy' });
+      expect(terminalAttempt?.phase()).toBe('committed');
+
+      releaseCompletion?.();
+      await vi.runAllTimersAsync();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('accepts a canonical settlement when post-commit maintenance rejects', async () => {
+    let saved: AgentActorSnapshot | undefined;
+    let terminalAttempts = 0;
+    const onBackgroundError = vi.fn();
+    const store: AgentActorStore = {
+      eligibilityTimeoutMs: 65_000,
+      async load() { return saved === undefined ? undefined : structuredClone(saved); },
+      async save() { throw new Error('legacy save must not be used'); },
+      beginSave(snapshot) {
+        const terminal = snapshot.turns.some((turn) => turn.state === 'completed');
+        if (!terminal) {
+          saved = structuredClone(snapshot);
+          return {
+            dequeued: Promise.resolve(),
+            eligible: Promise.resolve(),
+            canonical: Promise.resolve(),
+            completion: Promise.resolve(),
+            phase: () => 'committed',
+            cancelBeforeCommit: () => false,
+            diagnostics: () => ({ attemptId: 'immediate', phase: 'committed', timingsMs: {} }),
+          };
+        }
+        terminalAttempts += 1;
+        let phase: AgentActorSavePhase = 'precommit';
+        const canonical = Promise.resolve().then(() => {
+          saved = structuredClone(snapshot);
+          phase = 'committed';
+        });
+        const completion = canonical.then(() => {
+          throw new Error('post-commit watermark failed');
+        });
+        return {
+          dequeued: Promise.resolve(),
+          eligible: Promise.resolve(),
+          canonical,
+          completion,
+          phase: () => phase,
+          cancelBeforeCommit: () => false,
+          diagnostics: () => ({
+            attemptId: 'postcommit-reject',
+            phase,
+            timingsMs: { rename: 3, postCommit: 7 },
+          }),
+        };
+      },
+    };
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({
+      executor,
+      store,
+      onBackgroundError,
+    });
+    const target = await controller.spawn('/root', {
+      taskName: 'target',
+      objective: 'Commit before maintenance.',
+    });
+    const sibling = await controller.spawn('/root', {
+      taskName: 'sibling',
+      objective: 'Remain active.',
+    });
+
+    executor.pending[0]?.resolve({ output: 'canonical result' });
+    await vi.waitFor(() => {
+      expect(controller.output('/root', target.actorPath, target.turnId)).toMatchObject({
+        state: 'completed',
+        output: 'canonical result',
+      });
+      expect(onBackgroundError).toHaveBeenCalledWith(expect.objectContaining({
+        message: expect.stringContaining(
+          'post-commit watermark failed Actor store attempt postcommit-reject committed',
+        ),
+      }));
+    });
+
+    expect(terminalAttempts).toBe(1);
+    expect(controller.output('/root', sibling.actorPath, sibling.turnId)).toMatchObject({
+      state: 'running',
+    });
+    expect(controller.healthSnapshot()).toEqual({ state: 'healthy' });
+    expect(saved?.turns.find((turn) => turn.turnId === target.turnId)).toMatchObject({
+      state: 'completed',
+      output: 'canonical result',
+    });
+  });
+
+  it('cancels and retries a precommit timeout without fencing sibling work', async () => {
+    vi.useFakeTimers();
+    let releaseCancelledCompletion: (() => void) | undefined;
+    try {
+      let saved: AgentActorSnapshot | undefined;
+      let terminalAttempts = 0;
+      let cancelledAttempts = 0;
+      const cancelledCompletion = new Promise<void>((resolve) => {
+        releaseCancelledCompletion = resolve;
+      });
+      let markTerminalStarted: (() => void) | undefined;
+      const terminalStarted = new Promise<void>((resolve) => { markTerminalStarted = resolve; });
+      const healthChanges = vi.fn();
+      const store: AgentActorStore = {
+        eligibilityTimeoutMs: 65_000,
+        async load() { return saved === undefined ? undefined : structuredClone(saved); },
+        async save() { throw new Error('legacy save must not be used'); },
+        beginSave(snapshot) {
+          const terminal = snapshot.turns.some((turn) => turn.state === 'completed');
+          if (!terminal || terminalAttempts > 0) {
+            if (terminal) terminalAttempts += 1;
+            saved = structuredClone(snapshot);
+            return {
+              dequeued: Promise.resolve(),
+              eligible: Promise.resolve(),
+              canonical: Promise.resolve(),
+              completion: Promise.resolve(),
+              phase: () => 'committed',
+              cancelBeforeCommit: () => false,
+              diagnostics: () => ({ attemptId: 'committed', phase: 'committed', timingsMs: {} }),
+            };
+          }
+          terminalAttempts += 1;
+          markTerminalStarted?.();
+          let phase = 'precommit' as const | 'not_committed';
+          let rejectCanonical: ((error: unknown) => void) | undefined;
+          const canonical = new Promise<void>((_resolve, reject) => {
+            rejectCanonical = reject;
+          });
+          return {
+            dequeued: Promise.resolve(),
+            eligible: Promise.resolve(),
+            canonical,
+            completion: cancelledCompletion.then(() => canonical),
+            phase: () => phase,
+            cancelBeforeCommit: () => {
+              phase = 'not_committed';
+              cancelledAttempts += 1;
+              rejectCanonical?.(Object.assign(new Error('cancelled before commit'), {
+                code: 'actor_snapshot_save_cancelled' as const,
+              }));
+              return true;
+            },
+            diagnostics: () => ({ attemptId: 'precommit', phase, timingsMs: {} }),
+          };
+        },
+      };
+      const executor = new DeferredExecutor();
+      const controller = await createAgentActorController({
+        executor,
+        store,
+        onBackgroundError: vi.fn(),
+        onHealthChanged: healthChanges,
+      });
+      const target = await controller.spawn('/root', {
+        taskName: 'target',
+        objective: 'Retry a cancelled precommit save.',
+      });
+      const sibling = await controller.spawn('/root', {
+        taskName: 'sibling',
+        objective: 'Remain active.',
+      });
+
+      executor.pending[0]?.resolve({ output: 'committed on retry' });
+      await terminalStarted;
+      await vi.advanceTimersByTimeAsync(5_100);
+
+      expect(cancelledAttempts).toBe(1);
+      expect(terminalAttempts).toBe(1);
+      await vi.advanceTimersByTimeAsync(70_000);
+      expect(controller.healthSnapshot()).toMatchObject({ state: 'recovering' });
+      expect(terminalAttempts).toBe(1);
+      releaseCancelledCompletion?.();
+      await vi.runAllTimersAsync();
+      expect(terminalAttempts).toBe(2);
+      expect(controller.output('/root', target.actorPath, target.turnId)).toMatchObject({
+        state: 'completed',
+        output: 'committed on retry',
+      });
+      expect(controller.output('/root', sibling.actorPath, sibling.turnId)).toMatchObject({
+        state: 'running',
+      });
+      expect(controller.healthSnapshot()).toEqual({ state: 'healthy' });
+      expect(healthChanges).not.toHaveBeenCalledWith(expect.objectContaining({
+        state: 'unknown',
+      }));
+    } finally {
+      releaseCancelledCompletion?.();
+      vi.useRealTimers();
+    }
+  });
+
   it('does not charge a retry queue wait against the settlement persistence deadline', async () => {
     vi.useFakeTimers();
     try {
@@ -2415,20 +3001,46 @@ describe('F270 actor tree and scheduler', () => {
         releaseLateSave = resolve;
       });
       const healthChanges = vi.fn();
+      const onBackgroundError = vi.fn();
       const store: AgentActorStore = {
+        eligibilityTimeoutMs: 65_000,
         async load() { return undefined; },
-        async save(snapshot) {
-          const turn = snapshot.turns.find(
-            (candidate) => candidate.actorPath === '/root/worker',
-          );
-          if (turn?.state === 'completed') await lateSave;
+        async save() { throw new Error('legacy save must not be used'); },
+        beginSave(snapshot) {
+          const terminal = snapshot.turns.some((turn) => turn.state === 'completed');
+          if (!terminal) {
+            return {
+              dequeued: Promise.resolve(),
+              eligible: Promise.resolve(),
+              canonical: Promise.resolve(),
+              completion: Promise.resolve(),
+              phase: () => 'committed',
+              cancelBeforeCommit: () => false,
+              diagnostics: () => ({ attemptId: 'immediate', phase: 'committed', timingsMs: {} }),
+            };
+          }
+          let phase: AgentActorSavePhase = 'commit_inflight';
+          const canonical = lateSave.then(() => { phase = 'committed'; });
+          return {
+            dequeued: Promise.resolve(),
+            eligible: Promise.resolve(),
+            canonical,
+            completion: canonical,
+            phase: () => phase,
+            cancelBeforeCommit: () => false,
+            diagnostics: () => ({
+              attemptId: 'hung-rename',
+              phase,
+              timingsMs: { storageQueue: 2, fileLock: 3, rename: 5_000 },
+            }),
+          };
         },
       };
       const executor = new DeferredExecutor();
       const controller = await createAgentActorController({
         executor,
         store,
-        onBackgroundError: vi.fn(),
+        onBackgroundError,
         onHealthChanged: healthChanges,
       });
       const turn = await controller.spawn('/root', {
@@ -2447,6 +3059,11 @@ describe('F270 actor tree and scheduler', () => {
       expect(controller.output('/root', turn.actorPath, turn.turnId)).toMatchObject({
         state: 'running',
       });
+      expect(onBackgroundError).toHaveBeenCalledWith(expect.objectContaining({
+        cause: expect.objectContaining({
+          message: expect.stringContaining('hung-rename stopped in commit_inflight'),
+        }),
+      }));
 
       await expect(controller.shutdown()).rejects.toMatchObject({
         code: 'actor_shutdown_not_persisted',
@@ -2681,6 +3298,313 @@ describe('F270 actor tree and scheduler', () => {
       });
       expect(controller.list('/root').activeNonRootTurns).toBe(0);
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reconciles through long storage waits and ignores repair postcommit failure', async () => {
+    vi.useFakeTimers();
+    let releaseLateCommit: (() => void) | undefined;
+    let releaseRepairDequeue: (() => void) | undefined;
+    let releaseRepairEligibility: (() => void) | undefined;
+    let releaseRepairMaintenance: (() => void) | undefined;
+    const lateCommit = new Promise<void>((resolve) => { releaseLateCommit = resolve; });
+    const repairDequeue = new Promise<void>((resolve) => { releaseRepairDequeue = resolve; });
+    const repairEligibility = new Promise<void>((resolve) => {
+      releaseRepairEligibility = resolve;
+    });
+    const repairMaintenance = new Promise<void>((resolve) => {
+      releaseRepairMaintenance = resolve;
+    });
+    let markRepairStarted: (() => void) | undefined;
+    const repairStarted = new Promise<void>((resolve) => { markRepairStarted = resolve; });
+    let saved: AgentActorSnapshot | undefined;
+    let terminalCommitStarted = false;
+    const onBackgroundError = vi.fn();
+    const persist = async (
+      snapshot: AgentActorSnapshot,
+      expectedRevision: number,
+    ): Promise<void> => {
+      const actualRevision = saved?.revision ?? 0;
+      if (actualRevision !== expectedRevision) {
+        throw Object.assign(new Error('synthetic Actor revision conflict'), {
+          code: 'actor_snapshot_conflict' as const,
+          expectedRevision,
+          currentRevision: actualRevision,
+        });
+      }
+      saved = structuredClone(snapshot);
+    };
+    const store: AgentActorStore = {
+      eligibilityTimeoutMs: 65_000,
+      async load() { return saved === undefined ? undefined : structuredClone(saved); },
+      save: persist,
+      beginSave(snapshot, expectedRevision) {
+        const firstTerminal = !terminalCommitStarted && snapshot.turns.some((turn) => (
+          turn.actorPath === '/root/worker-a' && turn.state === 'completed'
+        ));
+        if (firstTerminal) {
+          terminalCommitStarted = true;
+          let phase: AgentActorSavePhase = 'commit_inflight';
+          const canonical = lateCommit.then(async () => {
+            await persist(snapshot, expectedRevision);
+            phase = 'committed';
+          });
+          return {
+            dequeued: Promise.resolve(),
+            eligible: Promise.resolve(),
+            canonical,
+            completion: canonical,
+            phase: () => phase,
+            cancelBeforeCommit: () => false,
+            diagnostics: () => ({ attemptId: 'late-terminal', phase, timingsMs: {} }),
+          };
+        }
+        const repair = snapshot.turns.some((turn) => turn.state === 'interrupted');
+        if (repair) {
+          markRepairStarted?.();
+          let phase: AgentActorSavePhase = 'queued';
+          const dequeued = repairDequeue;
+          const eligible = dequeued.then(() => repairEligibility).then(() => {
+            phase = 'precommit';
+          });
+          const canonical = eligible.then(async () => {
+            await persist(snapshot, expectedRevision);
+            phase = 'committed';
+          });
+          const completion = canonical.then(() => repairMaintenance).then(() => {
+            throw new Error('repair postcommit witness failed');
+          });
+          return {
+            dequeued,
+            eligible,
+            canonical,
+            completion,
+            phase: () => phase,
+            cancelBeforeCommit: () => false,
+            diagnostics: () => ({
+              attemptId: 'repair-phased-save',
+              phase,
+              failedStage: phase === 'committed' ? 'postCommit' : undefined,
+              timingsMs: {},
+            }),
+          };
+        }
+        let phase: AgentActorSavePhase = 'precommit';
+        const canonical = persist(snapshot, expectedRevision).then(() => {
+          phase = 'committed';
+        });
+        return {
+          dequeued: Promise.resolve(),
+          eligible: Promise.resolve(),
+          canonical,
+          completion: canonical,
+          phase: () => phase,
+          cancelBeforeCommit: () => false,
+          diagnostics: () => ({ attemptId: 'ordinary', phase, timingsMs: {} }),
+        };
+      },
+    };
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({
+      executor,
+      store,
+      owner: FIRST_OWNER,
+      isOwnerAlive: async () => true,
+      onBackgroundError,
+    });
+
+    try {
+      const first = await controller.spawn('/root', {
+        taskName: 'worker-a',
+        objective: 'Commit after the first deadline.',
+      });
+      const second = await controller.spawn('/root', {
+        taskName: 'worker-b',
+        objective: 'Be interrupted by repair.',
+      });
+      executor.pending[0]?.resolve({ output: 'late canonical result' });
+      await vi.advanceTimersByTimeAsync(5_001);
+      expect(controller.healthSnapshot().state).toBe('unknown');
+
+      releaseLateCommit?.();
+      await vi.advanceTimersByTimeAsync(0);
+      let repairSettled = false;
+      const reconciliation = controller.quiesce('repair after ambiguity').then(() => {
+        repairSettled = true;
+      });
+      await repairStarted;
+
+      await vi.advanceTimersByTimeAsync(70_000);
+      expect(repairSettled).toBe(false);
+      expect(controller.healthSnapshot().state).toBe('unknown');
+      releaseRepairDequeue?.();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(repairSettled).toBe(false);
+      releaseRepairEligibility?.();
+      await vi.advanceTimersByTimeAsync(0);
+      await reconciliation;
+
+      expect(controller.healthSnapshot()).toEqual({ state: 'healthy' });
+      expect(controller.output('/root', first.actorPath, first.turnId)).toMatchObject({
+        state: 'completed',
+        output: 'late canonical result',
+      });
+      expect(controller.output('/root', second.actorPath, second.turnId)).toMatchObject({
+        state: 'interrupted',
+        error: 'repair after ambiguity',
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(controller.healthSnapshot()).toEqual({ state: 'healthy' });
+      releaseRepairMaintenance?.();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onBackgroundError).toHaveBeenCalledWith(expect.objectContaining({
+        message: expect.stringContaining('repair postcommit witness failed'),
+      }));
+    } finally {
+      releaseLateCommit?.();
+      releaseRepairDequeue?.();
+      releaseRepairEligibility?.();
+      releaseRepairMaintenance?.();
+      await vi.runAllTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancels an ineligible repair before late admission and accepts a boundary commit', async () => {
+    vi.useFakeTimers();
+    let saved: AgentActorSnapshot | undefined;
+    let releaseLateCommit: (() => void) | undefined;
+    let releaseFirstRepairEligibility: (() => void) | undefined;
+    const lateCommit = new Promise<void>((resolve) => { releaseLateCommit = resolve; });
+    const firstRepairEligibility = new Promise<void>((resolve) => {
+      releaseFirstRepairEligibility = resolve;
+    });
+    let terminalStarted = false;
+    let repairCount = 0;
+    const persist = (snapshot: AgentActorSnapshot, expectedRevision: number): void => {
+      const currentRevision = saved?.revision ?? 0;
+      if (currentRevision !== expectedRevision) {
+        throw Object.assign(new Error('synthetic Actor revision conflict'), {
+          code: 'actor_snapshot_conflict' as const,
+          expectedRevision,
+          currentRevision,
+        });
+      }
+      saved = structuredClone(snapshot);
+    };
+    const store: AgentActorStore = {
+      eligibilityTimeoutMs: 65_000,
+      async load() { return saved === undefined ? undefined : structuredClone(saved); },
+      async save() { throw new Error('legacy save must not be used'); },
+      beginSave(snapshot, expectedRevision) {
+        const terminal = snapshot.turns.some((turn) => turn.state === 'completed');
+        const repair = snapshot.turns.some((turn) => turn.state === 'interrupted');
+        if (!terminalStarted && terminal && !repair) {
+          terminalStarted = true;
+          let phase: AgentActorSavePhase = 'commit_inflight';
+          const canonical = lateCommit.then(() => {
+            persist(snapshot, expectedRevision);
+            phase = 'committed';
+          });
+          return {
+            dequeued: Promise.resolve(), eligible: Promise.resolve(), canonical,
+            completion: canonical, phase: () => phase, cancelBeforeCommit: () => false,
+            diagnostics: () => ({ attemptId: 'late-terminal', phase, timingsMs: {} }),
+          };
+        }
+        if (repair) {
+          repairCount += 1;
+          if (repairCount === 1) {
+            let phase: AgentActorSavePhase = 'queued';
+            let cancelled = false;
+            const eligible = firstRepairEligibility.then(() => {
+              if (cancelled) throw new Error('repair cancelled before admission');
+              phase = 'precommit';
+            });
+            const canonical = eligible.then(() => {
+              persist(snapshot, expectedRevision);
+              phase = 'committed';
+            });
+            return {
+              dequeued: Promise.resolve(), eligible, canonical, completion: canonical,
+              phase: () => phase,
+              cancelBeforeCommit: () => {
+                if (phase !== 'queued' && phase !== 'precommit') return false;
+                cancelled = true;
+                phase = 'not_committed';
+                return true;
+              },
+              diagnostics: () => ({
+                attemptId: 'repair-before-admission', phase, timingsMs: {},
+              }),
+            };
+          }
+          let phase: AgentActorSavePhase = 'commit_inflight';
+          setTimeout(() => {
+            persist(snapshot, expectedRevision);
+            phase = 'committed';
+          }, 5_000);
+          const canonical = new Promise<void>(() => {});
+          return {
+            dequeued: Promise.resolve(), eligible: Promise.resolve(), canonical,
+            completion: canonical, phase: () => phase, cancelBeforeCommit: () => false,
+            diagnostics: () => ({
+              attemptId: 'repair-deadline-edge', phase, timingsMs: {},
+            }),
+          };
+        }
+        persist(snapshot, expectedRevision);
+        return {
+          dequeued: Promise.resolve(), eligible: Promise.resolve(), canonical: Promise.resolve(),
+          completion: Promise.resolve(), phase: () => 'committed',
+          cancelBeforeCommit: () => false,
+          diagnostics: () => ({ attemptId: 'ordinary', phase: 'committed', timingsMs: {} }),
+        };
+      },
+    };
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({
+      executor,
+      store,
+      owner: FIRST_OWNER,
+      isOwnerAlive: async () => true,
+    });
+
+    try {
+      const target = await controller.spawn('/root', {
+        taskName: 'repair-target', objective: 'Require a race-safe repair.',
+      });
+      await controller.spawn('/root', {
+        taskName: 'repair-sibling', objective: 'Be interrupted by repair.',
+      });
+      executor.pending[0]?.resolve({ output: 'late target fact' });
+      await vi.advanceTimersByTimeAsync(5_001);
+      expect(controller.healthSnapshot().state).toBe('unknown');
+      releaseLateCommit?.();
+      await vi.advanceTimersByTimeAsync(0);
+
+      const firstRepair = controller.quiesce('first repair attempt');
+      void firstRepair.catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(65_001);
+      expect(saved?.turns.some((turn) => turn.state === 'interrupted')).toBe(false);
+      releaseFirstRepairEligibility?.();
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(firstRepair).rejects.toThrow('did not finish before its deadline');
+      expect(saved?.turns.some((turn) => turn.state === 'interrupted')).toBe(false);
+
+      const secondRepair = controller.quiesce('boundary repair commit');
+      await vi.advanceTimersByTimeAsync(5_001);
+      await secondRepair;
+      expect(controller.healthSnapshot()).toEqual({ state: 'healthy' });
+      expect(controller.output('/root', target.actorPath, target.turnId)).toMatchObject({
+        state: 'completed', output: 'late target fact',
+      });
+      expect(saved?.turns.some((turn) => turn.state === 'interrupted')).toBe(true);
+    } finally {
+      releaseLateCommit?.();
+      releaseFirstRepairEligibility?.();
+      await vi.runAllTimersAsync();
       vi.useRealTimers();
     }
   });

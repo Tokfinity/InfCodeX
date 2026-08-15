@@ -709,7 +709,7 @@ export interface ConnectKodaXRuntimeOptions {
 
 /** SDK facts that embedders can inspect before auto-starting a daemon. */
 export const KODAX_RUNTIME_SDK_CAPABILITIES = Object.freeze({
-  actorSettlementConvergence: 1,
+  actorSettlementConvergence: 2,
   daemonOrphanExit: 1,
   daemonShutdownVerification: 1,
   managedRunDurability: 1,
@@ -758,7 +758,7 @@ export interface RuntimeCapabilityRequirements {
   /** Require durable accepted-input and completed-turn boundaries for managed Runs. */
   readonly managedRunDurability?: 1;
   /** Require fail-closed root fencing plus automatic same-owner Actor settlement repair. */
-  readonly actorSettlementConvergence?: 1;
+  readonly actorSettlementConvergence?: 1 | 2;
   /** Require Session-local sequences, epoch-bound cursors, and scoped event access. */
   readonly sessionEventJournal?: 1;
   readonly daemonManagement?: 1;
@@ -3376,7 +3376,7 @@ export async function createKodaXRuntime(
         sessionEventJournal: 1 as const,
         ...(autoStart
           ? {
-            actorSettlementConvergence: 1 as const,
+            actorSettlementConvergence: 2 as const,
             managedRunDurability: 1 as const,
             ...(process.platform === "win32"
               ? {
@@ -3459,7 +3459,7 @@ export async function createKodaXRuntime(
       persistenceFailure: "fail_closed",
     },
     actorSettlementConvergence: {
-      version: 1,
+      version: 2,
       rootFence: "fail_closed",
       sameOwnerRepair: "automatic",
       unknownAfterTurnQueue: true,
@@ -4721,7 +4721,7 @@ async function connectKodaXRuntimeInternal(
         sessionEventJournal: 1 as const,
         ...(options.autoStart === true
           ? {
-            actorSettlementConvergence: 1 as const,
+            actorSettlementConvergence: 2 as const,
             managedRunDurability: 1 as const,
             ...(process.platform === "win32"
               ? {
@@ -10237,8 +10237,16 @@ function createRuntimeAgentActorRegistry(
         );
       }
       const store: AgentActorStore = {
+        eligibilityTimeoutMs: sessionManager.storage.actorSnapshotEligibilityTimeoutMs,
         async load(): Promise<AgentActorSnapshot | undefined> {
           return (await sessionManager.storage.peek(sessionId))?.actorSnapshot;
+        },
+        beginSave(snapshot, expectedRevision) {
+          return sessionManager.storage.beginActorSnapshotSave(
+            sessionId,
+            snapshot,
+            expectedRevision,
+          );
         },
         save(snapshot, expectedRevision) {
           return sessionManager.storage.saveActorSnapshot(

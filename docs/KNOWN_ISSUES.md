@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-08-14_
+_Last Updated: 2026-08-15_
 
 ---
 
@@ -14,6 +14,7 @@ _Last Updated: 2026-08-14_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 292 | High | Resolved | Actor settlement deadline conflates storage eligibility, canonical commit, and post-commit maintenance | v0.7.85 Actor settlement convergence | v0.7.88 development | 2026-08-15 | 2026-08-15 |
 | 291 | High | Resolved | Crashed inline Runtime owner leaves daemon startup permanently fenced | v0.7.69 owner-policy fencing | v0.7.86 release | 2026-08-11 | 2026-08-11 |
 | 290 | Medium | Resolved | Mixed-case custom provider aliases lose model autocomplete | custom provider model completion | v0.7.85 release | 2026-08-10 | 2026-08-10 |
 | 289 | High | Resolved | Windows workspace sandbox recursively stamped broad home and temp ACLs in the shell timeout | v0.7.85 Agent Home shell hardening | v0.7.85 release | 2026-08-10 | 2026-08-10 |
@@ -194,6 +195,85 @@ _Last Updated: 2026-08-14_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 292: Actor settlement deadline conflates storage eligibility, canonical commit, and post-commit maintenance
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.85 Actor settlement convergence
+- **Fixed**: v0.7.88 development
+- **Created**: 2026-08-15
+- **Resolved**: 2026-08-15
+
+#### Original Problem
+
+KodaX 0.7.87 Session `20260815_100209_dw8cf41233b429`, Run
+`run_mstqdm3u_df966d22`, persisted the exact completion for
+`turn_root_analysis_lane_2` only after the Actor settlement watchdog had fenced
+the Run as `actor_settlement_not_persisted`. Same-owner reconciliation retained
+that completion and interrupted the two remaining siblings, but the Run still
+failed even though the child output and canonical terminal fact survived.
+
+The Actor's five-second settlement budget starts after its own mutation queue
+becomes ready, but `FileSessionStorage.saveActorSnapshot()` returns one Promise
+covering the process-local storage queue, a file lock that may legally wait up
+to sixty seconds, read/CAS and lineage work, temp-file write/fsync/rename, and
+post-rename cache, append-watermark, topology, lock-release, and location-hint
+maintenance. Promise pending or rejection therefore does not identify whether
+the canonical Actor snapshot is uncommitted, in-flight, or already committed.
+The timed-out write is not cancelled and can still rename later.
+
+#### Context
+
+The daemon log contains seven members of the broader settlement-timeout symptom
+family across three Sessions, but only the 2026-08-15 incident occurred after
+the v0.7.85 convergence implementation. Existing controller tests use a
+monolithic fake store, while the real-storage long-lock test is not connected
+to Actor settlement. The exact storage stage of the production incident is not
+recoverable because no phase timing was recorded.
+
+#### Root Cause
+
+The Actor/store contract exposes full storage completion instead of canonical
+commit. The five-second ambiguity deadline consequently includes legal storage
+eligibility waits and post-commit maintenance. The separate thirty-second Actor
+queue deadline can also expire behind a predecessor mutation that is legally
+waiting for the sixty-second storage lock. Validity is checked only after the
+whole save Promise returns, too late to prevent a queued or pre-rename late
+write.
+
+#### Resolution
+
+- Added an optional storage-neutral phased Actor save attempt exposing
+  process-local dequeue, writer eligibility, canonical result, full completion,
+  pre-commit cancellation, and structured phase/timing outcomes.
+- Let Actor mutations commit local state after canonical success while keeping
+  storage maintenance serialized to full completion.
+- Start the five-second canonical watchdog only after storage eligibility;
+  check cancellation immediately before rename and reserve fail-close for a
+  commit already in flight with no authoritative result.
+- Terminal settlement now observes the active predecessor save: local queue and
+  legal file-lock waits apply backpressure, a cancellable predecessor drains
+  before retry, and a predecessor stuck in canonical replacement triggers the
+  same bounded ambiguity fence.
+- Rename errors use an exact JSON-persisted-shape Actor-snapshot readback to
+  distinguish committed, not committed, and still ambiguous outcomes;
+  revision equality alone is not accepted as proof.
+- Same-owner reconciliation uses the same dequeue, eligibility, canonical, and
+  full-completion boundaries. Legal repair queue/lock waits and post-commit
+  maintenance no longer consume the five-second canonical deadline.
+- Advertise the corrected daemon contract as `actorSettlementConvergence:2`
+  without adding a new Space-visible Run phase.
+
+Regression coverage includes legal long file-lock competition, process-local
+queue and predecessor maintenance beyond 65 seconds, predecessor and terminal
+rename hangs, pre-commit cancellation with physical drain, rename reject before
+and after canonical replacement, same-revision readback, post-commit delay and
+failure, CAS/owner conflicts, late writes, exact same-owner repair, and sibling
+interruption. File storage records storage queue, lock, read/CAS, lineage,
+topology admission/epoch maintenance, temp write, fsync, rename, post-commit,
+canonical outcome, and full completion outcome. Topology timing ends before the
+nested Session-file write, so it does not duplicate temp-write/fsync/rename.
 
 ### 291: Crashed inline Runtime owner leaves daemon startup permanently fenced
 

@@ -36,6 +36,26 @@ const KODAX_REPO_ROOT = process.platform === 'win32'
   ? 'C:/Works/GitWorks/KodaX'
   : '/Works/GitWorks/KodaX';
 
+function actorStorageSnapshot(revision: number): AgentActorSnapshot {
+  const now = '2026-08-15T00:00:00.000Z';
+  return {
+    schemaVersion: 1,
+    revision,
+    maxConcurrentThreads: 4,
+    actors: [{
+      path: '/root', taskName: 'root', kind: 'native', state: 'running',
+      capabilities: {
+        tools: ['*'], filesystem: 'write', network: true,
+        providers: ['*'], canAskUser: true,
+      },
+      turnIds: [], mailboxCursor: 0, createdAt: now, updatedAt: now, revision: 1,
+    }],
+    turns: [],
+    mailboxes: { '/root': [] },
+    events: [],
+  };
+}
+
 describe('FileSessionStorage', () => {
   let tempHome: string;
   let previousHome: string | undefined;
@@ -142,12 +162,20 @@ describe('FileSessionStorage', () => {
 
     const nextSnapshot = { ...actorSnapshot, revision: 4 };
     await storage.saveActorSnapshot('actor-session', nextSnapshot, 3);
-    await expect(storage.saveActorSnapshot('actor-session', actorSnapshot, 3))
-      .rejects.toMatchObject({
+    const conflictAttempt = storage.beginActorSnapshotSave('actor-session', actorSnapshot, 3);
+    await expect(conflictAttempt.canonical).rejects.toMatchObject({
         code: 'actor_snapshot_conflict',
         expectedRevision: 3,
         currentRevision: 4,
       });
+    await expect(conflictAttempt.completion).rejects.toMatchObject({
+      code: 'actor_snapshot_conflict',
+    });
+    expect(conflictAttempt.diagnostics()).toMatchObject({
+      phase: 'not_committed',
+      failedStage: 'readCas',
+      timingsMs: { readCas: expect.any(Number) },
+    });
 
     expect(await storage.load('actor-session')).toMatchObject({
       title: 'Actor owner updated',
@@ -208,6 +236,341 @@ describe('FileSessionStorage', () => {
 
     const fork = await storage.fork('actor-session', undefined, { sessionId: 'actor-fork' });
     expect(fork?.data.actorSnapshot).toBeUndefined();
+  });
+
+  it('keeps a canonical Actor commit successful when post-commit maintenance fails', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const storage = new FileSessionStorage({ sessionsDir });
+    const sessionId = 'actor-canonical-before-maintenance';
+    const actorSnapshot = actorStorageSnapshot(3);
+    await storage.save(sessionId, {
+      messages: [{ role: 'user', content: 'persist actors by canonical phase' }],
+      title: 'Actor phased commit',
+      gitRoot: KODAX_REPO_ROOT,
+      actorSnapshot,
+    });
+
+    const originalRename = fsPromises.rename.bind(fsPromises);
+    const originalStat = fsPromises.stat.bind(fsPromises);
+    let mainCommitted = false;
+    let releaseMaintenance: (() => void) | undefined;
+    let markMaintenanceStarted: (() => void) | undefined;
+    const maintenanceGate = new Promise<void>((resolve) => { releaseMaintenance = resolve; });
+    const maintenanceStarted = new Promise<void>((resolve) => {
+      markMaintenanceStarted = resolve;
+    });
+    const rename = vi.spyOn(fsPromises, 'rename').mockImplementation(async (from, to) => {
+      await originalRename(from, to);
+      if (path.basename(String(to)) === `${sessionId}.jsonl`) {
+        mainCommitted = true;
+      }
+    });
+    const stat = vi.spyOn(fsPromises, 'stat').mockImplementation(async (target, options) => {
+      if (
+        mainCommitted
+        && path.basename(String(target)) === `${sessionId}.jsonl`
+      ) {
+        markMaintenanceStarted?.();
+        await maintenanceGate;
+        throw Object.assign(new Error('post-commit witness failed'), { code: 'EIO' });
+      }
+      return originalStat(target, options);
+    });
+    try {
+      const attempt = storage.beginActorSnapshotSave(
+        sessionId,
+        { ...actorSnapshot, revision: 4 },
+        3,
+      );
+      let completionSettled = false;
+      void attempt.completion.then(
+        () => { completionSettled = true; },
+        () => { completionSettled = true; },
+      );
+
+      await attempt.eligible;
+      await attempt.canonical;
+      await maintenanceStarted;
+
+      expect(completionSettled).toBe(false);
+      expect(attempt.phase()).toBe('committed');
+      expect(attempt.diagnostics()).toMatchObject({
+        phase: 'committed',
+        activeStage: 'postCommit',
+        timingsMs: { rename: expect.any(Number) },
+      });
+      releaseMaintenance?.();
+      await expect(attempt.completion).rejects.toThrow('post-commit witness failed');
+      expect(attempt.phase()).toBe('committed');
+      expect(attempt.diagnostics().failedStage).toBe('postCommit');
+      stat.mockRestore();
+      await expect(storage.prepareSessionAppend(sessionId)).resolves.toBeNull();
+      expect((await new FileSessionStorage({ sessionsDir }).peek(sessionId))?.actorSnapshot)
+        .toMatchObject({ revision: 4 });
+    } finally {
+      releaseMaintenance?.();
+      stat.mockRestore();
+      rename.mockRestore();
+    }
+  });
+
+  it('keeps rename in-flight ambiguous until its canonical outcome is known', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const storage = new FileSessionStorage({ sessionsDir });
+    const sessionId = 'actor-rename-inflight';
+    const actorSnapshot = actorStorageSnapshot(1);
+    await storage.save(sessionId, {
+      messages: [{ role: 'user', content: 'hold canonical rename' }],
+      title: 'Actor rename in-flight',
+      gitRoot: KODAX_REPO_ROOT,
+      actorSnapshot,
+    });
+
+    const originalRename = fsPromises.rename.bind(fsPromises);
+    let releaseRename: (() => void) | undefined;
+    let markRenameStarted: (() => void) | undefined;
+    const renameGate = new Promise<void>((resolve) => { releaseRename = resolve; });
+    const renameStarted = new Promise<void>((resolve) => { markRenameStarted = resolve; });
+    const rename = vi.spyOn(fsPromises, 'rename').mockImplementation(async (from, to) => {
+      if (path.basename(String(to)) === `${sessionId}.jsonl`) {
+        markRenameStarted?.();
+        await renameGate;
+        await originalRename(from, to);
+        return;
+      }
+      await originalRename(from, to);
+    });
+    try {
+      const targetSnapshot: AgentActorSnapshot = {
+        ...actorSnapshot,
+        revision: 2,
+        actors: actorSnapshot.actors.map((actor) => ({
+          ...actor,
+          currentTurnId: undefined,
+        })),
+      };
+      const attempt = storage.beginActorSnapshotSave(
+        sessionId,
+        targetSnapshot,
+        1,
+      );
+      await attempt.eligible;
+      await renameStarted;
+
+      expect(attempt.phase()).toBe('commit_inflight');
+      expect(attempt.diagnostics().activeStage).toBe('rename');
+      expect(attempt.cancelBeforeCommit()).toBe(false);
+
+      releaseRename?.();
+      await attempt.canonical;
+      await attempt.completion;
+      expect(attempt.phase()).toBe('committed');
+      expect(attempt.diagnostics().timingsMs.rename).toEqual(expect.any(Number));
+      expect((await new FileSessionStorage({ sessionsDir }).peek(sessionId))?.actorSnapshot)
+        .toMatchObject({ revision: 2 });
+    } finally {
+      releaseRename?.();
+      rename.mockRestore();
+    }
+  });
+
+  it('classifies an explicit failed replacement as definitely not committed', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const storage = new FileSessionStorage({ sessionsDir });
+    const sessionId = 'actor-rename-rejected-before-commit';
+    const actorSnapshot = actorStorageSnapshot(1);
+    await storage.save(sessionId, {
+      messages: [{ role: 'user', content: 'reject canonical rename' }],
+      title: 'Actor rename rejection',
+      gitRoot: KODAX_REPO_ROOT,
+      actorSnapshot,
+    });
+
+    const rename = vi.spyOn(fsPromises, 'rename').mockImplementation(async (_from, to) => {
+      if (path.basename(String(to)) === `${sessionId}.jsonl`) {
+        throw Object.assign(new Error('canonical rename rejected'), { code: 'EIO' });
+      }
+      throw new Error(`Unexpected rename target: ${String(to)}`);
+    });
+    try {
+      const targetSnapshot: AgentActorSnapshot = {
+        ...actorSnapshot,
+        revision: 2,
+        actors: actorSnapshot.actors.map((actor) => ({
+          ...actor,
+          currentTurnId: undefined,
+        })),
+      };
+      const attempt = storage.beginActorSnapshotSave(
+        sessionId,
+        targetSnapshot,
+        1,
+      );
+
+      await attempt.dequeued;
+      await attempt.eligible;
+      await expect(attempt.canonical).rejects.toThrow('canonical rename rejected');
+      await expect(attempt.completion).rejects.toThrow('canonical rename rejected');
+      expect(attempt.phase()).toBe('not_committed');
+      expect(attempt.diagnostics()).toMatchObject({
+        failedStage: 'rename',
+        completionOutcome: 'failed',
+        timingsMs: { rename: expect.any(Number) },
+      });
+      expect((await new FileSessionStorage({ sessionsDir }).peek(sessionId))?.actorSnapshot)
+        .toMatchObject({ revision: 1 });
+    } finally {
+      rename.mockRestore();
+    }
+  });
+
+  it('confirms a replacement that committed before rename reported failure', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const storage = new FileSessionStorage({ sessionsDir });
+    const sessionId = 'actor-rename-rejected-after-commit';
+    const actorSnapshot = actorStorageSnapshot(1);
+    await storage.save(sessionId, {
+      messages: [{ role: 'user', content: 'verify canonical rename readback' }],
+      title: 'Actor rename readback',
+      gitRoot: KODAX_REPO_ROOT,
+      actorSnapshot,
+    });
+
+    const originalRename = fsPromises.rename.bind(fsPromises);
+    const rename = vi.spyOn(fsPromises, 'rename').mockImplementation(async (from, to) => {
+      await originalRename(from, to);
+      if (path.basename(String(to)) === `${sessionId}.jsonl`) {
+        throw Object.assign(new Error('rename result transport failed'), { code: 'EIO' });
+      }
+    });
+    try {
+      const targetSnapshot: AgentActorSnapshot = {
+        ...actorSnapshot,
+        revision: 2,
+        actors: actorSnapshot.actors.map((actor) => ({
+          ...actor,
+          currentTurnId: undefined,
+        })),
+      };
+      const attempt = storage.beginActorSnapshotSave(
+        sessionId,
+        targetSnapshot,
+        1,
+      );
+
+      await attempt.canonical;
+      await expect(attempt.completion).rejects.toThrow('rename result transport failed');
+      expect(attempt.phase()).toBe('committed');
+      expect(attempt.diagnostics()).toMatchObject({
+        failedStage: 'rename',
+        canonicalOutcome: 'committed_by_readback',
+        completionOutcome: 'failed',
+      });
+      expect((await new FileSessionStorage({ sessionsDir }).peek(sessionId))?.actorSnapshot)
+        .toMatchObject({ revision: 2 });
+    } finally {
+      rename.mockRestore();
+    }
+  });
+
+  it('does not confirm a rejected replacement from a matching revision alone', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const storage = new FileSessionStorage({ sessionsDir });
+    const sessionId = 'actor-rename-same-revision-different-content';
+    const actorSnapshot = actorStorageSnapshot(1);
+    await storage.save(sessionId, {
+      messages: [{ role: 'user', content: 'same revision must not prove commit' }],
+      title: 'Actor exact readback',
+      gitRoot: KODAX_REPO_ROOT,
+      actorSnapshot,
+    });
+
+    const rename = vi.spyOn(fsPromises, 'rename').mockImplementation(async (_from, to) => {
+      if (path.basename(String(to)) === `${sessionId}.jsonl`) {
+        throw Object.assign(new Error('same-revision rename rejected'), { code: 'EIO' });
+      }
+      throw new Error(`Unexpected rename target: ${String(to)}`);
+    });
+    try {
+      const attempt = storage.beginActorSnapshotSave(
+        sessionId,
+        { ...actorSnapshot, maxConcurrentThreads: 9 },
+        1,
+      );
+
+      await expect(attempt.canonical).rejects.toThrow('same-revision rename rejected');
+      await expect(attempt.completion).rejects.toThrow('same-revision rename rejected');
+      expect(attempt.phase()).toBe('not_committed');
+      expect((await new FileSessionStorage({ sessionsDir }).peek(sessionId))?.actorSnapshot)
+        .toMatchObject({ revision: 1, maxConcurrentThreads: 4 });
+    } finally {
+      rename.mockRestore();
+    }
+  });
+
+  it('cancels a precommit Actor snapshot attempt without a late canonical rename', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const storage = new FileSessionStorage({ sessionsDir });
+    const sessionId = 'actor-cancel-before-rename';
+    const actorSnapshot = actorStorageSnapshot(1);
+    await storage.save(sessionId, {
+      messages: [{ role: 'user', content: 'cancel before canonical rename' }],
+      title: 'Actor cancelled commit',
+      gitRoot: KODAX_REPO_ROOT,
+      actorSnapshot,
+    });
+
+    const originalOpen = fsPromises.open.bind(fsPromises);
+    let releaseOpen: (() => void) | undefined;
+    let markOpenStarted: (() => void) | undefined;
+    const openGate = new Promise<void>((resolve) => { releaseOpen = resolve; });
+    const openStarted = new Promise<void>((resolve) => { markOpenStarted = resolve; });
+    const open = vi.spyOn(fsPromises, 'open').mockImplementation(async (file, flags, mode) => {
+      if (String(file).includes(`${sessionId}.jsonl.`) && String(file).endsWith('.tmp')) {
+        markOpenStarted?.();
+        await openGate;
+      }
+      return originalOpen(file, flags, mode);
+    });
+    const rename = vi.spyOn(fsPromises, 'rename');
+    try {
+      const attempt = storage.beginActorSnapshotSave(
+        sessionId,
+        { ...actorSnapshot, revision: 2 },
+        1,
+      );
+      await attempt.eligible;
+      await openStarted;
+
+      expect(attempt.phase()).toBe('precommit');
+      expect(attempt.diagnostics().activeStage).toBe('tempWrite');
+      expect(attempt.cancelBeforeCommit()).toBe(true);
+      releaseOpen?.();
+
+      await expect(attempt.canonical).rejects.toMatchObject({
+        code: 'actor_snapshot_save_cancelled',
+      });
+      await expect(attempt.completion).rejects.toMatchObject({
+        code: 'actor_snapshot_save_cancelled',
+      });
+      expect(attempt.phase()).toBe('not_committed');
+      expect(attempt.diagnostics().failedStage).toBe('tempWrite');
+      expect(rename.mock.calls.some(([, target]) => (
+        path.basename(String(target)) === `${sessionId}.jsonl`
+      ))).toBe(false);
+      expect((await new FileSessionStorage({ sessionsDir }).peek(sessionId))?.actorSnapshot)
+        .toMatchObject({ revision: 1 });
+    } finally {
+      releaseOpen?.();
+      open.mockRestore();
+      rename.mockRestore();
+    }
   });
 
   it('requires the durable Actor owner for archive, unarchive, and delete', async () => {
@@ -2020,6 +2383,61 @@ describe('FileSessionStorage', () => {
     await holder;
 
     expect((await storage.load(sessionId))?.messages).toEqual(messages);
+  });
+
+  it('admits a phase-aware Actor save after a legal long Session lock wait', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const storage = new FileSessionStorage({ sessionsDir });
+    const sessionId = 'actor-long-cross-instance-writer';
+    const snapshot = actorStorageSnapshot(1);
+    await storage.save(sessionId, {
+      messages: [{ role: 'user', content: 'wait before Actor CAS' }],
+      title: 'Actor long writer',
+      gitRoot: KODAX_REPO_ROOT,
+      actorSnapshot: snapshot,
+    });
+    const lockKey = createHash('sha256').update(sessionId, 'utf8').digest('hex');
+    const lockPath = path.join(sessionsDir, '.write-locks', `${lockKey}.lock`);
+    let markLockHeld!: () => void;
+    const lockHeld = new Promise<void>((resolve) => { markLockHeld = resolve; });
+    const holder = withKodaXFileLock(lockPath, async () => {
+      markLockHeld();
+      await new Promise<void>((resolve) => setTimeout(resolve, 5_600));
+    });
+    await lockHeld;
+
+    const attempt = storage.beginActorSnapshotSave(
+      sessionId,
+      { ...snapshot, revision: 2 },
+      1,
+    );
+    let eligible = false;
+    void attempt.eligible.then(() => { eligible = true; });
+    await attempt.dequeued;
+    await new Promise<void>((resolve) => setTimeout(resolve, 5_100));
+    expect(eligible).toBe(false);
+    expect(attempt.phase()).toBe('queued');
+
+    await holder;
+    await attempt.eligible;
+    await attempt.canonical;
+    await attempt.completion;
+
+    expect(attempt.phase()).toBe('committed');
+    expect(attempt.diagnostics().timingsMs).toMatchObject({
+      storageQueue: expect.any(Number),
+      fileLock: expect.any(Number),
+      readCas: expect.any(Number),
+      lineage: expect.any(Number),
+      tempWrite: expect.any(Number),
+      fsync: expect.any(Number),
+      rename: expect.any(Number),
+      postCommit: expect.any(Number),
+      total: expect.any(Number),
+    });
+    expect(attempt.diagnostics().timingsMs.fileLock).toBeGreaterThan(5_000);
+    expect((await storage.peek(sessionId))?.actorSnapshot).toMatchObject({ revision: 2 });
   });
 
   it('keeps the outer review fence live while a branch mutation waits on a long session writer', async () => {

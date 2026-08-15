@@ -1,6 +1,6 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-08-14
+> Last updated: 2026-08-15
 >
 > Current published baseline: `v0.7.87`
 > (`@kodax-ai/kodax@0.7.87`; npm publication remains manual)
@@ -25,14 +25,24 @@ established
 controller-wide bounded Actor progress
 persistence, queue-aware terminal deadlines, root fail-closed fencing, and
 automatic same-owner settlement recovery after an unknown durability boundary.
-Known queue waits pause the five-second persistence budget. Same-owner repair
-and root abort close effect admission; the logical convergence boundary also
-requires every exact tool execution admitted before the fence to settle. The
-Session route then releases without waiting for the old root executor Promise.
+The v2 settlement contract separates Actor mutation order, process-local
+storage dequeue, writer eligibility, cancellable pre-commit work, canonical
+replacement, and full maintenance completion. Local storage queue backpressure
+is unbounded by the file-lock contract; after dequeue, File Session storage
+declares a 65-second eligibility bound around its 60-second writer-lock
+contract. The five-second deadline begins only after eligibility. Actor state
+commits at canonical replacement while the storage queue continues to serialize
+cache, watermark, topology, hint, and lock maintenance. Same-owner repair uses
+the same phased save contract, and terminal settlement observes an active
+predecessor's canonical phase rather than waiting forever behind a hung rename.
+Same-owner repair and root abort close effect admission; the logical convergence
+boundary also requires every exact tool execution admitted before the fence to
+settle. The Session route then releases without waiting for the old root executor Promise.
 An abort-ignoring provider cannot publish callbacks or start a new Runtime-
 mediated effect after its fence.
-The versioned `actorSettlementConvergence:1` capability lets SDK hosts reject
-older partial semantics. It keeps
+The versioned `actorSettlementConvergence:2` capability lets new SDK hosts reject
+older monolithic-save semantics while remaining backward compatible with hosts
+that require v1. It keeps
 Windows daemon containment before user code
 can create descendants: the daemon is created suspended, assigned to a
 kill-on-close Job Object, and resumed only after assignment succeeds. An

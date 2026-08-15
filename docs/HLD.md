@@ -1,6 +1,6 @@
 # KodaX High-Level Design
 
-> Last updated: 2026-08-14
+> Last updated: 2026-08-15
 >
 > Current published baseline: `v0.7.87`
 > (`@kodax-ai/kodax@0.7.87`; npm publication remains manual)
@@ -39,8 +39,21 @@ completion.
 
 Actor settlement is a separate durability boundary. Progress observations are
 coalesced once across the complete controller tree. Terminal settlement starts
-its ambiguity deadline only at the mutation-queue head; a separate bounded wait
-detects a permanently blocked predecessor. On unknown durability, Runtime
+its five-second canonical deadline only after a phase-aware store admits the
+save. Actor mutation order and process-local storage dequeue apply backpressure
+without consuming the writer-lock budget; the store eligibility bound begins
+only after dequeue, so either a long local queue or a legal Session writer-lock
+wait cannot become commit ambiguity. Queued and
+pre-commit work can be cancelled before file replacement and must not write
+late; an in-flight canonical replacement remains fail-closed, while a returned
+replacement error is resolved by authoritative persisted-shape snapshot readback. Canonical success
+releases Actor state while cache, watermark, topology, and lock maintenance stay
+serialized and surface only as degraded diagnostics if they later fail.
+The readback compares the JSON-persisted Actor snapshot, not revision alone. A terminal
+settlement also monitors the active predecessor save and fences a predecessor
+whose canonical replacement remains unresolved. Same-owner repair reuses the
+same phased boundary, so its queue, lock, and post-commit waits are not charged
+to the five-second canonical deadline. On unknown durability, Runtime
 fail-closes root and child work, suppresses later effects, and automatically
 reloads only an exact same-owner snapshot before durably quiescing remaining
 turns. Owner conflicts and unresolved storage remain unknown rather than being

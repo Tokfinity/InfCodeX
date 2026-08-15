@@ -283,10 +283,68 @@ export interface AgentActorSnapshotV2 extends AgentActorSnapshotContents {
 
 export type AgentActorSnapshot = AgentActorSnapshotV1 | AgentActorSnapshotV2;
 
+export type AgentActorSavePhase =
+  | 'queued'
+  | 'precommit'
+  | 'commit_inflight'
+  | 'committed'
+  | 'not_committed';
+
+export type AgentActorSaveTiming =
+  | 'storageQueue'
+  | 'fileLock'
+  | 'readCas'
+  | 'lineage'
+  | 'topology'
+  | 'tempWrite'
+  | 'fsync'
+  | 'rename'
+  | 'postCommit'
+  | 'total';
+
+export interface AgentActorSaveDiagnostics {
+  readonly attemptId: string;
+  readonly phase: AgentActorSavePhase;
+  readonly activeStage?: AgentActorSaveTiming;
+  readonly activeStageElapsedMs?: number;
+  readonly failedStage?: AgentActorSaveTiming;
+  readonly canonicalOutcome?:
+    | 'pending'
+    | 'committed'
+    | 'committed_by_readback'
+    | 'not_committed'
+    | 'ambiguous';
+  readonly completionOutcome?: 'pending' | 'succeeded' | 'failed';
+  readonly timingsMs: Readonly<Partial<Record<AgentActorSaveTiming, number>>>;
+}
+
+/** One storage-neutral Actor snapshot attempt with an explicit canonical boundary. */
+export interface AgentActorSaveAttempt {
+  /** Resolves after the process-local storage queue admits this attempt. */
+  readonly dequeued: Promise<void>;
+  /** Resolves after storage queueing and writer admission, before canonical preparation. */
+  readonly eligible: Promise<void>;
+  /** Resolves when the Actor snapshot is canonical; rejects before or during commit. */
+  readonly canonical: Promise<void>;
+  /** Full cache/watermark/topology maintenance completion for legacy callers and diagnostics. */
+  readonly completion: Promise<void>;
+  phase(): AgentActorSavePhase;
+  /** Prevents a queued/precommit attempt from ever entering canonical commit. */
+  cancelBeforeCommit(): boolean;
+  diagnostics(): AgentActorSaveDiagnostics;
+}
+
 export interface AgentActorStore {
   load(): Promise<AgentActorSnapshot | undefined>;
   /** CAS save. Implementations must throw actor_snapshot_conflict on a revision mismatch. */
   save(snapshot: AgentActorSnapshot, expectedRevision: number): Promise<void>;
+  /** Optional phase-aware save used by Actor settlement convergence v2. */
+  beginSave?(
+    snapshot: AgentActorSnapshot,
+    expectedRevision: number,
+  ): AgentActorSaveAttempt;
+  /** Maximum expected writer-admission wait after a phase-aware save is dequeued. */
+  readonly eligibilityTimeoutMs?: number;
 }
 
 /** Runtime-bound actor control surface. The caller path is minted by Runtime. */

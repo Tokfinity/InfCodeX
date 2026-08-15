@@ -1,6 +1,29 @@
 # KodaX Architecture Decision Records
 
-> Last updated: 2026-08-14
+> Last updated: 2026-08-15
+>
+> **v0.7.88 development Issue 292 addendum:** Actor snapshot persistence has
+> explicit boundaries for Actor mutation order, process-local storage dequeue,
+> file-writer eligibility, cancellable pre-commit work, canonical file
+> replacement, and full serialized maintenance completion. Process-local queue
+> backpressure is not assigned the file-lock deadline; after dequeue, File
+> Session storage advertises a 65-second eligibility bound compatible with its
+> 60-second writer lock. The five-second settlement deadline starts only after
+> eligibility. Cancellation is checked immediately before replacement, so queued,
+> read/CAS, lineage, temp-write, and fsync timeouts are definitely not committed
+> and cannot write late. Only an in-flight replacement remains ambiguous and
+> fail-closed. An explicit replacement error is classified by authoritative
+> exact JSON-persisted-shape snapshot readback rather than revision equality or
+> assumed ambiguity.
+> A terminal settlement also watches any predecessor save already holding the
+> Actor mutation head, so a predecessor replacement hang reaches the same
+> bounded fence. Once replacement succeeds, Actor state is durable even if later
+> cache, watermark, topology, hint, or lock maintenance fails. The storage queue
+> still chains full completion to prevent maintenance from being overtaken.
+> Same-owner reconciliation uses these same phase boundaries; its canonical
+> repair is not timed by queue, lock, or post-commit maintenance delay.
+> Phase/timing diagnostics and `actorSettlementConvergence:2` make this contract
+> observable and prevent new SDK clients from reusing a v1 daemon.
 >
 > **v0.7.87 release addendum:** Coding Plan model IDs are transport facts, not
 > capacity annotations. `zhipu-coding` defaults to `glm-5.3` and keeps

@@ -6,8 +6,14 @@ import fs from 'fs/promises';
 import fsSync from 'fs';
 import path from 'path';
 import { createHash, randomUUID } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
+import { isDeepStrictEqual } from 'node:util';
 import chalk from 'chalk';
 import type {
+  AgentActorSaveAttempt,
+  AgentActorSaveDiagnostics,
+  AgentActorSavePhase,
+  AgentActorSaveTiming,
   KodaXExtensionSessionRecord,
   KodaXMessage,
   KodaXSessionArtifactLedgerEntry,
@@ -183,6 +189,7 @@ interface ArchivedLineageRecord extends PersistedArchivedEntryLine {
 
 const ATOMIC_RENAME_RETRY_DELAYS_MS = [10, 25, 50, 100] as const;
 const SESSION_WRITE_LOCK_TIMEOUT_MS = 60_000;
+const ACTOR_SAVE_ELIGIBILITY_TIMEOUT_MS = SESSION_WRITE_LOCK_TIMEOUT_MS + 5_000;
 const DEFAULT_SESSION_READ_TIMEOUT_MS = 15_000;
 const SESSION_LOCATION_TOPOLOGY_EPOCH = '.location-topology';
 const SESSION_LOCATION_TOPOLOGY_LOCK = '.location-topology.lock';
@@ -193,6 +200,263 @@ const SESSION_CONVERSATION_CACHE_CHUNK_BYTES = 256 * 1024;
 // first-position-preserving canonical ledger semantics.
 const SESSION_ARTIFACT_LEDGER_MAX_ENTRIES = 256;
 let sessionTempSequence = 0;
+
+interface SerializedWriteObserver {
+  onDequeued(): void;
+  beforeFileLock(): void;
+  onFileLockAcquired(): void;
+  onFileLockSettled(): void;
+}
+
+interface CanonicalWriteObserver {
+  beforeCommit(): void;
+  afterCommit(): void;
+  beginTiming(stage: AgentActorSaveTiming): void;
+  recordTiming(stage: AgentActorSaveTiming, durationMs: number): void;
+}
+
+interface ActorSaveLifecycle {
+  readonly attempt: AgentActorSaveAttempt;
+  readonly queueObserver: SerializedWriteObserver;
+  readonly canonicalObserver: CanonicalWriteObserver;
+  markCommitObservedByReadback(): void;
+  markCommitNotObserved(error: unknown): void;
+  settleCompletion(completion: Promise<void>): void;
+}
+
+interface DeferredValue<T> {
+  readonly promise: Promise<T>;
+  resolve(value: T | PromiseLike<T>): void;
+  reject(error: unknown): void;
+}
+
+class ActorSnapshotSaveCancelledError extends Error {
+  readonly code = 'actor_snapshot_save_cancelled' as const;
+
+  constructor(readonly attemptId: string) {
+    super(`Actor snapshot save ${attemptId} was cancelled before canonical commit.`);
+    this.name = 'ActorSnapshotSaveCancelledError';
+  }
+}
+
+function deferredValue<T>(): DeferredValue<T> {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function elapsedMs(startedAt: number): number {
+  return Math.max(0, performance.now() - startedAt);
+}
+
+function jsonPersistedValue<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+class ActorSaveLifecycleState implements ActorSaveLifecycle {
+  readonly attempt: AgentActorSaveAttempt;
+  readonly queueObserver: SerializedWriteObserver;
+  readonly canonicalObserver: CanonicalWriteObserver;
+  private readonly attemptId: string;
+  private readonly startedAt = performance.now();
+  private readonly dequeued = deferredValue<void>();
+  private readonly eligible = deferredValue<void>();
+  private readonly canonical = deferredValue<void>();
+  private readonly completion = deferredValue<void>();
+  private readonly timings: Partial<Record<AgentActorSaveTiming, number>> = {};
+  private readonly cancelled: ActorSnapshotSaveCancelledError;
+  private phaseValue: AgentActorSavePhase = 'queued';
+  private activeStage: AgentActorSaveTiming | undefined = 'storageQueue';
+  private activeStageStartedAt = this.startedAt;
+  private failedStage: AgentActorSaveTiming | undefined;
+  private fileLockStartedAt = this.startedAt;
+  private committedAt: number | undefined;
+  private canonicalOutcome: AgentActorSaveDiagnostics['canonicalOutcome'] = 'pending';
+  private completionOutcome: AgentActorSaveDiagnostics['completionOutcome'] = 'pending';
+
+  constructor(sessionId: string, targetRevision: number) {
+    this.attemptId = `${sessionId}:${targetRevision}:${randomUUID()}`;
+    this.cancelled = new ActorSnapshotSaveCancelledError(this.attemptId);
+    this.attempt = this.createAttempt();
+    this.queueObserver = {
+      onDequeued: () => this.onDequeued(),
+      beforeFileLock: () => this.beforeFileLock(),
+      onFileLockAcquired: () => this.onFileLockAcquired(),
+      onFileLockSettled: () => this.onFileLockSettled(),
+    };
+    this.canonicalObserver = {
+      beforeCommit: () => this.beforeCommit(),
+      afterCommit: () => this.afterCommit(),
+      beginTiming: (stage) => this.beginTiming(stage),
+      recordTiming: (stage, durationMs) => this.recordTiming(stage, durationMs),
+    };
+    void this.dequeued.promise.catch(() => undefined);
+    void this.eligible.promise.catch(() => undefined);
+    void this.canonical.promise.catch(() => undefined);
+    void this.completion.promise.catch(() => undefined);
+  }
+
+  settleCompletion(write: Promise<void>): void {
+    void write.then(
+      () => {
+        this.completionOutcome = 'succeeded';
+        this.recordCompletionTimings();
+        this.completion.resolve(undefined);
+      },
+      (error: unknown) => {
+        this.completionOutcome = 'failed';
+        if (
+          this.activeStage !== undefined
+          && this.timings[this.activeStage] === undefined
+        ) {
+          this.recordTiming(
+            this.activeStage,
+            elapsedMs(this.activeStageStartedAt),
+          );
+        }
+        if (this.phaseValue === 'committed') {
+          this.failedStage ??= this.activeStage ?? 'postCommit';
+        } else {
+          this.rejectBeforeCommit(error);
+        }
+        this.recordCompletionTimings();
+        this.completion.reject(error);
+      },
+    );
+  }
+
+  private createAttempt(): AgentActorSaveAttempt {
+    return {
+      dequeued: this.dequeued.promise,
+      eligible: this.eligible.promise,
+      canonical: this.canonical.promise,
+      completion: this.completion.promise,
+      phase: () => this.phaseValue,
+      cancelBeforeCommit: () => this.cancelBeforeCommit(),
+      diagnostics: () => this.diagnostics(),
+    };
+  }
+
+  markCommitNotObserved(error: unknown): void {
+    if (this.phaseValue !== 'commit_inflight') return;
+    this.phaseValue = 'not_committed';
+    this.canonicalOutcome = 'not_committed';
+    this.rejectBeforeCommit(error);
+  }
+
+  markCommitObservedByReadback(): void {
+    if (this.phaseValue !== 'commit_inflight') return;
+    this.failedStage ??= 'rename';
+    this.afterCommit('committed_by_readback');
+  }
+
+  private cancelBeforeCommit(): boolean {
+    if (this.phaseValue !== 'queued' && this.phaseValue !== 'precommit') return false;
+    this.failedStage ??= this.activeStage;
+    this.phaseValue = 'not_committed';
+    this.canonicalOutcome = 'not_committed';
+    this.rejectBeforeCommit(this.cancelled);
+    return true;
+  }
+
+  private onDequeued(): void {
+    this.recordTiming('storageQueue', elapsedMs(this.startedAt));
+    this.dequeued.resolve(undefined);
+  }
+
+  private beforeFileLock(): void {
+    if (this.phaseValue === 'not_committed') throw this.cancelled;
+    this.beginTiming('fileLock');
+    this.fileLockStartedAt = performance.now();
+  }
+
+  private onFileLockAcquired(): void {
+    this.recordTiming('fileLock', elapsedMs(this.fileLockStartedAt));
+    if (this.phaseValue === 'not_committed') throw this.cancelled;
+    this.phaseValue = 'precommit';
+    this.eligible.resolve(undefined);
+  }
+
+  private onFileLockSettled(): void {
+    if (this.timings.fileLock === undefined) {
+      this.recordTiming('fileLock', elapsedMs(this.fileLockStartedAt));
+    }
+  }
+
+  private beforeCommit(): void {
+    if (this.phaseValue !== 'precommit') throw this.cancelled;
+    this.phaseValue = 'commit_inflight';
+    this.canonicalOutcome = 'ambiguous';
+  }
+
+  private afterCommit(
+    outcome: Extract<
+      NonNullable<AgentActorSaveDiagnostics['canonicalOutcome']>,
+      'committed' | 'committed_by_readback'
+    > = 'committed',
+  ): void {
+    if (this.phaseValue === 'committed') return;
+    this.phaseValue = 'committed';
+    this.canonicalOutcome = outcome;
+    this.beginTiming('postCommit');
+    this.committedAt = performance.now();
+    this.canonical.resolve(undefined);
+  }
+
+  private recordCompletionTimings(): void {
+    if (this.committedAt !== undefined) {
+      this.recordTiming('postCommit', elapsedMs(this.committedAt));
+    }
+    this.recordTiming('total', elapsedMs(this.startedAt));
+    this.activeStage = undefined;
+  }
+
+  private rejectBeforeCommit(error: unknown): void {
+    this.failedStage ??= this.activeStage;
+    if (this.phaseValue !== 'commit_inflight') {
+      this.phaseValue = 'not_committed';
+      this.canonicalOutcome = 'not_committed';
+    }
+    this.dequeued.reject(error);
+    this.eligible.reject(error);
+    this.canonical.reject(error);
+  }
+
+  private beginTiming(stage: AgentActorSaveTiming): void {
+    this.activeStage = stage;
+    this.activeStageStartedAt = performance.now();
+  }
+
+  private recordTiming(stage: AgentActorSaveTiming, durationMs: number): void {
+    this.timings[stage] = durationMs;
+  }
+
+  private diagnostics(): AgentActorSaveDiagnostics {
+    return {
+      attemptId: this.attemptId,
+      phase: this.phaseValue,
+      ...(this.activeStage !== undefined ? { activeStage: this.activeStage } : {}),
+      ...(this.activeStage !== undefined
+        ? { activeStageElapsedMs: elapsedMs(this.activeStageStartedAt) }
+        : {}),
+      ...(this.failedStage !== undefined ? { failedStage: this.failedStage } : {}),
+      canonicalOutcome: this.canonicalOutcome,
+      completionOutcome: this.completionOutcome,
+      timingsMs: { ...this.timings },
+    };
+  }
+}
+
+function createActorSaveLifecycle(
+  sessionId: string,
+  targetRevision: number,
+): ActorSaveLifecycle {
+  return new ActorSaveLifecycleState(sessionId, targetRevision);
+}
 
 function normalizeSessionReadTimeout(timeoutMs: number | undefined): number {
   const normalized = timeoutMs ?? DEFAULT_SESSION_READ_TIMEOUT_MS;
@@ -2291,6 +2555,8 @@ function processSessionLocationIndex(
 }
 
 export class FileSessionStorage implements KodaXSessionStorage {
+  readonly actorSnapshotEligibilityTimeoutMs = ACTOR_SAVE_ELIGIBILITY_TIMEOUT_MS;
+
   // v0.7.43 (FEATURE_173 Part B follow-up) — optional per-instance
   // override of the sessions directory. Defaults to the
   // module-load-time-frozen KODAX_SESSIONS_DIR so existing single-process
@@ -2557,17 +2823,28 @@ export class FileSessionStorage implements KodaXSessionStorage {
   // computation, and writes all happen inside the queued callback.
   private writeQueues = new Map<string, Promise<void>>();
 
-  private serializedWrite(id: string, fn: () => Promise<void>): Promise<void> {
+  private serializedWrite(
+    id: string,
+    fn: () => Promise<void>,
+    observer?: SerializedWriteObserver,
+  ): Promise<void> {
     const prev = this.writeQueues.get(id) ?? Promise.resolve();
     const locked = async (): Promise<void> => {
-      await withKodaXFileLock(
-        this.sessionWriteLockPath(id),
-        async () => {
-          assertSessionMigrationInactive(this.sessionsDir);
-          await fn();
-        },
-        SESSION_WRITE_LOCK_TIMEOUT_MS,
-      );
+      observer?.onDequeued();
+      observer?.beforeFileLock();
+      try {
+        await withKodaXFileLock(
+          this.sessionWriteLockPath(id),
+          async () => {
+            observer?.onFileLockAcquired();
+            assertSessionMigrationInactive(this.sessionsDir);
+            await fn();
+          },
+          SESSION_WRITE_LOCK_TIMEOUT_MS,
+        );
+      } finally {
+        observer?.onFileLockSettled();
+      }
       this.refreshSelfVerifiedLocationTopology(id);
       await this.persistSessionLocationHint(id);
     };
@@ -2984,11 +3261,13 @@ export class FileSessionStorage implements KodaXSessionStorage {
 
   private withSessionLocationTopologyChange<T>(
     operation: () => Promise<T>,
+    onTopologyReady?: () => void,
   ): Promise<T> {
     return withKodaXFileLock(
       sessionLocationTopologyLockPath(this.sessionsDir),
       async () => {
         await this.advanceSessionLocationTopology();
+        onTopologyReady?.();
         return operation();
       },
       SESSION_WRITE_LOCK_TIMEOUT_MS,
@@ -3508,6 +3787,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
     exactTargetPath?: string,
     verifiedTopology = this.verifiedLocationTopology(id),
     conversationLineage?: KodaXSessionLineage,
+    canonicalObserver?: CanonicalWriteObserver,
   ): Promise<string> {
     const dir = exactTargetPath
       ? path.dirname(exactTargetPath)
@@ -3532,25 +3812,45 @@ export class FileSessionStorage implements KodaXSessionStorage {
     const changesLocation = !fsSync.existsSync(targetPath)
       || (legacy !== targetPath && fsSync.existsSync(legacy));
     const write = async (): Promise<void> => {
-      await fs.mkdir(dir, { recursive: true });
       try {
+        canonicalObserver?.beginTiming('tempWrite');
+        const tempWriteStartedAt = performance.now();
+        await fs.mkdir(dir, { recursive: true });
         const handle = await fs.open(tempPath, 'w');
         try {
-          await handle.write(JSON.stringify(meta) + '\n');
-          for (const entry of lineage.entries) {
-            await handle.write(JSON.stringify(toLineageEntryLine(entry)) + '\n');
+          try {
+            await handle.write(JSON.stringify(meta) + '\n');
+            for (const entry of lineage.entries) {
+              await handle.write(JSON.stringify(toLineageEntryLine(entry)) + '\n');
+            }
+            for (const entry of (data.artifactLedger ?? [])) {
+              await handle.write(JSON.stringify(toArtifactLedgerLine(entry)) + '\n');
+            }
+            for (const record of (data.extensionRecords ?? [])) {
+              await handle.write(JSON.stringify(toExtensionRecordLine(record)) + '\n');
+            }
+          } finally {
+            canonicalObserver?.recordTiming('tempWrite', elapsedMs(tempWriteStartedAt));
           }
-          for (const entry of (data.artifactLedger ?? [])) {
-            await handle.write(JSON.stringify(toArtifactLedgerLine(entry)) + '\n');
+          canonicalObserver?.beginTiming('fsync');
+          const fsyncStartedAt = performance.now();
+          try {
+            await handle.sync();
+          } finally {
+            canonicalObserver?.recordTiming('fsync', elapsedMs(fsyncStartedAt));
           }
-          for (const record of (data.extensionRecords ?? [])) {
-            await handle.write(JSON.stringify(toExtensionRecordLine(record)) + '\n');
-          }
-          await handle.sync();
         } finally {
           await handle.close();
         }
-        await replaceSessionFile(tempPath, targetPath);
+        canonicalObserver?.beginTiming('rename');
+        canonicalObserver?.beforeCommit();
+        const renameStartedAt = performance.now();
+        try {
+          await replaceSessionFile(tempPath, targetPath);
+        } finally {
+          canonicalObserver?.recordTiming('rename', elapsedMs(renameStartedAt));
+        }
+        canonicalObserver?.afterCommit();
         const projectDir = path.basename(dir) === 'archived' ? path.dirname(dir) : dir;
         await this.ensureProjectJson(projectDir, deriveProjectKeyFromData(data));
         // Lazy migrate-on-write: a legacy flat copy is now superseded by the
@@ -3574,7 +3874,19 @@ export class FileSessionStorage implements KodaXSessionStorage {
       }
     };
     if (changesLocation) {
-      await this.withSessionLocationTopologyChange(write);
+      canonicalObserver?.beginTiming('topology');
+      const topologyStartedAt = performance.now();
+      let topologyRecorded = false;
+      try {
+        await this.withSessionLocationTopologyChange(write, () => {
+          topologyRecorded = true;
+          canonicalObserver?.recordTiming('topology', elapsedMs(topologyStartedAt));
+        });
+      } finally {
+        if (!topologyRecorded) {
+          canonicalObserver?.recordTiming('topology', elapsedMs(topologyStartedAt));
+        }
+      }
     } else {
       await write();
     }
@@ -3963,36 +4275,102 @@ export class FileSessionStorage implements KodaXSessionStorage {
     return found;
   }
 
+  /** Phase-aware Actor CAS save; canonical success is observable before cache maintenance. */
+  beginActorSnapshotSave(
+    id: string,
+    snapshot: AgentActorSnapshot,
+    expectedRevision: number,
+  ): AgentActorSaveAttempt {
+    const lifecycle = createActorSaveLifecycle(id, snapshot.revision);
+    const write = this.serializedWrite(
+      id,
+      async () => {
+        lifecycle.canonicalObserver.beginTiming('readCas');
+        const readStartedAt = performance.now();
+        let resolved: ResolvedSessionSnapshot;
+        try {
+          const current = await this.readSession(id);
+          if (!current) throw new Error(`Session not found: ${id}`);
+          const actualRevision = current.data.actorSnapshot?.revision ?? 0;
+          if (actualRevision !== expectedRevision) {
+            throw new AgentActorStoreConflictError(expectedRevision, actualRevision, id);
+          }
+          resolved = current;
+        } finally {
+          lifecycle.canonicalObserver.recordTiming('readCas', elapsedMs(readStartedAt));
+        }
+        const updated: SessionData = {
+          ...resolved.data,
+          actorSnapshot: structuredClone(snapshot),
+        };
+        lifecycle.canonicalObserver.beginTiming('lineage');
+        const lineageStartedAt = performance.now();
+        let completeLineage: KodaXSessionLineage | undefined;
+        try {
+          completeLineage = updated.lineage === undefined
+            ? undefined
+            : await this.completeConversationLineage(id, resolved.filePath, updated.lineage);
+        } finally {
+          lifecycle.canonicalObserver.recordTiming('lineage', elapsedMs(lineageStartedAt));
+        }
+        let targetPath: string;
+        try {
+          targetPath = await this.writeSessionInternal(
+            id,
+            updated,
+            resolved.createdAt,
+            resolved.filePath,
+            undefined,
+            completeLineage,
+            lifecycle.canonicalObserver,
+          );
+        } catch (error: unknown) {
+          let persistenceError = error;
+          if (lifecycle.attempt.phase() === 'commit_inflight') {
+            try {
+              const observed = await this.readSession(id);
+              const observedSnapshot = observed?.data.actorSnapshot;
+              const observedRevision = observed?.data.actorSnapshot?.revision ?? 0;
+              if (isDeepStrictEqual(observedSnapshot, jsonPersistedValue(snapshot))) {
+                lifecycle.markCommitObservedByReadback();
+              } else if (observedRevision === expectedRevision) {
+                lifecycle.markCommitNotObserved(error);
+              } else {
+                persistenceError = new AggregateError(
+                  [
+                    error,
+                    new Error(
+                      `Actor snapshot readback observed revision ${observedRevision}; `
+                      + `expected prior ${expectedRevision} or exact target ${snapshot.revision}.`,
+                    ),
+                  ],
+                  'Actor snapshot replacement result is ambiguous.',
+                );
+              }
+            } catch (readbackError: unknown) {
+              persistenceError = new AggregateError(
+                [error, readbackError],
+                'Actor snapshot replacement failed and canonical readback was unavailable.',
+              );
+            }
+          }
+          throw persistenceError;
+        }
+        await this.syncAppendStateFromFile(id, updated, targetPath);
+      },
+      lifecycle.queueObserver,
+    );
+    lifecycle.settleCompletion(write);
+    return lifecycle.attempt;
+  }
+
   /** F270/F269 owner mutation: CAS-update only the Actor section of a session snapshot. */
   async saveActorSnapshot(
     id: string,
     snapshot: AgentActorSnapshot,
     expectedRevision: number,
   ): Promise<void> {
-    await this.serializedWrite(id, async () => {
-      const resolved = await this.readSession(id);
-      if (!resolved) throw new Error(`Session not found: ${id}`);
-      const actualRevision = resolved.data.actorSnapshot?.revision ?? 0;
-      if (actualRevision !== expectedRevision) {
-        throw new AgentActorStoreConflictError(expectedRevision, actualRevision, id);
-      }
-      const updated: SessionData = {
-        ...resolved.data,
-        actorSnapshot: structuredClone(snapshot),
-      };
-      const completeLineage = updated.lineage === undefined
-        ? undefined
-        : await this.completeConversationLineage(id, resolved.filePath, updated.lineage);
-      const targetPath = await this.writeSessionInternal(
-        id,
-        updated,
-        resolved.createdAt,
-        resolved.filePath,
-        undefined,
-        completeLineage,
-      );
-      await this.syncAppendStateFromFile(id, updated, targetPath);
-    });
+    await this.beginActorSnapshotSave(id, snapshot, expectedRevision).completion;
   }
 
   /** Read Session data without recovery writes or append-watermark mutation. */
