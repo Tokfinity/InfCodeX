@@ -127,6 +127,60 @@ function assertSemanticWorkerSidecar(dir) {
   }
 }
 
+const STARTUP_HEAVY_IMPORTS = [
+  '@agentclientprotocol/sdk',
+  '@anthropic-ai/sdk',
+  'jimp',
+  'openai',
+  'typescript',
+  '@anthropic-ai/sandbox-runtime',
+  'tsx',
+  'vscode-languageserver-protocol',
+];
+const RESUME_HEAVY_IMPORTS = [
+  ...STARTUP_HEAVY_IMPORTS,
+];
+
+function packageImportMatches(specifier, packageName) {
+  return specifier === packageName || specifier.startsWith(`${packageName}/`);
+}
+
+function assertStartupImportBoundary(label, result, options = {}) {
+  const forbidden = options.forbidden ?? STARTUP_HEAVY_IMPORTS;
+  const imports = Object.values(result.metafile?.outputs ?? {})
+    .flatMap((output) => output.imports ?? []);
+  const violations = imports.filter((entry) =>
+    (!options.eagerOnly || entry.kind !== 'dynamic-import')
+    && (
+      forbidden.some((packageName) => packageImportMatches(entry.path, packageName))
+      || (options.exactForbidden ?? []).includes(entry.path)
+    ));
+  if (violations.length === 0) return;
+  throw new Error(
+    `${label} startup dependency boundary violated: `
+    + violations.map((entry) => `${entry.path} (${entry.kind})`).join(', '),
+  );
+}
+
+function assertStartupInputBoundary(label, result, forbiddenInputs) {
+  const inputs = Object.keys(result.metafile?.inputs ?? {})
+    .map((input) => input.replaceAll('\\', '/'));
+  const violations = forbiddenInputs.filter((forbidden) =>
+    inputs.some((input) => forbidden.endsWith('/')
+      ? input.includes(forbidden)
+      : input.endsWith(forbidden)));
+  if (violations.length === 0) return;
+  throw new Error(`${label} startup input boundary violated: ${violations.join(', ')}`);
+}
+
+function assertBundleSize(label, bytes, maximumBytes) {
+  if (bytes <= maximumBytes) return;
+  throw new Error(
+    `${label} bundle size ${Math.ceil(bytes / 1024)} kB exceeds the audited `
+    + `${Math.ceil(maximumBytes / 1024)} kB startup budget`,
+  );
+}
+
 // ---- compute external list from root package.json ------------------------
 
 // Everything in root deps stays external (npm installs them on the user
@@ -292,21 +346,37 @@ const commonOptions = {
 log('Building dist/kodax_cli.js (CLI entry)…');
 const cliResult = await build({
   ...commonOptions,
+  metafile: true,
   entryPoints: [path.join(repoRoot, 'src/kodax_cli.ts')],
   outfile: path.join(distDir, 'kodax_cli.js'),
 });
+assertStartupImportBoundary('CLI', cliResult, { eagerOnly: true });
 
 const cliBytes = statSync(path.join(distDir, 'kodax_cli.js')).size;
+assertBundleSize('CLI', cliBytes, 5 * 1024 * 1024);
 log(`  ✓ dist/kodax_cli.js (${(cliBytes / 1024).toFixed(0)} kB)`);
 
 // Bare `-r` must show the picker without evaluating the full CLI graph.
 log('Building dist/kodax_resume.js (bare-resume entry)…');
 const resumeResult = await build({
   ...commonOptions,
+  metafile: true,
   entryPoints: [path.join(repoRoot, 'src/kodax_resume.ts')],
   outfile: path.join(distDir, 'kodax_resume.js'),
 });
+assertStartupImportBoundary('Resume', resumeResult, {
+  forbidden: RESUME_HEAVY_IMPORTS,
+  exactForbidden: ['es-toolkit/compat'],
+});
+assertStartupInputBoundary('Resume', resumeResult, [
+  'packages/agent/',
+  'packages/coding/',
+  'packages/llm/',
+  'packages/repl/src/interactive/storage.ts',
+  'packages/repl/src/session/conversation-page-cache.ts',
+]);
 const resumeBytes = statSync(path.join(distDir, 'kodax_resume.js')).size;
+assertBundleSize('Resume', resumeBytes, 160 * 1024);
 log(`  ✓ dist/kodax_resume.js (${(resumeBytes / 1024).toFixed(0)} kB)`);
 
 // Keep these imports external so the bootstrap remains genuinely lightweight.

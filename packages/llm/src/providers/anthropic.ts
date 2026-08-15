@@ -4,7 +4,8 @@
  * 支持 Anthropic API 格式的 Provider 基类
  */
 
-import Anthropic from '@anthropic-ai/sdk';
+import { createRequire } from 'node:module';
+import type Anthropic from '@anthropic-ai/sdk';
 import { KodaXBaseProvider } from './base.js';
 import { parseToolInputWithSalvageTracked } from './tool-input-parser.js';
 import { isCleanStop } from '../stop-reason.js';
@@ -46,6 +47,14 @@ import { resolvePromptCacheDisabled } from '../run-scoped-config.js';
 
 const KODAX_ANTHROPIC_COMPAT_USER_AGENT = 'KodaX';
 const KODAX_ANTHROPIC_EFFORT_BETA_HEADER = 'effort-2025-11-24';
+const requireModule = createRequire(import.meta.url);
+
+export function createAnthropicSdkClient(
+  options: ConstructorParameters<typeof Anthropic>[0],
+): Anthropic {
+  const sdk = requireModule('@anthropic-ai/sdk') as { readonly default: typeof Anthropic };
+  return new sdk.default(options);
+}
 
 interface AnthropicRequestOptions {
   readonly signal?: AbortSignal;
@@ -203,7 +212,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
 
   protected buildClient(): Anthropic {
     const defaultHeaders = getAnthropicCompatDefaultHeaders(this.config);
-    return new Anthropic({
+    return createAnthropicSdkClient({
       apiKey: this.getApiKey(),
       baseURL: this.config.baseUrl,
       // Some Anthropic-compatible gateways block the SDK's default

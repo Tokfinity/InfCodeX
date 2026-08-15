@@ -19,7 +19,16 @@ const LOCK_POLL_MS = 10;
 const LOCK_STALE_MS = 30_000;
 const TICKET_NUMBER_WIDTH = 16;
 const LOCK_CLEANUP_ATTEMPTS = 8;
-const currentProcessStartIdentity = readProcessStartIdentity(process.pid);
+let currentProcessStartIdentity: string | undefined;
+let currentProcessStartIdentityRead = false;
+
+function getCurrentProcessStartIdentity(): string | undefined {
+  if (!currentProcessStartIdentityRead) {
+    currentProcessStartIdentity = readProcessStartIdentity(process.pid);
+    currentProcessStartIdentityRead = true;
+  }
+  return currentProcessStartIdentity;
+}
 
 interface LockTicket {
   readonly queuePath: string;
@@ -391,9 +400,10 @@ interface LockOwnerRecord {
 }
 
 function lockOwnerRecord(token: string): string {
-  const encodedIdentity = currentProcessStartIdentity === undefined
+  const identity = getCurrentProcessStartIdentity();
+  const encodedIdentity = identity === undefined
     ? ''
-    : ` identity=${Buffer.from(currentProcessStartIdentity).toString('base64url')}`;
+    : ` identity=${Buffer.from(identity).toString('base64url')}`;
   return `${process.pid} ${token}${encodedIdentity}\n`;
 }
 

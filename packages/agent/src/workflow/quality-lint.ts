@@ -1,6 +1,17 @@
-import ts from 'typescript';
+import { createRequire } from 'node:module';
+import type * as tsTypes from 'typescript';
 
 import type { WorkflowScriptManifest } from './manifest.js';
+
+type TypeScriptModule = typeof import('typescript');
+const requireModule = createRequire(import.meta.url);
+let cachedTypeScript: TypeScriptModule | undefined;
+const ts = new Proxy({} as TypeScriptModule, {
+  get(_target, property) {
+    cachedTypeScript ??= requireModule('typescript') as TypeScriptModule;
+    return Reflect.get(cachedTypeScript, property) as unknown;
+  },
+});
 
 export type WorkflowQualityLintSeverity = 'error' | 'warning';
 
@@ -37,11 +48,11 @@ interface SchemaCollectionInfo {
 interface PropertyReadInfo {
   readonly variable: string;
   readonly field: string;
-  readonly node: ts.PropertyAccessExpression;
+  readonly node: tsTypes.PropertyAccessExpression;
 }
 
 interface WorkflowSourceFacts {
-  readonly sourceFile: ts.SourceFile;
+  readonly sourceFile: tsTypes.SourceFile;
   readonly unawaitedCommandVariables: ReadonlyMap<string, WorkflowCommandMethod>;
   readonly schemaResults: ReadonlyMap<string, SchemaResultInfo>;
   readonly schemaCollections: ReadonlyMap<string, SchemaCollectionInfo>;
@@ -80,7 +91,7 @@ const RESULT_FIELDS = new Set([
   'verification',
 ]);
 
-function parseWorkflowSource(source: string, filename?: string): ts.SourceFile {
+function parseWorkflowSource(source: string, filename?: string): tsTypes.SourceFile {
   return ts.createSourceFile(
     filename ?? 'workflow-quality-lint.js',
     source,
@@ -90,7 +101,7 @@ function parseWorkflowSource(source: string, filename?: string): ts.SourceFile {
   );
 }
 
-function propertyNameText(name: ts.PropertyName): string | undefined {
+function propertyNameText(name: tsTypes.PropertyName): string | undefined {
   if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
     return name.text;
   }
@@ -98,9 +109,9 @@ function propertyNameText(name: ts.PropertyName): string | undefined {
 }
 
 function objectProperty(
-  object: ts.ObjectLiteralExpression,
+  object: tsTypes.ObjectLiteralExpression,
   key: string,
-): ts.Expression | undefined {
+): tsTypes.Expression | undefined {
   for (const property of object.properties) {
     if (ts.isPropertyAssignment(property)) {
       if (propertyNameText(property.name) === key) return property.initializer;
@@ -113,7 +124,7 @@ function objectProperty(
   return undefined;
 }
 
-function workflowMethodName(call: ts.CallExpression): string | undefined {
+function workflowMethodName(call: tsTypes.CallExpression): string | undefined {
   const expression = call.expression;
   if (!ts.isPropertyAccessExpression(expression)) return undefined;
   if (!ts.isIdentifier(expression.expression) || expression.expression.text !== 'wf') {
@@ -122,13 +133,13 @@ function workflowMethodName(call: ts.CallExpression): string | undefined {
   return expression.name.text;
 }
 
-function workflowCommandMethod(call: ts.CallExpression): WorkflowCommandMethod | undefined {
+function workflowCommandMethod(call: tsTypes.CallExpression): WorkflowCommandMethod | undefined {
   const method = workflowMethodName(call);
   if (!method || !WORKFLOW_COMMANDS.has(method)) return undefined;
   return method as WorkflowCommandMethod;
 }
 
-function staticFanoutCount(expression: ts.Expression): number | undefined {
+function staticFanoutCount(expression: tsTypes.Expression): number | undefined {
   if (ts.isArrayLiteralExpression(expression)) return expression.elements.length;
   if (!ts.isCallExpression(expression)) return undefined;
   const callee = expression.expression;
@@ -137,14 +148,14 @@ function staticFanoutCount(expression: ts.Expression): number | undefined {
   return ts.isArrayLiteralExpression(receiver) ? receiver.elements.length : undefined;
 }
 
-function isWorkflowAgentCall(call: ts.CallExpression): call is ts.CallExpression {
+function isWorkflowAgentCall(call: tsTypes.CallExpression): call is tsTypes.CallExpression {
   const method = workflowMethodName(call);
   return method === 'runAgent' || method === 'spawnAgent';
 }
 
-function nodeContainsWorkflowAgentCall(node: ts.Node): boolean {
+function nodeContainsWorkflowAgentCall(node: tsTypes.Node): boolean {
   let found = false;
-  const visit = (current: ts.Node): void => {
+  const visit = (current: tsTypes.Node): void => {
     if (found) return;
     if (ts.isCallExpression(current) && isWorkflowAgentCall(current)) {
       found = true;
@@ -156,8 +167,8 @@ function nodeContainsWorkflowAgentCall(node: ts.Node): boolean {
   return found;
 }
 
-function unwrapAwait(expression: ts.Expression): {
-  readonly expression: ts.Expression;
+function unwrapAwait(expression: tsTypes.Expression): {
+  readonly expression: tsTypes.Expression;
   readonly awaited: boolean;
 } {
   if (ts.isAwaitExpression(expression)) {
@@ -166,11 +177,11 @@ function unwrapAwait(expression: ts.Expression): {
   return { expression, awaited: false };
 }
 
-function assignedVariableForCall(call: ts.CallExpression): {
+function assignedVariableForCall(call: tsTypes.CallExpression): {
   readonly variable: string;
   readonly awaited: boolean;
 } | undefined {
-  let node: ts.Node = call;
+  let node: tsTypes.Node = call;
   let awaited = false;
   if (ts.isAwaitExpression(node.parent) && node.parent.expression === node) {
     awaited = true;
@@ -192,12 +203,12 @@ function assignedVariableForCall(call: ts.CallExpression): {
 }
 
 function workflowResultVariableForAgentCall(
-  call: ts.CallExpression,
+  call: tsTypes.CallExpression,
   directAssignment: { readonly variable: string; readonly awaited: boolean } | undefined,
 ): string | undefined {
   if (directAssignment?.awaited === true) return directAssignment.variable;
 
-  let current: ts.Node | undefined = call.parent;
+  let current: tsTypes.Node | undefined = call.parent;
   while (current !== undefined) {
     if (ts.isCallExpression(current)) {
       const method = workflowMethodName(current);
@@ -211,7 +222,7 @@ function workflowResultVariableForAgentCall(
   return undefined;
 }
 
-function schemaFields(schemaExpression: ts.Expression | undefined): readonly string[] {
+function schemaFields(schemaExpression: tsTypes.Expression | undefined): readonly string[] {
   if (!schemaExpression || !ts.isObjectLiteralExpression(schemaExpression)) return [];
   const properties = objectProperty(schemaExpression, 'properties');
   if (!properties || !ts.isObjectLiteralExpression(properties)) return [];
@@ -223,9 +234,9 @@ function schemaFields(schemaExpression: ts.Expression | undefined): readonly str
     .filter((item): item is string => item !== undefined);
 }
 
-function expressionContainsIdentifier(expression: ts.Expression, names: ReadonlySet<string>): string | undefined {
+function expressionContainsIdentifier(expression: tsTypes.Expression, names: ReadonlySet<string>): string | undefined {
   let found: string | undefined;
-  const visit = (node: ts.Node): void => {
+  const visit = (node: tsTypes.Node): void => {
     if (found !== undefined) return;
     if (ts.isIdentifier(node) && names.has(node.text)) {
       found = node.text;
@@ -237,7 +248,7 @@ function expressionContainsIdentifier(expression: ts.Expression, names: Readonly
   return found;
 }
 
-function baseIdentifierOfExpression(expression: ts.Expression): string | undefined {
+function baseIdentifierOfExpression(expression: tsTypes.Expression): string | undefined {
   if (ts.isIdentifier(expression)) return expression.text;
   if (ts.isPropertyAccessExpression(expression)) {
     return baseIdentifierOfExpression(expression.expression);
@@ -255,7 +266,7 @@ function schemaCollectionForCallbackParameter(
   read: PropertyReadInfo,
   collections: ReadonlyMap<string, SchemaCollectionInfo>,
 ): SchemaCollectionInfo | undefined {
-  let current: ts.Node | undefined = read.node.parent;
+  let current: tsTypes.Node | undefined = read.node.parent;
   while (current !== undefined) {
     if (ts.isArrowFunction(current) || ts.isFunctionExpression(current)) {
       const parameter = current.parameters[0]?.name;
@@ -296,7 +307,7 @@ function collectFacts(source: string, options: WorkflowQualityLintOptions): Work
   const topLevelSchemaFieldReads: Array<{ readonly variable: string; readonly field: string }> = [];
   const literalFanouts: Array<{ readonly method: 'parallel' | 'pipeline'; readonly count: number }> = [];
 
-  const recordUnawaitedCommandVariable = (variable: string, expression: ts.Expression): void => {
+  const recordUnawaitedCommandVariable = (variable: string, expression: tsTypes.Expression): void => {
     const unwrapped = unwrapAwait(expression);
     if (!ts.isCallExpression(unwrapped.expression)) return;
     const method = workflowCommandMethod(unwrapped.expression);
@@ -305,7 +316,7 @@ function collectFacts(source: string, options: WorkflowQualityLintOptions): Work
     }
   };
 
-  const visit = (node: ts.Node): void => {
+  const visit = (node: tsTypes.Node): void => {
     if (ts.isVariableDeclaration(node) && node.initializer && ts.isIdentifier(node.name)) {
       recordUnawaitedCommandVariable(node.name.text, node.initializer);
     }
@@ -391,7 +402,7 @@ function lintUnawaitedBooleanUse(
   const names = new Set(facts.unawaitedCommandVariables.keys());
   if (names.size === 0) return;
 
-  const report = (expression: ts.Expression): void => {
+  const report = (expression: tsTypes.Expression): void => {
     const variable = expressionContainsIdentifier(expression, names);
     if (!variable) return;
     const method = facts.unawaitedCommandVariables.get(variable);
@@ -404,7 +415,7 @@ function lintUnawaitedBooleanUse(
     });
   };
 
-  const visit = (node: ts.Node): void => {
+  const visit = (node: tsTypes.Node): void => {
     if (ts.isIfStatement(node)) report(node.expression);
     if (ts.isConditionalExpression(node)) report(node.condition);
     if (ts.isWhileStatement(node)) report(node.expression);

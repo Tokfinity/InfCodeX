@@ -55,6 +55,22 @@ describe('FEATURE_219 session-migration', () => {
     );
   });
 
+  it('reads a large metadata record without misrouting the session to _unknown', async () => {
+    const id = 'large-meta';
+    await writeFile(
+      path.join(sessionsDir, `${id}.jsonl`),
+      `${JSON.stringify({
+        _type: 'meta', id, title: id, gitRoot, activeMessageCount: 1,
+        uiHistory: ['x'.repeat(70_000)],
+      })}\n`,
+      'utf8',
+    );
+
+    await expect(planMigration(sessionsDir)).resolves.toContainEqual(
+      expect.objectContaining({ to: path.join(sessionsDir, key, `${id}.jsonl`) }),
+    );
+  });
+
   it('runMigration moves files, writes the layout marker, and is idempotent', async () => {
     const flat = await seedFlat('20260201_000000');
     expect(await needsMigration(sessionsDir)).toBe(true);
@@ -65,6 +81,8 @@ describe('FEATURE_219 session-migration', () => {
     const moved = path.join(sessionsDir, key, '20260201_000000.jsonl');
     expect(existsSync(moved)).toBe(true);
     expect(existsSync(flat)).toBe(false);
+    await expect(readFile(path.join(sessionsDir, key, 'project.json'), 'utf8'))
+      .resolves.toContain('canonicalRoot');
     expect(await isMigrated(sessionsDir)).toBe(true);
     expect(existsSync(path.join(sessionsDir, '.layout.json'))).toBe(true);
     // journal cleaned up after the marker lands
@@ -88,11 +106,12 @@ describe('FEATURE_219 session-migration', () => {
     // Simulate a concurrent live write already at the destination.
     const destDir = path.join(sessionsDir, key);
     await mkdir(destDir, { recursive: true });
-    await writeFile(path.join(destDir, '20260401_000000.jsonl'), 'NEWER\n', 'utf8');
+    const newer = `${metaLine('20260401_000000')}\n${JSON.stringify({ role: 'user', content: 'NEWER' })}\n`;
+    await writeFile(path.join(destDir, '20260401_000000.jsonl'), newer, 'utf8');
 
     await runMigration(sessionsDir);
 
-    expect(await readFile(path.join(destDir, '20260401_000000.jsonl'), 'utf8')).toBe('NEWER\n');
+    expect(await readFile(path.join(destDir, '20260401_000000.jsonl'), 'utf8')).toBe(newer);
     expect(existsSync(path.join(sessionsDir, '20260401_000000.jsonl'))).toBe(false); // flat superseded
   });
 
@@ -170,5 +189,34 @@ describe('FEATURE_219 session-migration', () => {
     expect(existsSync(flat)).toBe(false);
     expect(existsSync(path.join(sessionsDir, key, `${id}.jsonl`))).toBe(true);
     expect(cacheFiles.some(existsSync)).toBe(false);
+  });
+
+  it('re-canonicalizes a flat session with a stale persisted root and publishes its identity', async () => {
+    const repository = path.join(root, 'repository');
+    const staleRoot = path.join(root, 'stale-worktree-root');
+    await Promise.all([
+      mkdir(path.join(repository, '.git'), { recursive: true }),
+      mkdir(staleRoot, { recursive: true }),
+    ]);
+    const canonicalKey = deriveProjectKeyFromRoot(repository).key;
+    const id = 'v3-worktree-session';
+    await writeFile(
+      path.join(sessionsDir, `${id}.jsonl`),
+      JSON.stringify({
+        _type: 'meta', id, title: id, gitRoot: repository, activeMessageCount: 1,
+        runtimeInfo: { canonicalRepoRoot: staleRoot, workspaceRoot: repository },
+      }) + '\n',
+      'utf8',
+    );
+
+    await ensureLayoutMigrated(sessionsDir);
+
+    const canonicalDir = path.join(sessionsDir, canonicalKey);
+    expect(existsSync(path.join(canonicalDir, `${id}.jsonl`))).toBe(true);
+    const manifest: unknown = JSON.parse(await readFile(path.join(canonicalDir, 'project.json'), 'utf8'));
+    expect(manifest).toMatchObject({
+      canonicalRoot: deriveProjectKeyFromRoot(repository).canonicalRoot,
+    });
+    expect(await isMigrated(sessionsDir)).toBe(true);
   });
 });

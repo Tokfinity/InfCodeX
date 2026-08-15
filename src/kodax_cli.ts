@@ -42,7 +42,6 @@ import fsSync from 'fs';
 import os from 'node:os';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
-import { runAcpServer } from './acp_server.js';
 import {
   createKodaXRuntime,
   type KodaXRuntime,
@@ -198,8 +197,6 @@ import {
   runProviderSetupWizard,
   initializeSetupConfiguration,
   renderSetupGuide,
-  listSessions,
-  loadSession,
   type ReplRuntimeAutoModeControl,
   type ReplRuntimeAutoModeSettings,
   type ReplRuntimePermissionGrantSuggestion,
@@ -219,15 +216,6 @@ import {
   type ConfiguredA2ARuntimeHandle,
 } from './a2a/runtime-config.js';
 import { parseA2AIntegrationDocument } from './a2a/config.js';
-import {
-  doctorSandboxRuntime,
-  prepareSandboxRuntimeForSetup,
-  runAsrtBrokerProcess,
-  runAsrtWorkspaceSessionProcess,
-  sandboxRuntimeCapability,
-  sandboxSetupGuidance,
-  shutdownAsrtWorkspaceSessions,
-} from './sandbox-runtime.js';
 import { createReplLearningBinding } from './repl-learning-binding.js';
 import {
   hasProviderCredentialEnvironment,
@@ -248,6 +236,14 @@ export {
   processCommandCall,
   resolveCliAgentMode,
 };
+
+type SandboxRuntimeModule = typeof import('./sandbox-runtime.js');
+let sandboxRuntimeModulePromise: Promise<SandboxRuntimeModule> | undefined;
+
+function loadSandboxRuntimeModule(): Promise<SandboxRuntimeModule> {
+  sandboxRuntimeModulePromise ??= import('./sandbox-runtime.js');
+  return sandboxRuntimeModulePromise;
+}
 export type { KodaXCommand, KodaXCommandContext };
 
 function hasConfiguredMcpServers(config: {
@@ -1840,6 +1836,8 @@ function combineDaemonShutdownErrors(
 }
 
 const DEFAULT_DAEMON_FINAL_CLEANUP_TIMEOUT_MS = 10_000;
+const DEFAULT_INTERACTIVE_FINAL_CLEANUP_TIMEOUT_MS = 5_000;
+const INTERACTIVE_MEMORY_REVIEW_DRAIN_TIMEOUT_MS = 15_000;
 
 function daemonFinalCleanupTimeoutMs(): number {
   const configured = Number.parseInt(
@@ -1849,6 +1847,81 @@ function daemonFinalCleanupTimeoutMs(): number {
   return Number.isSafeInteger(configured) && configured > 0
     ? configured
     : DEFAULT_DAEMON_FINAL_CLEANUP_TIMEOUT_MS;
+}
+
+function interactiveFinalCleanupTimeoutMs(): number {
+  const configured = Number.parseInt(
+    process.env.KODAX_INTERNAL_INTERACTIVE_FINAL_CLEANUP_TIMEOUT_MS ?? '',
+    10,
+  );
+  return Number.isSafeInteger(configured) && configured > 0
+    ? configured
+    : DEFAULT_INTERACTIVE_FINAL_CLEANUP_TIMEOUT_MS;
+}
+
+async function cleanupInteractiveProcessResources(input: {
+  readonly closeA2A: () => void;
+  readonly closeRuntime: () => Promise<void>;
+  readonly closeHotReload: () => void;
+  readonly disposeExtensions: () => Promise<void>;
+}): Promise<void> {
+  const errors: Error[] = [];
+  // FEATURE_289: preserve the independent durability window before closing
+  // any Runtime/provider resource the active reviewer may still need.
+  await awaitLatestCodingMemoryReviewDrain(INTERACTIVE_MEMORY_REVIEW_DRAIN_TIMEOUT_MS);
+  const totalTimeoutMs = interactiveFinalCleanupTimeoutMs();
+  const deadline = Date.now() + totalTimeoutMs;
+  const phaseTimeoutMs = Math.max(1, Math.min(1_000, Math.floor(totalTimeoutMs / 5)));
+  const attempt = async (
+    label: string,
+    operation: () => void | Promise<void>,
+    maximumMs = phaseTimeoutMs,
+    reserveMs = 0,
+  ): Promise<void> => {
+    const availableMs = Math.max(0, deadline - Date.now() - reserveMs);
+    const timeoutMs = Math.max(1, Math.min(availableMs, maximumMs));
+    let timedOut = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const operationPromise = Promise.resolve().then(operation);
+      await Promise.race([
+        operationPromise,
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => {
+            timedOut = true;
+            reject(new Error(`${label} cleanup timed out after ${timeoutMs}ms.`));
+          }, timeoutMs);
+        }),
+      ]);
+    } catch (error: unknown) {
+      const normalized = normalizeCliError(error);
+      if (timedOut) {
+        process.emitWarning(normalized.message, { code: 'KODAX_INTERACTIVE_CLEANUP' });
+      } else {
+        errors.push(normalized);
+      }
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  };
+
+  // Preserve one bounded slot for the final managed-child sweep even when an
+  // earlier Runtime/MCP/LSP phase hangs during shutdown.
+  const managedChildReserveMs = phaseTimeoutMs;
+  await attempt('A2A', input.closeA2A, phaseTimeoutMs, managedChildReserveMs);
+  await attempt('Runtime', input.closeRuntime, phaseTimeoutMs, managedChildReserveMs);
+  await attempt('integration hot-reload', input.closeHotReload, phaseTimeoutMs, managedChildReserveMs);
+  await attempt('extension Runtime', input.disposeExtensions, phaseTimeoutMs, managedChildReserveMs);
+  await attempt('LSP', shutdownDefaultLspService, phaseTimeoutMs, managedChildReserveMs);
+  await attempt('managed child process', async () => {
+    await cleanupRegisteredManagedChildren({ includeCurrentOwner: true });
+  });
+  await attempt('tracing', shutdownTracing);
+
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) {
+    throw new AggregateError(errors, 'Interactive process cleanup failed.');
+  }
 }
 
 async function cleanupDaemonServeProcessResources(input: {
@@ -1891,7 +1964,7 @@ async function cleanupDaemonServeProcessResources(input: {
 
   await attempt(
     'sandbox workspace session',
-    shutdownAsrtWorkspaceSessions,
+    async () => (await loadSandboxRuntimeModule()).shutdownAsrtWorkspaceSessions(),
     Math.max(0, deadline - Date.now()),
   );
   await attempt('A2A', input.closeA2A);
@@ -3500,24 +3573,11 @@ function showBasicHelp(): void {
 async function loadResumableSessions(
   maxSessions = 1000,
 ): Promise<SessionPickerItem[]> {
-  const sessions = await listSessions({
+  const { listCliResumeSessions } = await import('@kodax-ai/repl/cli-resume');
+  return listCliResumeSessions({
     projectRoot: process.cwd(),
-    scope: 'user',
     limit: maxSessions,
   });
-  return sessions
-    .filter((session) => session.msgCount > 0)
-    .map((session) => ({
-      id: session.id,
-      title: session.title,
-      msgCount: session.msgCount,
-      ...(session.createdAt !== undefined
-        ? { createdAt: session.createdAt }
-        : {}),
-      ...(session.runtimeInfo?.surface !== undefined
-        ? { surface: session.runtimeInfo.surface }
-        : {}),
-    }));
 }
 
 function printProviderSetupCompletion(selection: {
@@ -3541,6 +3601,7 @@ async function prepareSetupSandboxReport(): Promise<{
   readonly status: 'ready' | 'cancelled' | 'unavailable';
   readonly lines: readonly string[];
 }> {
+  const { prepareSandboxRuntimeForSetup } = await loadSandboxRuntimeModule();
   const outcome = await prepareSandboxRuntimeForSetup({
     allowElevation: process.stdin.isTTY === true && process.stdout.isTTY === true,
   });
@@ -3563,6 +3624,11 @@ async function inspectSandboxReport(): Promise<{
   readonly diagnostics: readonly string[];
   readonly guidance: readonly string[];
 }> {
+  const {
+    doctorSandboxRuntime,
+    sandboxRuntimeCapability,
+    sandboxSetupGuidance,
+  } = await loadSandboxRuntimeModule();
   const doctor = await doctorSandboxRuntime({ refresh: true });
   return {
     ready: doctor.ready,
@@ -3836,12 +3902,12 @@ async function main() {
   }
   if (argv[0] === '__asrt-broker') {
     if (!argv[1]) throw new Error('Missing internal ASRT broker request.');
-    process.exitCode = await runAsrtBrokerProcess(argv[1]);
+    process.exitCode = await (await loadSandboxRuntimeModule()).runAsrtBrokerProcess(argv[1]);
     return;
   }
   if (argv[0] === '__asrt-workspace-session') {
     if (!argv[1]) throw new Error('Missing internal ASRT workspace session request.');
-    process.exitCode = await runAsrtWorkspaceSessionProcess(argv[1]);
+    process.exitCode = await (await loadSandboxRuntimeModule()).runAsrtWorkspaceSessionProcess(argv[1]);
     return;
   }
   if (!isDaemonManagementCommand) {
@@ -4439,6 +4505,7 @@ complete -c kodax -l version -d 'Show version'`);
         if (options.repoIntelligenceTrace === true) {
           process.env.KODAX_REPO_INTELLIGENCE_TRACE = '1';
         }
+        const { runAcpServer } = await import('./acp_server.js');
         await runAcpServer({
           cwd: options.cwd,
           provider: options.provider,
@@ -5295,8 +5362,7 @@ complete -c kodax -l version -d 'Show version'`);
         options.resume = selected.id;
       }
     } else if (typeof opts.resume === 'string') {
-      const exactIdSession = await loadSession(opts.resume);
-      if (!exactIdSession) {
+      if (!await new FileSessionStorage().has(opts.resume)) {
         const titleMatches = findSessionTitleMatches(
           await loadResumableSessions(),
           opts.resume,
@@ -5555,30 +5621,41 @@ complete -c kodax -l version -d 'Show version'`);
     );
     emitJsonRunResultIfNeeded(options.outputMode, result);
   } finally {
-    // FEATURE_289 §3.1: give an in-flight memory review drain a bounded
-    // window to finish committed decisions before process exit. No-op when
-    // no drain was started in this process.
-    await awaitLatestCodingMemoryReviewDrain(15_000);
-    let runtimeCloseFailed = false;
-    let runtimeCloseError: unknown;
-    a2aRuntimeHandle?.close();
-    a2aRuntimeHandle = undefined;
-    try {
-      await cliRuntime?.close();
-    } catch (error: unknown) {
-      runtimeCloseFailed = true;
-      runtimeCloseError = error;
-    }
-    cliRuntime = undefined;
-    integrationHotReload?.close();
-    integrationHotReload = undefined;
-    await extensionRuntime?.dispose();
-    extensionRuntime = undefined;
-    await shutdownDefaultLspService();
-    await cleanupRegisteredManagedChildren({ includeCurrentOwner: true });
-    await shutdownTracing();
-    if (runtimeCloseFailed) {
-      throw runtimeCloseError;
+    if (shouldHardExitAfterInteractiveCleanup) {
+      const runtime = cliRuntime;
+      const hotReload = integrationHotReload;
+      const extensions = extensionRuntime;
+      const a2a = a2aRuntimeHandle;
+      cliRuntime = undefined;
+      integrationHotReload = undefined;
+      extensionRuntime = undefined;
+      a2aRuntimeHandle = undefined;
+      await cleanupInteractiveProcessResources({
+        closeA2A: () => a2a?.close(),
+        closeRuntime: async () => runtime?.close(),
+        closeHotReload: () => hotReload?.close(),
+        disposeExtensions: async () => extensions?.dispose(),
+      });
+    } else {
+      // Non-interactive callers own their process and receive cleanup errors.
+      await awaitLatestCodingMemoryReviewDrain(15_000);
+      let runtimeCloseError: unknown;
+      a2aRuntimeHandle?.close();
+      a2aRuntimeHandle = undefined;
+      try {
+        await cliRuntime?.close();
+      } catch (error: unknown) {
+        runtimeCloseError = error;
+      }
+      cliRuntime = undefined;
+      integrationHotReload?.close();
+      integrationHotReload = undefined;
+      await extensionRuntime?.dispose();
+      extensionRuntime = undefined;
+      await shutdownDefaultLspService();
+      await cleanupRegisteredManagedChildren({ includeCurrentOwner: true });
+      await shutdownTracing();
+      if (runtimeCloseError !== undefined) throw runtimeCloseError;
     }
     if (
       shouldHardExitAfterInteractiveCleanup &&

@@ -62,7 +62,15 @@ const FILE_SYSTEM_EFFECT_POLICY_TRANSITION_TIMEOUT_MS = 30_000;
 const FILE_SYSTEM_EFFECT_RELEASE_ATTEMPTS = 3;
 const EFFECT_STATE_FILE = 'model-filesystem-effects.json';
 const EFFECT_COORDINATOR_LOCK = 'model-filesystem-effects.lock';
-const EFFECT_OWNER_START_IDENTITY = readProcessStartIdentity(process.pid);
+let effectOwnerStartIdentity: string | undefined;
+let effectOwnerStartIdentityRead = false;
+function getEffectOwnerStartIdentity(): string | undefined {
+  if (!effectOwnerStartIdentityRead) {
+    effectOwnerStartIdentity = readProcessStartIdentity(process.pid);
+    effectOwnerStartIdentityRead = true;
+  }
+  return effectOwnerStartIdentity;
+}
 const EFFECT_TEST_SCOPE = process.env.VITEST_WORKER_ID === undefined
   ? undefined
   : `${process.env.VITEST_WORKER_ID}-${process.pid}`.replace(/[^a-z0-9_-]/gi, '_');
@@ -178,7 +186,7 @@ function isProcessAlive(pid: number): boolean {
 function isEffectLeaseOwnerAlive(owner: EffectLeaseOwner): boolean {
   if (!isProcessAlive(owner.pid)) return false;
   const currentIdentity = owner.pid === process.pid
-    ? EFFECT_OWNER_START_IDENTITY
+    ? getEffectOwnerStartIdentity()
     : readProcessStartIdentity(owner.pid);
   return owner.processStartIdentity === undefined
     || currentIdentity === undefined
@@ -311,12 +319,13 @@ async function acquireEffectLease(
 ): Promise<FileSystemMutationLeaseRelease> {
   const storage = captureEffectLeaseStorage();
   const token = randomUUID();
+  const ownerStartIdentity = getEffectOwnerStartIdentity();
   const owner: EffectLeaseOwner = {
     pid: process.pid,
     token,
-    ...(EFFECT_OWNER_START_IDENTITY === undefined
+    ...(ownerStartIdentity === undefined
       ? {}
-      : { processStartIdentity: EFFECT_OWNER_START_IDENTITY }),
+      : { processStartIdentity: ownerStartIdentity }),
     ...(sandboxPolicyKey === undefined ? {} : { sandboxPolicyKey }),
   };
   const conflictDeadline = Date.now() + FILE_SYSTEM_EFFECT_CONFLICT_TIMEOUT_MS;

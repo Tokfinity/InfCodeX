@@ -849,6 +849,118 @@ describe('FileSessionStorage', () => {
     expect(existsSync(path.join(testSessionsDir(), UNKNOWN_PROJECT_KEY, 'non-git-session.jsonl'))).toBe(false);
   });
 
+  it('does not overwrite a conflicting project identity manifest', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { deriveProjectKeyFromData } = await import('./project-key.js');
+    const canonicalRoot = path.join(tempHome, 'repo');
+    const foreignRoot = path.join(tempHome, 'foreign-repo');
+    const runtimeInfo = { canonicalRepoRoot: canonicalRoot, executionCwd: canonicalRoot };
+    const projectDir = path.join(
+      testSessionsDir(),
+      deriveProjectKeyFromData({ gitRoot: canonicalRoot, runtimeInfo }).key,
+    );
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      path.join(projectDir, 'project.json'),
+      JSON.stringify({ canonicalRoot: foreignRoot }),
+      'utf8',
+    );
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir(), cwd: canonicalRoot });
+
+    await expect(storage.save('identity-collision', {
+      messages: [{ role: 'user', content: 'must not change the bucket identity' }],
+      title: 'Identity collision',
+      gitRoot: canonicalRoot,
+      runtimeInfo,
+    })).rejects.toMatchObject({ code: 'data_changed' });
+
+    const persisted: unknown = JSON.parse(
+      await readFile(path.join(projectDir, 'project.json'), 'utf8'),
+    );
+    expect(persisted).toMatchObject({ canonicalRoot: foreignRoot });
+    expect(existsSync(path.join(projectDir, 'identity-collision.jsonl'))).toBe(false);
+  });
+
+  it('does not claim a non-empty project bucket whose identity manifest is missing', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { deriveProjectKeyFromData } = await import('./project-key.js');
+    const { LAYOUT_VERSION } = await import('./session-migration.js');
+    const canonicalRoot = path.join(tempHome, 'repo');
+    const foreignRoot = path.join(tempHome, 'foreign-repo');
+    const runtimeInfo = { canonicalRepoRoot: canonicalRoot, executionCwd: canonicalRoot };
+    const sessionsDir = testSessionsDir();
+    const projectDir = path.join(
+      sessionsDir,
+      deriveProjectKeyFromData({ gitRoot: canonicalRoot, runtimeInfo }).key,
+    );
+    await mkdir(projectDir, { recursive: true });
+    await Promise.all([
+      writeFile(path.join(sessionsDir, '.layout.json'), JSON.stringify({ version: LAYOUT_VERSION }), 'utf8'),
+      writeFile(path.join(projectDir, 'foreign.jsonl'), JSON.stringify({
+        _type: 'meta', id: 'foreign', title: 'foreign', gitRoot: foreignRoot,
+        activeMessageCount: 1, runtimeInfo: { canonicalRepoRoot: foreignRoot },
+      }) + '\n', 'utf8'),
+    ]);
+    const storage = new FileSessionStorage({ sessionsDir, cwd: canonicalRoot });
+
+    await expect(storage.save('current', {
+      messages: [{ role: 'user', content: 'must not claim a mixed bucket' }],
+      title: 'Current project',
+      gitRoot: canonicalRoot,
+      runtimeInfo,
+    })).rejects.toMatchObject({ code: 'data_changed' });
+
+    expect(existsSync(path.join(projectDir, 'project.json'))).toBe(false);
+    expect(existsSync(path.join(projectDir, 'current.jsonl'))).toBe(false);
+    expect(existsSync(path.join(projectDir, 'foreign.jsonl'))).toBe(true);
+  });
+
+  it('rejects an in-place save that changes project identity after the manifest is lost', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { deriveProjectKeyFromData } = await import('./project-key.js');
+    const canonicalRoot = path.join(tempHome, 'repo');
+    const foreignRoot = path.join(tempHome, 'foreign-repo');
+    const currentRuntime = { canonicalRepoRoot: canonicalRoot, executionCwd: canonicalRoot };
+    const foreignRuntime = { canonicalRepoRoot: foreignRoot, executionCwd: foreignRoot };
+    const sessionsDir = testSessionsDir();
+    const currentDir = path.join(
+      sessionsDir,
+      deriveProjectKeyFromData({ gitRoot: canonicalRoot, runtimeInfo: currentRuntime }).key,
+    );
+    const foreignDir = path.join(
+      sessionsDir,
+      deriveProjectKeyFromData({ gitRoot: foreignRoot, runtimeInfo: foreignRuntime }).key,
+    );
+    const storage = new FileSessionStorage({ sessionsDir, cwd: canonicalRoot });
+    await storage.save('identity-change', {
+      messages: [{ role: 'user', content: 'current project' }],
+      title: 'Current project',
+      gitRoot: canonicalRoot,
+      runtimeInfo: currentRuntime,
+    });
+    await fsPromises.rm(path.join(currentDir, 'project.json'));
+    await expect(storage.load('identity-change')).resolves.toMatchObject({ gitRoot: canonicalRoot });
+
+    await expect(storage.save('identity-change', {
+      messages: [{ role: 'user', content: 'foreign project' }],
+      title: 'Foreign project',
+      gitRoot: foreignRoot,
+      runtimeInfo: foreignRuntime,
+    })).rejects.toMatchObject({ code: 'data_changed' });
+
+    await writeFile(path.join(currentDir, 'identity-change.jsonl'), '', 'utf8');
+    await expect(storage.save('identity-change', {
+      messages: [{ role: 'user', content: 'foreign project after corrupt tail' }],
+      title: 'Foreign project after corrupt tail',
+      gitRoot: foreignRoot,
+      runtimeInfo: foreignRuntime,
+    })).rejects.toMatchObject({ code: 'data_changed' });
+
+    expect(existsSync(path.join(currentDir, 'identity-change.jsonl'))).toBe(true);
+    expect(existsSync(path.join(currentDir, 'project.json'))).toBe(false);
+    expect(existsSync(path.join(foreignDir, 'identity-change.jsonl'))).toBe(false);
+  });
+
   it('does not collapse synthetic and real same-content messages during snapshot merge', async () => {
     const { FileSessionStorage } = await import('./storage.js');
     const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
@@ -1013,6 +1125,31 @@ describe('FileSessionStorage', () => {
         workspaceKind: 'managed',
       },
     });
+  });
+
+  it('does not let a stale git root override a foreign canonical identity while listing', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const sessionsDir = testSessionsDir();
+    const projectRoot = path.join(tempHome, 'current-project');
+    const foreignRoot = path.join(tempHome, 'foreign-project');
+    const projectDir = path.join(sessionsDir, deriveProjectKeyFromRoot(projectRoot).key);
+    await mkdir(projectDir, { recursive: true });
+    await Promise.all([
+      writeFile(path.join(projectDir, 'project.json'), JSON.stringify({ canonicalRoot: projectRoot }), 'utf8'),
+      writeFile(path.join(projectDir, 'conflicting-identity.jsonl'), `${JSON.stringify({
+        _type: 'meta',
+        id: 'conflicting-identity',
+        title: 'Conflicting identity',
+        gitRoot: projectRoot,
+        scope: 'user',
+        activeMessageCount: 1,
+        runtimeInfo: { canonicalRepoRoot: foreignRoot },
+      })}\n`, 'utf8'),
+    ]);
+
+    await expect(new FileSessionStorage({ sessionsDir, cwd: projectRoot }).list(projectRoot))
+      .resolves.toEqual([]);
   });
 
   // v0.7.38 FEATURE_157 — Windows-aware path equality in session-list
@@ -3755,23 +3892,24 @@ describe('FileSessionStorage', () => {
     const projectRoots = process.platform === 'win32'
       ? ['C:/scoped-list-a', 'C:/scoped-list-b']
       : ['/scoped-list-a', '/scoped-list-b'];
-    const payload = `${JSON.stringify({
-      _type: 'meta',
-      id: sessionId,
-      title: 'Scoped list ambiguity',
-      createdAt: '2026-07-31T00:00:00.000Z',
-      scope: 'user',
-      lineageVersion: 2,
-      activeEntryId: null,
-      activeMessageCount: 0,
-    })}\n`;
     for (const projectRoot of projectRoots) {
       const projectDir = path.join(
         sessionsDir,
         deriveProjectKeyFromRoot(projectRoot).key,
       );
       await mkdir(projectDir, { recursive: true });
-      await writeFile(path.join(projectDir, `${sessionId}.jsonl`), payload, 'utf8');
+      await writeFile(path.join(projectDir, `${sessionId}.jsonl`), `${JSON.stringify({
+        _type: 'meta',
+        id: sessionId,
+        title: 'Scoped list ambiguity',
+        gitRoot: projectRoot,
+        runtimeInfo: { canonicalRepoRoot: projectRoot, workspaceRoot: projectRoot },
+        createdAt: '2026-07-31T00:00:00.000Z',
+        scope: 'user',
+        lineageVersion: 2,
+        activeEntryId: null,
+        activeMessageCount: 0,
+      })}\n`, 'utf8');
     }
 
     const storage = new FileSessionStorage({ sessionsDir });
@@ -3787,6 +3925,40 @@ describe('FileSessionStorage', () => {
     await expect(storage.readFullSnapshot(sessionId)).rejects.toMatchObject({
       code: 'data_changed',
     });
+  });
+
+  it('does not hash unrelated writer queues for a project-scoped list', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const sessionsDir = testSessionsDir();
+    const projectRoot = path.join(sessionsDir, 'scoped-project-root');
+    const projectDir = path.join(
+      sessionsDir,
+      deriveProjectKeyFromRoot(projectRoot).key,
+    );
+    const writeLocks = path.join(sessionsDir, '.write-locks');
+    await mkdir(projectDir, { recursive: true });
+    await Promise.all(Array.from({ length: 20 }, (_unused, index) =>
+      mkdir(path.join(writeLocks, `${index}.lock.queue`), { recursive: true })));
+    await writeFile(path.join(projectDir, 'scoped-list.jsonl'), `${JSON.stringify({
+      _type: 'meta',
+      id: 'scoped-list',
+      title: 'Scoped list',
+      gitRoot: projectRoot,
+      createdAt: '2026-08-15T00:00:00.000Z',
+      scope: 'user',
+      activeMessageCount: 1,
+    })}\n`, 'utf8');
+    const statSync = vi.spyOn(fsSync, 'statSync');
+
+    try {
+      await expect(new FileSessionStorage({ sessionsDir }).list(projectRoot, { limit: 10 }))
+        .resolves.toHaveLength(1);
+      expect(statSync.mock.calls.some(([candidate]) =>
+        String(candidate).endsWith('.lock.queue'))).toBe(false);
+    } finally {
+      statSync.mockRestore();
+    }
   });
 
   it('drops a partial location hint when its file disappears before indexing', async () => {
@@ -5770,6 +5942,27 @@ describe('FileSessionStorage', () => {
     const loaded = await cold.load('20260601_130000');
     expect(loaded?.title).toBe('Cold Load');
     expect(loaded?.messages[0]).toEqual({ role: 'user', content: 'persisted' });
+  });
+
+  it('checks an exact id without reading the Session transcript', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionId = 'exact-id-probe';
+    const sessionsDir = testSessionsDir();
+    await new FileSessionStorage({ sessionsDir }).save(sessionId, {
+      messages: [{ role: 'user', content: 'persisted' }],
+      title: 'Exact id probe',
+      gitRoot: path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/'),
+    });
+    const readFile = vi.spyOn(fsPromises, 'readFile');
+    try {
+      const cold = new FileSessionStorage({ sessionsDir });
+      await expect(cold.has(sessionId)).resolves.toBe(true);
+      await expect(cold.has('missing-exact-id')).resolves.toBe(false);
+      expect(readFile.mock.calls.some(([candidate]) =>
+        String(candidate).endsWith(`${sessionId}.jsonl`))).toBe(false);
+    } finally {
+      readFile.mockRestore();
+    }
   });
 
   it('does not synchronously stat every project candidate during a cold id lookup', async () => {

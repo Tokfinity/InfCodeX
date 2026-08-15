@@ -369,7 +369,8 @@ describe('CLI Entry Point', () => {
     )?.[0] ?? '';
 
     expect(loader).not.toBe('');
-    expect(loader.match(/listSessions\(/g)).toHaveLength(1);
+    expect(loader.match(/listCliResumeSessions\(/g)).toHaveLength(1);
+    expect(loader).not.toContain('listSessions(');
     expect(loader).not.toContain('while (');
   });
 

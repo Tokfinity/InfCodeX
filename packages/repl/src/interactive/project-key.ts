@@ -99,3 +99,14 @@ export function deriveProjectKeyFromData(
     ?? (data.gitRoot && data.gitRoot.trim() ? data.gitRoot : undefined);
   return deriveProjectKeyFromRoot(root);
 }
+
+/** Match a persisted Session using the same authoritative identity precedence as bucket routing. */
+export function sessionProjectMatchesAnyRoot(
+  data: { gitRoot?: string; runtimeInfo?: KodaXSessionRuntimeInfo },
+  roots: readonly string[],
+): boolean {
+  const persistedRoot = deriveProjectKeyFromData(data).canonicalRoot;
+  return persistedRoot !== null && roots.some(
+    (root) => deriveProjectKeyFromRoot(root).canonicalRoot === persistedRoot,
+  );
+}

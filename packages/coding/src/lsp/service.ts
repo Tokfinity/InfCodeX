@@ -36,7 +36,7 @@ import { normalizeFsPath } from './paths.js';
 import { findNearestRoot } from './discovery.js';
 import { LSP_SERVERS, type LspServerInfo, type LspServerLaunch } from './servers.js';
 import { isAutoInstallEnabled } from './acquirer.js';
-import { createLspClient, type CreateLspClientParams, type LspClient } from './client.js';
+import type { CreateLspClientParams, LspClient } from './client.js';
 
 /** Per-edit hints the service needs to root + cancel work. */
 export interface DiagnosticsRequest {
@@ -323,7 +323,8 @@ export class LspService {
         return undefined;
       }
       request.onProgress?.(`Starting ${server.id} language server…`);
-      const createClient = this.config.createClient ?? createLspClient;
+      const createClient = this.config.createClient
+        ?? (await import('./client.js')).createLspClient;
       const client = await createClient({
         serverId: server.id,
         root,

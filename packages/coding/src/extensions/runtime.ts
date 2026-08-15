@@ -18,7 +18,6 @@ import {
   emitKodaXDiagnostic,
   type KodaXDiagnosticLevel,
 } from '@kodax-ai/agent';
-import { tsImport } from 'tsx/esm/api';
 import {
   getBuiltinRegisteredToolDefinition,
   getRegisteredToolDefinition,
@@ -1457,6 +1456,7 @@ export class KodaXExtensionRuntime implements ExtensionRuntimeContract {
     }
 
     if (['.ts', '.mts', '.cts'].includes(extension)) {
+      const { tsImport } = await import('tsx/esm/api');
       return tsImport(pathToFileURL(resolvedPath).href, {
         parentURL: import.meta.url,
       }) as Promise<KodaXExtensionModule>;

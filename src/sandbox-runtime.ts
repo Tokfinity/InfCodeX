@@ -34,17 +34,9 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import {
-  DEFAULT_WINDOWS_PROXY_PORT_RANGE,
-  SandboxManager,
-  getSrtWinPath,
-  getWindowsSandboxUserStatus,
-  grantWindowsAcl,
-  installWindowsSandbox,
-  resolveSrtWin,
-  revokeWindowsAcl,
-  type SandboxAskCallback,
-  type SandboxRuntimeConfig,
+import type {
+  SandboxAskCallback,
+  SandboxRuntimeConfig,
 } from '@anthropic-ai/sandbox-runtime';
 import {
   ELECTRON_NODE_ENV_SCRUB_IMPORT,
@@ -70,6 +62,20 @@ import {
 } from '@kodax-ai/coding';
 
 export const KODAX_ASRT_VERSION = '0.0.65';
+
+// The CLI imports this module only for sandbox commands/cleanup. Keep ASRT
+// behind that module boundary while preserving ordinary static bindings once
+// the sandbox runtime itself is initialized.
+const {
+  DEFAULT_WINDOWS_PROXY_PORT_RANGE,
+  SandboxManager,
+  getSrtWinPath,
+  getWindowsSandboxUserStatus,
+  grantWindowsAcl,
+  installWindowsSandbox,
+  resolveSrtWin,
+  revokeWindowsAcl,
+} = await import('@anthropic-ai/sandbox-runtime');
 
 export interface SandboxRuntimeDoctorResult {
   readonly ready: boolean;

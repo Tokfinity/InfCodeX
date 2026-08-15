@@ -20,12 +20,14 @@ import fs from 'fs/promises';
 import fsSync from 'fs';
 import path from 'path';
 
-import { deriveProjectKeyFromData, UNKNOWN_PROJECT_KEY } from './project-key.js';
+import { deriveProjectKeyFromData, UNKNOWN_PROJECT_KEY, type ProjectIdentity } from './project-key.js';
+import { publishProjectManifest } from './project-manifest.js';
+import { resolveCanonicalWorkspaceRoot } from './workspace-runtime.js';
 import {
   ConversationPageCacheCleanupError,
   removeConversationPageCache,
   removeConversationPageCachesInDirectory,
-} from '../session/conversation-page-cache.js';
+} from '../session/conversation-page-cache-files.js';
 
 export const LAYOUT_VERSION = 3;
 
@@ -68,14 +70,22 @@ async function readMeta(filePath: string): Promise<{ gitRoot?: string; runtimeIn
   let fh: fs.FileHandle | undefined;
   try {
     fh = await fs.open(filePath, 'r');
-    const buf = Buffer.allocUnsafe(HEAD_READ_BYTES);
-    const { bytesRead } = await fh.read(buf, 0, HEAD_READ_BYTES, 0);
-    if (bytesRead === 0) {
-      return null;
+    const chunks: Buffer[] = [];
+    let lineBytes = 0;
+    let position = 0;
+    while (true) {
+      const buffer = Buffer.allocUnsafe(HEAD_READ_BYTES);
+      const { bytesRead } = await fh.read(buffer, 0, buffer.length, position);
+      if (bytesRead === 0) break;
+      const chunk = buffer.subarray(0, bytesRead);
+      const newline = chunk.indexOf(0x0a);
+      const lineChunk = newline >= 0 ? chunk.subarray(0, newline) : chunk;
+      chunks.push(lineChunk);
+      lineBytes += lineChunk.length;
+      if (newline >= 0) break;
+      position += bytesRead;
     }
-    const head = buf.toString('utf8', 0, bytesRead);
-    const nl = head.indexOf('\n');
-    const firstLine = (nl >= 0 ? head.slice(0, nl) : head).trim();
+    const firstLine = Buffer.concat(chunks, lineBytes).toString('utf8').trim();
     if (!firstLine) {
       return null;
     }
@@ -100,21 +110,46 @@ async function readMeta(filePath: string): Promise<{ gitRoot?: string; runtimeIn
  * live writes (`deriveProjectKeyFromData`) so a migrated session and a future
  * re-save converge on one directory. A meta-less / unreadable file → `_unknown`.
  */
-async function destKeyFor(filePath: string): Promise<string> {
+async function destIdentityFor(
+  filePath: string,
+  canonicalRoots: Map<string, Promise<string>>,
+): Promise<ProjectIdentity> {
   const meta = await readMeta(filePath);
   if (!meta) {
-    return UNKNOWN_PROJECT_KEY;
+    return deriveProjectKeyFromData({});
+  }
+  const runtime = meta.runtimeInfo !== null && typeof meta.runtimeInfo === 'object'
+    ? meta.runtimeInfo as Record<string, unknown>
+    : undefined;
+  let runtimeInfo = meta.runtimeInfo;
+  const persistedWorkspace = typeof runtime?.workspaceRoot === 'string'
+    ? runtime.workspaceRoot
+    : meta.gitRoot;
+  const canonicalCandidate = persistedWorkspace
+    ?? (typeof runtime?.canonicalRepoRoot === 'string' ? runtime.canonicalRepoRoot : undefined);
+  if (canonicalCandidate && fsSync.existsSync(canonicalCandidate)) {
+    const lookupKey = path.resolve(canonicalCandidate);
+    let canonicalRoot = canonicalRoots.get(lookupKey);
+    if (canonicalRoot === undefined) {
+      canonicalRoot = resolveCanonicalWorkspaceRoot({ cwd: canonicalCandidate, timeoutMs: 750 });
+      canonicalRoots.set(lookupKey, canonicalRoot);
+    }
+    runtimeInfo = {
+      ...runtime,
+      canonicalRepoRoot: await canonicalRoot,
+      ...(persistedWorkspace !== undefined ? { workspaceRoot: persistedWorkspace } : {}),
+    };
   }
   return deriveProjectKeyFromData({
     gitRoot: meta.gitRoot,
     // runtimeInfo shape is validated downstream by resolveSessionRuntimeInfo;
     // pass through as-is (deriveProjectKeyFromData tolerates partial shapes).
-    runtimeInfo: meta.runtimeInfo as never,
-  }).key;
+    runtimeInfo: runtimeInfo as never,
+  });
 }
 
 /** Collect the flat `*.jsonl` (+ sidecars) and `sessions-archive/` contents. */
-async function collectFlatSources(sessionsDir: string): Promise<string[]> {
+async function collectMigrationSources(sessionsDir: string): Promise<string[]> {
   const sources: string[] = [];
   const pushDir = async (dir: string, allowSidecars: boolean): Promise<void> => {
     let entries: import('fs').Dirent[] = [];
@@ -137,6 +172,10 @@ async function collectFlatSources(sessionsDir: string): Promise<string[]> {
   return sources;
 }
 
+function targetDirectory(sessionsDir: string, key: string): string {
+  return path.join(sessionsDir, key);
+}
+
 /**
  * Build the move plan WITHOUT touching disk (pure planner — testable / dry-run).
  * Sidecars travel with their main file and are renamed `.archive.jsonl` →
@@ -144,21 +183,24 @@ async function collectFlatSources(sessionsDir: string): Promise<string[]> {
  * `_unknown/orphan-islands/` rather than deleted.
  */
 export async function planMigration(sessionsDir: string): Promise<MovePlan[]> {
-  const sources = await collectFlatSources(sessionsDir);
+  const sources = await collectMigrationSources(sessionsDir);
   const mains = sources.filter((s) => isSessionFile(path.basename(s)));
-  const mainIds = new Set(mains.map((m) => path.basename(m, '.jsonl')));
+  const mainLocations = new Set(mains.map((main) =>
+    `${path.dirname(main)}\0${path.basename(main, '.jsonl')}`));
   const plans: MovePlan[] = [];
+  const canonicalRoots = new Map<string, Promise<string>>();
 
   for (const main of mains) {
     const id = path.basename(main, '.jsonl');
-    const key = await destKeyFor(main);
-    plans.push({ from: main, to: path.join(sessionsDir, key, `${id}.jsonl`), reason: `session→${key}` });
+    const key = (await destIdentityFor(main, canonicalRoots)).key;
+    const destinationDir = targetDirectory(sessionsDir, key);
+    plans.push({ from: main, to: path.join(destinationDir, `${id}.jsonl`), reason: `session→${key}` });
     // Paired island sidecar (same dir as the main source) — either the old
     // `.archive.jsonl` or an already-renamed `.islands.jsonl`.
     for (const suffix of ['.archive.jsonl', '.islands.jsonl']) {
       const sidecar = path.join(path.dirname(main), `${id}${suffix}`);
       if (fsSync.existsSync(sidecar)) {
-        plans.push({ from: sidecar, to: path.join(sessionsDir, key, `${id}.islands.jsonl`), reason: 'sidecar→islands' });
+        plans.push({ from: sidecar, to: path.join(destinationDir, `${id}.islands.jsonl`), reason: 'sidecar→islands' });
       }
     }
   }
@@ -166,7 +208,7 @@ export async function planMigration(sessionsDir: string): Promise<MovePlan[]> {
   // Orphan sidecars (either suffix) whose main is gone → preserve, not delete.
   for (const src of sources) {
     const id = sidecarId(path.basename(src));
-    if (id === null || mainIds.has(id)) {
+    if (id === null || mainLocations.has(`${path.dirname(src)}\0${id}`)) {
       continue; // a session file, or handled as a paired sidecar above
     }
     plans.push({
@@ -198,7 +240,7 @@ export async function needsMigration(sessionsDir: string): Promise<boolean> {
   if (await isMigrated(sessionsDir)) {
     return false;
   }
-  const sources = await collectFlatSources(sessionsDir);
+  const sources = await collectMigrationSources(sessionsDir);
   return sources.length > 0;
 }
 
@@ -292,13 +334,19 @@ async function readJournalDone(dir: string): Promise<Set<string>> {
 }
 
 /** Move one file; race-safe (a pre-existing dest is a newer write — keep it). */
-async function executeMove(plan: MovePlan): Promise<void> {
+async function executeMove(plan: MovePlan, sessionsDir: string): Promise<boolean> {
+  if (path.resolve(plan.from) === path.resolve(plan.to)) return false;
   await fs.mkdir(path.dirname(plan.to), { recursive: true });
   if (fsSync.existsSync(plan.to)) {
     // Destination already written (concurrent live write or a prior run) — the
-    // flat source is superseded; remove it without clobbering the newer file.
-    await fs.unlink(plan.from).catch(() => undefined);
-    return;
+    // flat source is superseded. A v3 project source may instead be a distinct
+    // same-id session, so preserve it for explicit recovery.
+    const sourceDir = path.dirname(plan.from);
+    if (sourceDir === sessionsDir || sourceDir === sessionsArchiveDir(sessionsDir)) {
+      await fs.unlink(plan.from).catch(() => undefined);
+      return true;
+    }
+    return false;
   }
   try {
     await fs.rename(plan.from, plan.to);
@@ -311,6 +359,50 @@ async function executeMove(plan: MovePlan): Promise<void> {
       throw err;
     }
     // ENOENT → source already moved by a racing process; nothing to do.
+  }
+  return true;
+}
+
+async function readBucketMainFiles(projectDir: string): Promise<string[]> {
+  const files: string[] = [];
+  const append = async (directory: string): Promise<void> => {
+    try {
+      for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+        if (entry.isFile() && isSessionFile(entry.name)) files.push(path.join(directory, entry.name));
+      }
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  };
+  await append(projectDir);
+  await append(path.join(projectDir, 'archived'));
+  return files;
+}
+
+async function publishBucketManifests(
+  sessionsDir: string,
+  plans: readonly MovePlan[],
+): Promise<void> {
+  const canonicalRoots = new Map<string, Promise<string>>();
+  const projectDirs = new Set(plans.flatMap((plan) =>
+    plan.reason.startsWith('session→') ? [path.dirname(plan.to)] : []));
+  for (const projectDir of projectDirs) {
+    const key = path.basename(projectDir);
+    if (key === UNKNOWN_PROJECT_KEY) continue;
+    const files = await readBucketMainFiles(projectDir);
+    let bucketIdentity: ProjectIdentity | undefined;
+    for (const filePath of files) {
+      const identity = await destIdentityFor(filePath, canonicalRoots);
+      if (
+        identity.canonicalRoot === null
+        || identity.key !== key
+        || (bucketIdentity !== undefined && bucketIdentity.canonicalRoot !== identity.canonicalRoot)
+      ) {
+        throw new Error(`Cannot certify mixed project identities in ${projectDir}`);
+      }
+      bucketIdentity ??= identity;
+    }
+    if (bucketIdentity !== undefined) await publishProjectManifest(projectDir, bucketIdentity);
   }
 }
 
@@ -376,15 +468,16 @@ export async function runMigration(sessionsDir: string): Promise<MigrationResult
         if (done.has(plan.from)) {
           continue;
         }
-        await executeMove(plan);
+        const changed = await executeMove(plan, sessionsDir);
         await handle.write(JSON.stringify({ from: plan.from, to: plan.to, done: true }) + '\n');
-        moved += 1;
+        if (changed) moved += 1;
       }
     } finally {
       await handle.close();
     }
     await retireSessionsArchive(sessionsDir);
     await removeLegacyConversationCaches(sessionsDir);
+    await publishBucketManifests(sessionsDir, plans);
     await writeMarker(sessionsDir);
     // Journal has served its purpose; the marker is the durable idempotency
     // guard. Removing it is safe (it never held session data).

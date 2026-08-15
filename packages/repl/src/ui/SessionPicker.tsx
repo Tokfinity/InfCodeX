@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { Box, Text, render, useApp, useInput } from './tui.js';
+import { Box, Text, render, useApp, useInput } from '../tui/renderer-runtime.js';
 
 const SELECTION_TRANSITION_PAINT_MS = 40;
 

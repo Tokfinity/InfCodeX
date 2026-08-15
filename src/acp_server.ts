@@ -4,10 +4,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { Readable, Writable } from 'node:stream';
 import {
-  AgentSideConnection,
-  PROTOCOL_VERSION,
-  RequestError,
-  ndJsonStream,
+  type AgentSideConnection,
   type Agent,
   type ContentBlock,
   type InitializeRequest,
@@ -27,6 +24,13 @@ import {
   type ToolCallUpdate,
   type ToolKind,
 } from '@agentclientprotocol/sdk';
+
+type AcpSdk = typeof import('@agentclientprotocol/sdk');
+const cachedAcpSdk: AcpSdk = await import('@agentclientprotocol/sdk');
+
+function acpSdk(): AcpSdk {
+  return cachedAcpSdk;
+}
 import {
   KODAX_DEFAULT_PROVIDER,
   type KodaXContextTokenSnapshot,
@@ -233,7 +237,7 @@ function resolvePromptEffortOverride(params: PromptRequest): AcpPromptEffortOver
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw RequestError.invalidParams({ effort: rawEffort }, message);
+    throw acpSdk().RequestError.invalidParams({ effort: rawEffort }, message);
   }
 }
 
@@ -348,7 +352,7 @@ function parseSessionMode(mode: string | undefined): AcpPermissionMode {
     return mode as AcpPermissionMode;
   }
 
-  throw RequestError.invalidParams(
+  throw acpSdk().RequestError.invalidParams(
     { modeId: mode },
     'Invalid session mode. Expected one of: plan, accept-edits, auto-in-project.',
   );
@@ -596,6 +600,7 @@ export class KodaXAcpServer implements Agent {
     input: ReadableStream<Uint8Array>,
     output: WritableStream<Uint8Array>,
   ): AgentSideConnection {
+    const { AgentSideConnection, ndJsonStream } = acpSdk();
     const stream = ndJsonStream(output, input);
     const connection = new AgentSideConnection(() => this, stream);
     this.connection = connection;
@@ -671,10 +676,10 @@ export class KodaXAcpServer implements Agent {
   async initialize(_params: InitializeRequest): Promise<InitializeResponse> {
     this.events.emit({
       type: 'initialize_completed',
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: acpSdk().PROTOCOL_VERSION,
     });
     return {
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: acpSdk().PROTOCOL_VERSION,
       agentInfo: {
         name: this.agentName,
         version: this.agentVersion,
@@ -695,7 +700,7 @@ export class KodaXAcpServer implements Agent {
       ? this.defaultCwd
       : (params.cwd ?? this.defaultCwd);
     if (!path.isAbsolute(requestedCwd)) {
-      throw RequestError.invalidParams({ cwd: requestedCwd }, 'Session cwd must be an absolute path.');
+      throw acpSdk().RequestError.invalidParams({ cwd: requestedCwd }, 'Session cwd must be an absolute path.');
     }
 
     const sessionId = randomUUID();
@@ -774,7 +779,7 @@ export class KodaXAcpServer implements Agent {
     const promptText = extractPromptText(params.prompt);
     const promptEffortOverride = resolvePromptEffortOverride(params);
     if (!promptText) {
-      throw RequestError.invalidParams(
+      throw acpSdk().RequestError.invalidParams(
         { prompt: params.prompt },
         'Prompt must include at least one text or resource block with content.',
       );
@@ -946,7 +951,7 @@ export class KodaXAcpServer implements Agent {
   private requireSession(sessionId: string): KodaXAcpSessionState {
     const session = this.sessions.get(sessionId);
     if (!session) {
-      throw RequestError.resourceNotFound(sessionId);
+      throw acpSdk().RequestError.resourceNotFound(sessionId);
     }
     return session;
   }

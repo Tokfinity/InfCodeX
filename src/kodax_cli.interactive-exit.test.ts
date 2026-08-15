@@ -21,6 +21,7 @@ interface InteractiveMainHarness {
   readonly runInkInteractiveMode: ReturnType<typeof vi.fn>;
   readonly runInteractiveMode: ReturnType<typeof vi.fn>;
   readonly shutdownDefaultLspService: ReturnType<typeof vi.fn>;
+  readonly awaitLatestCodingMemoryReviewDrain: ReturnType<typeof vi.fn>;
   readonly cleanupRegisteredManagedChildren: ReturnType<typeof vi.fn>;
   readonly shutdownTracing: ReturnType<typeof vi.fn>;
   readonly runtimeDispose: ReturnType<typeof vi.fn>;
@@ -44,6 +45,7 @@ const originalProvider = process.env.KODAX_PROVIDER;
 const originalMockProviderApiKey = process.env.MOCK_PROVIDER_API_KEY;
 const originalExitCode = process.exitCode;
 const originalDaemonCleanupTimeout = process.env.KODAX_INTERNAL_DAEMON_FINAL_CLEANUP_TIMEOUT_MS;
+const originalInteractiveCleanupTimeout = process.env.KODAX_INTERNAL_INTERACTIVE_FINAL_CLEANUP_TIMEOUT_MS;
 const originalDaemonServe = process.env.KODAX_DAEMON_SERVE;
 const daemonTempHomes: string[] = [];
 
@@ -86,6 +88,11 @@ afterEach(async () => {
   } else {
     process.env.KODAX_INTERNAL_DAEMON_FINAL_CLEANUP_TIMEOUT_MS = originalDaemonCleanupTimeout;
   }
+  if (originalInteractiveCleanupTimeout === undefined) {
+    delete process.env.KODAX_INTERNAL_INTERACTIVE_FINAL_CLEANUP_TIMEOUT_MS;
+  } else {
+    process.env.KODAX_INTERNAL_INTERACTIVE_FINAL_CLEANUP_TIMEOUT_MS = originalInteractiveCleanupTimeout;
+  }
   for (const home of daemonTempHomes.splice(0)) {
     await rm(home, { recursive: true, force: true });
   }
@@ -107,6 +114,7 @@ async function importMainWithMocks(options: {
   readonly config?: RuntimeConfig;
   readonly lspShutdown?: () => Promise<void>;
   readonly runtimeClose?: () => Promise<void>;
+  readonly memoryReviewDrain?: (timeoutMs: number) => Promise<void>;
   readonly mockSdkRuntime?: boolean;
   readonly prepareRuntimeConfig?: () => RuntimeConfig;
   readonly inspectProviderSetupReadiness?: (
@@ -142,6 +150,9 @@ async function importMainWithMocks(options: {
   const shutdownDefaultLspService = vi.fn(async () => {
     calls.push('shutdown-lsp');
     await options.lspShutdown?.();
+  });
+  const awaitLatestCodingMemoryReviewDrain = vi.fn(async (timeoutMs: number) => {
+    await options.memoryReviewDrain?.(timeoutMs);
   });
   const cleanupRegisteredManagedChildren = vi.fn(async (cleanupOptions?: { includeCurrentOwner?: boolean }) => {
     calls.push(cleanupOptions?.includeCurrentOwner ? 'cleanup-children-final' : 'cleanup-children-startup');
@@ -286,7 +297,7 @@ async function importMainWithMocks(options: {
   vi.doMock('@kodax-ai/coding', () => ({
     runKodaX: vi.fn(),
     runManagedTask,
-    awaitLatestCodingMemoryReviewDrain: vi.fn(async () => undefined),
+    awaitLatestCodingMemoryReviewDrain,
     KodaXClient: class KodaXClient {},
     KodaXEvents: class KodaXEvents {},
     KodaXAgentMode: {},
@@ -440,6 +451,7 @@ async function importMainWithMocks(options: {
       runInkInteractiveMode,
       runInteractiveMode,
       shutdownDefaultLspService,
+      awaitLatestCodingMemoryReviewDrain,
       cleanupRegisteredManagedChildren,
       shutdownTracing,
       runtimeDispose,
@@ -866,6 +878,65 @@ describe('CLI interactive exit lifecycle', () => {
     await mainPromise;
 
     expect(harness.calls).toContain('shutdown-tracing');
+    expect(exitSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not close Runtime or exit before a claimed memory review settles', async () => {
+    process.env.KODAX_INTERNAL_INTERACTIVE_FINAL_CLEANUP_TIMEOUT_MS = '200';
+    const reviewDeferred = createDeferred();
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined as never) as typeof process.exit);
+    const { main, harness } = await importMainWithMocks({
+      memoryReviewDrain: () => reviewDeferred.promise,
+    });
+
+    const mainPromise = main();
+    await vi.waitFor(() => expect(harness.awaitLatestCodingMemoryReviewDrain).toHaveBeenCalledWith(15_000));
+
+    expect(harness.calls).not.toContain('runtime-close');
+    expect(exitSpy).not.toHaveBeenCalled();
+    reviewDeferred.resolve();
+    await mainPromise;
+    expect(harness.calls).toContain('runtime-close');
+    expect(exitSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('bounds a hung interactive cleanup phase and continues releasing later resources', async () => {
+    process.env.KODAX_INTERNAL_INTERACTIVE_FINAL_CLEANUP_TIMEOUT_MS = '60';
+    const never = new Promise<void>(() => undefined);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined as never) as typeof process.exit);
+    const warningSpy = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
+    const { main, harness } = await importMainWithMocks({ lspShutdown: () => never });
+
+    const startedAt = Date.now();
+    await main();
+
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(harness.calls).toContain('shutdown-lsp');
+    expect(harness.calls).toContain('cleanup-children-final');
+    expect(harness.calls).toContain('shutdown-tracing');
+    expect(warningSpy).toHaveBeenCalledWith(
+      expect.stringContaining('LSP cleanup timed out'),
+      expect.objectContaining({ code: 'KODAX_INTERACTIVE_CLEANUP' }),
+    );
+    expect(exitSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('reserves time for managed-child cleanup when Runtime shutdown hangs', async () => {
+    process.env.KODAX_INTERNAL_INTERACTIVE_FINAL_CLEANUP_TIMEOUT_MS = '60';
+    const never = new Promise<void>(() => undefined);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined as never) as typeof process.exit);
+    const warningSpy = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
+    const { main, harness } = await importMainWithMocks({ runtimeClose: () => never });
+
+    await main();
+
+    expect(harness.calls).toContain('runtime-close');
+    expect(harness.calls).toContain('cleanup-children-final');
+    expect(harness.calls).toContain('shutdown-tracing');
+    expect(warningSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Runtime cleanup timed out'),
+      expect.objectContaining({ code: 'KODAX_INTERACTIVE_CLEANUP' }),
+    );
     expect(exitSpy).toHaveBeenCalledTimes(1);
   });
 

@@ -1,14 +1,12 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
 import process from 'node:process';
-import {
+import type {
     ClientSideConnection,
-    PROTOCOL_VERSION,
-    ndJsonStream,
-    type SessionNotification,
-    type PromptResponse,
-    type RequestPermissionRequest,
-    type RequestPermissionResponse
+    SessionNotification,
+    PromptResponse,
+    RequestPermissionRequest,
+    RequestPermissionResponse
 } from '@agentclientprotocol/sdk';
 import { killChildProcessTree, rememberChildProcessTree } from './process-tree.js';
 
@@ -51,6 +49,11 @@ export class AcpClient {
     }
 
     async connect(): Promise<void> {
+        const {
+            ClientSideConnection,
+            PROTOCOL_VERSION,
+            ndJsonStream,
+        } = await import('@agentclientprotocol/sdk');
         let inStream: ReadableStream<Uint8Array>;
         let outStream: WritableStream<Uint8Array>;
 

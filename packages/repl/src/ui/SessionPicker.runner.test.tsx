@@ -5,8 +5,8 @@ const tuiMocks = vi.hoisted(() => ({
   render: vi.fn(),
 }));
 
-vi.mock('./tui.js', async (importOriginal) => ({
-  ...await importOriginal<typeof import('./tui.js')>(),
+vi.mock('../tui/renderer-runtime.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../tui/renderer-runtime.js')>(),
   render: tuiMocks.render,
 }));
 

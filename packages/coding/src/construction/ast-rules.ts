@@ -23,7 +23,18 @@
  * by load-handler; we just parse-as-JS to match.
  */
 
-import * as ts from 'typescript';
+import { createRequire } from 'node:module';
+import type * as tsTypes from 'typescript';
+
+type TypeScriptModule = typeof import('typescript');
+const requireModule = createRequire(import.meta.url);
+let cachedTypeScript: TypeScriptModule | undefined;
+const ts = new Proxy({} as TypeScriptModule, {
+  get(_target, property) {
+    cachedTypeScript ??= requireModule('typescript') as TypeScriptModule;
+    return Reflect.get(cachedTypeScript, property) as unknown;
+  },
+});
 
 export type AstRuleId =
   | 'no-eval'
@@ -52,7 +63,7 @@ export function runAstRules(jsCode: string): AstCheckResult {
   const violations: AstRuleViolation[] = [];
 
   // Walk for call-site rules.
-  const walk = (node: ts.Node): void => {
+  const walk = (node: tsTypes.Node): void => {
     // no-eval: literal `eval(...)` call.
     if (
       ts.isCallExpression(node)
@@ -110,7 +121,7 @@ interface SignatureFailure {
 }
 
 function checkHandlerSignature(
-  sourceFile: ts.SourceFile,
+  sourceFile: tsTypes.SourceFile,
 ): SignatureCheckResult | SignatureFailure {
   // Three acceptable forms:
   //   1. export async function handler(input, ctx) { ... }
@@ -187,7 +198,7 @@ function checkHandlerSignature(
   };
 }
 
-function hasSyntaxKind(node: ts.Node, kind: ts.SyntaxKind): boolean {
+function hasSyntaxKind(node: tsTypes.Node, kind: tsTypes.SyntaxKind): boolean {
   if (!ts.canHaveModifiers(node)) return false;
   const mods = ts.getModifiers(node);
   return Boolean(mods?.some((m) => m.kind === kind));

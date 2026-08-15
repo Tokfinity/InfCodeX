@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import {
   forkSessionLineage,
   getSessionLineagePath,
-} from '@kodax-ai/agent';
+} from '@kodax-ai/agent/session-lineage';
 import type {
   KodaXMessage,
   KodaXSessionCompactionEntry,

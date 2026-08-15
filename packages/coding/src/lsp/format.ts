@@ -5,17 +5,16 @@
  */
 
 import { fileURLToPath } from 'url';
-import {
-  SymbolKind,
-  type Location,
-  type Hover,
-  type DocumentSymbol,
-  type SymbolInformation,
-  type WorkspaceSymbol,
-  type CallHierarchyItem,
-  type CallHierarchyIncomingCall,
-  type CallHierarchyOutgoingCall,
-  type Range,
+import type {
+  Location,
+  Hover,
+  DocumentSymbol,
+  SymbolInformation,
+  WorkspaceSymbol,
+  CallHierarchyItem,
+  CallHierarchyIncomingCall,
+  CallHierarchyOutgoingCall,
+  Range,
 } from 'vscode-languageserver-protocol';
 
 function uriToPath(uri: string): string {
@@ -49,23 +48,24 @@ export function formatHover(hover: Hover | null): string {
 }
 
 const SYMBOL_KIND_NAME: Readonly<Record<number, string>> = Object.freeze({
-  [SymbolKind.File]: 'File',
-  [SymbolKind.Module]: 'Module',
-  [SymbolKind.Namespace]: 'Namespace',
-  [SymbolKind.Package]: 'Package',
-  [SymbolKind.Class]: 'Class',
-  [SymbolKind.Method]: 'Method',
-  [SymbolKind.Property]: 'Property',
-  [SymbolKind.Field]: 'Field',
-  [SymbolKind.Constructor]: 'Constructor',
-  [SymbolKind.Enum]: 'Enum',
-  [SymbolKind.Interface]: 'Interface',
-  [SymbolKind.Function]: 'Function',
-  [SymbolKind.Variable]: 'Variable',
-  [SymbolKind.Constant]: 'Constant',
-  [SymbolKind.Struct]: 'Struct',
-  [SymbolKind.EnumMember]: 'EnumMember',
-  [SymbolKind.TypeParameter]: 'TypeParameter',
+  // SymbolKind numeric values are fixed by the LSP specification.
+  1: 'File',
+  2: 'Module',
+  3: 'Namespace',
+  4: 'Package',
+  5: 'Class',
+  6: 'Method',
+  7: 'Property',
+  8: 'Field',
+  9: 'Constructor',
+  10: 'Enum',
+  11: 'Interface',
+  12: 'Function',
+  13: 'Variable',
+  14: 'Constant',
+  22: 'EnumMember',
+  23: 'Struct',
+  26: 'TypeParameter',
 });
 
 function kindName(kind: number): string {

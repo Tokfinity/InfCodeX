@@ -60,7 +60,15 @@ import type { SessionData, SessionErrorMetadata } from '../ui/utils/session-stor
 // `createSessionManager()` instead.
 import { getGitRoot, KODAX_DIR, KODAX_SESSIONS_DIR } from '../common/utils.js';
 import { inspectWorkspaceRuntime, isSameCanonicalRepo, resolveSessionRuntimeInfo } from './workspace-runtime.js';
-import { deriveProjectKeyFromData, type ProjectIdentity } from './project-key.js';
+import {
+  deriveProjectKeyFromData,
+  sessionProjectMatchesAnyRoot,
+  type ProjectIdentity,
+} from './project-key.js';
+import {
+  projectManifestExists,
+  publishProjectManifest,
+} from './project-manifest.js';
 import { ensureLayoutMigrated } from './session-migration.js';
 import {
   buildSessionConversationHistory,
@@ -92,6 +100,12 @@ import {
   extendSessionMainSourceRevisionState,
   type SessionSourceRevisionState,
 } from '../session/source-revision.js';
+import {
+  commitResumeIndexEntry,
+  prepareResumeIndexEntry,
+  resumeIndexProjectDir,
+  type ResumeIndexEntry,
+} from '../session/resume-index.js';
 export type {
   ConversationPageCacheChunk,
   ConversationPageCacheChunkInput,
@@ -2048,36 +2062,6 @@ function isKodaXSessionRuntimeInfo(value: unknown): value is KodaXSessionRuntime
     );
 }
 
-/**
- * v0.7.38 FEATURE_157 — Windows-aware path equality for session-list
- * gating. Windows filesystem paths are case-insensitive (NTFS / ReFS
- * fold case on lookup) and node sometimes returns the drive letter in
- * different case across processes (`C:\...` from one PowerShell, `c:\...`
- * from a VS Code-spawned shell). The session-list filter at line ~880
- * compares `sessionGitRoot === currentGitRoot` literally; a case
- * mismatch on the drive letter wipes the entire prior-session list,
- * leaving `kodax -c` / `kodax -r` with nothing to resume — which
- * surfaces as "the previous conversation seems lost, agent answered
- * from scratch".
- *
- * Reproduction (2026-05-11 user report): session
- * `20260511_110542.jsonl` saved with
- * `gitRoot: "C:/Works/GitWorks/KodaX-author/KodaX"`. Subsequent
- * `kodax -c` produced session `20260511_130217.jsonl` rooted from a
- * shell where `getGitRoot()` returned the drive letter lowercased,
- * the list filter excluded all four prior same-repo sessions, and
- * the new session was created fresh without resume context.
- *
- * POSIX behaviour unchanged: literal string equality preserves
- * case-sensitive semantics where the filesystem is case-sensitive.
- */
-function pathsEqual(a: string, b: string): boolean {
-  if (process.platform === 'win32' || process.platform === 'darwin') {
-    return a.toLowerCase() === b.toLowerCase();
-  }
-  return a === b;
-}
-
 function getLastNavigableEntryId(entries: KodaXSessionEntry[]): string | null {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
@@ -2291,6 +2275,22 @@ function createSessionMeta(
     lineageEntryCount: lineage?.entries.length ?? 0,
     activeMessageCount: lineage ? countActiveLineageMessages(lineage) : data.messages.length,
     lineageIdentityFilterHash,
+  };
+}
+
+function createResumeIndexEntry(
+  id: string,
+  title: string,
+  msgCount: number,
+  createdAt?: string,
+  surface?: string,
+): ResumeIndexEntry {
+  return {
+    id,
+    title,
+    msgCount,
+    ...(createdAt !== undefined ? { createdAt } : {}),
+    ...(surface !== undefined ? { surface } : {}),
   };
 }
 
@@ -3016,12 +3016,15 @@ export class FileSessionStorage implements KodaXSessionStorage {
     artifactDedupKeys: Set<string>;
     extensionRecordIds: Set<string>;
     tag?: string;
+    scope?: SessionData['scope'];
+    surface?: string;
+    projectCanonicalRoot?: string;
     filePath?: string;
     mainIdentity?: StableFileIdentity;
   }>();
   private lineageIdentityFilterHashes = new Map<string, string>();
 
-  private projectJsonWritten = new Set<string>();
+  private projectJsonWritten = new Map<string, string>();
 
   // ── FEATURE_219 one-shot auto-migration gate (ADR-038 §8) ──
   // Runs the flat→per-project migration on the first storage entry point.
@@ -3077,6 +3080,9 @@ export class FileSessionStorage implements KodaXSessionStorage {
         ? new Set(data.extensionRecords.map((record) => record.id))
         : prev?.extensionRecordIds ?? new Set(),
       tag: data.tag !== undefined ? data.tag : prev?.tag,
+      scope: data.scope ?? prev?.scope,
+      surface: data.runtimeInfo?.surface ?? prev?.surface,
+      projectCanonicalRoot: deriveProjectKeyFromData(data).canonicalRoot ?? prev?.projectCanonicalRoot,
       filePath: fileWitness?.filePath ?? prev?.filePath,
       // A write without a fresh post-write witness must not inherit an older
       // identity. The next append safely takes the cold merge path instead.
@@ -3627,23 +3633,99 @@ export class FileSessionStorage implements KodaXSessionStorage {
     }
   }
 
-  /** Write `<dir>/project.json` once per process per directory (best-effort). */
-  private async ensureProjectJson(dir: string, identity: ProjectIdentity): Promise<void> {
-    if (identity.canonicalRoot === null || this.projectJsonWritten.has(dir)) {
+  /** Create `<dir>/project.json` without ever writing through a conflicting identity. */
+  private async ensureProjectJson(
+    dir: string,
+    identity: ProjectIdentity,
+    replacementPath?: string,
+  ): Promise<void> {
+    if (identity.canonicalRoot === null) {
       return;
     }
-    this.projectJsonWritten.add(dir);
-    const manifestPath = path.join(dir, 'project.json');
-    try {
-      const payload = JSON.stringify({
-        canonicalRoot: identity.canonicalRoot,
-        displayName: identity.displayName,
-        lastUsed: new Date().toISOString(),
-      });
-      await fs.writeFile(manifestPath, payload + '\n', 'utf-8');
-    } catch {
-      // best-effort — manifest is an optimization, not a correctness requirement
+    const cachedCanonicalRoot = this.projectJsonWritten.get(dir);
+    if (cachedCanonicalRoot === identity.canonicalRoot) return;
+    if (cachedCanonicalRoot !== undefined) {
+      throw new SessionReadError(
+        'data_changed',
+        `Refusing to change the cached project identity for ${dir}`,
+      );
     }
+    const manifestPath = path.join(dir, 'project.json');
+    let manifestExists: boolean;
+    try {
+      manifestExists = await projectManifestExists(dir);
+    } catch (error: unknown) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new SessionReadError('data_changed', `Unable to validate ${manifestPath}: ${reason}`);
+    }
+    if (!manifestExists) {
+      const isMainSessionFile = (name: string): boolean => name.endsWith('.jsonl')
+        && !name.endsWith('.archive.jsonl')
+        && !name.endsWith('.islands.jsonl')
+        && !name.startsWith('.');
+      const activeEntries = await fs.readdir(dir, { withFileTypes: true });
+      const hasActiveSessions = activeEntries.some((entry) => entry.isFile() && isMainSessionFile(entry.name));
+      let hasArchivedSessions = false;
+      try {
+        hasArchivedSessions = (await fs.readdir(path.join(dir, 'archived'), { withFileTypes: true }))
+          .some((entry) => entry.isFile() && isMainSessionFile(entry.name));
+      } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          const reason = error instanceof Error ? error.message : String(error);
+          throw new SessionReadError('data_changed', `Unable to inspect ${dir}: ${reason}`);
+        }
+      }
+      if (hasActiveSessions || hasArchivedSessions) {
+        const directories = [dir, path.join(dir, 'archived')];
+        const sessionFiles: string[] = [];
+        for (const directory of directories) {
+          try {
+            for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+              if (entry.isFile() && isMainSessionFile(entry.name)) {
+                sessionFiles.push(path.join(directory, entry.name));
+              }
+            }
+          } catch (error: unknown) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          }
+        }
+        for (let offset = 0; offset < sessionFiles.length; offset += 48) {
+          const batchMatches = await Promise.all(sessionFiles.slice(offset, offset + 48).map(async (filePath) => {
+            const firstLine = await readSessionFirstLine(filePath);
+            if (!firstLine) {
+              return replacementPath !== undefined
+                && path.basename(dir) === identity.key
+                && path.resolve(filePath) === path.resolve(replacementPath);
+            }
+            try {
+              const parsed: unknown = JSON.parse(firstLine);
+              if (!isRecord(parsed) || parsed._type !== 'meta') return false;
+              const persistedIdentity = deriveProjectKeyFromData({
+                gitRoot: typeof parsed.gitRoot === 'string' ? parsed.gitRoot : undefined,
+                runtimeInfo: isKodaXSessionRuntimeInfo(parsed.runtimeInfo) ? parsed.runtimeInfo : undefined,
+              });
+              return persistedIdentity.key === identity.key
+                && persistedIdentity.canonicalRoot === identity.canonicalRoot;
+            } catch {
+              return false;
+            }
+          }));
+          if (batchMatches.some((matches) => !matches)) {
+            throw new SessionReadError(
+              'data_changed',
+              `Refusing to claim a mixed or unverifiable project bucket at ${manifestPath}`,
+            );
+          }
+        }
+      }
+    }
+    try {
+      await publishProjectManifest(dir, identity);
+    } catch (error: unknown) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new SessionReadError('data_changed', `Unable to publish ${manifestPath}: ${reason}`);
+    }
+    this.projectJsonWritten.set(dir, identity.canonicalRoot);
   }
 
   // ── Phase 2: Streaming write (no join) ──
@@ -3793,6 +3875,22 @@ export class FileSessionStorage implements KodaXSessionStorage {
       ? path.dirname(exactTargetPath)
       : this.resolveWriteDir(id, data);
     const targetPath = exactTargetPath ?? path.join(dir, `${id}.jsonl`);
+    const projectDir = path.basename(dir) === 'archived' ? path.dirname(dir) : dir;
+    const nextProjectIdentity = deriveProjectKeyFromData(data);
+    const cachedCanonicalRoot = this.appendState.get(id)?.projectCanonicalRoot;
+    if (
+      exactTargetPath !== undefined
+      && cachedCanonicalRoot !== undefined
+      && nextProjectIdentity.canonicalRoot !== null
+      && cachedCanonicalRoot !== nextProjectIdentity.canonicalRoot
+    ) {
+      throw new SessionReadError(
+        'data_changed',
+        `Refusing to move Session ${id} across cached project identities`,
+      );
+    }
+    await fs.mkdir(dir, { recursive: true });
+    await this.ensureProjectJson(projectDir, nextProjectIdentity, targetPath);
     const tempPath = `${targetPath}.${process.pid}.${Date.now()}.${sessionTempSequence++}.tmp`;
     const lineage = data.lineage ?? createSessionLineage(data.messages);
     const completeIdentityFilter = conversationLineage === undefined
@@ -3808,6 +3906,25 @@ export class FileSessionStorage implements KodaXSessionStorage {
       createdAt,
       completeIdentityFilterHash,
     );
+    const resumeProjectDir = resumeIndexProjectDir(targetPath);
+    const targetsActiveSession = path.basename(path.dirname(targetPath)) !== 'archived';
+    const resumable = targetsActiveSession
+      && meta.scope !== 'managed-task-worker'
+      && (meta.activeMessageCount ?? 0) > 0;
+    const resumeEntry = createResumeIndexEntry(
+      id,
+      meta.title,
+      meta.activeMessageCount ?? 0,
+      meta.createdAt,
+      meta.runtimeInfo?.surface,
+    );
+    if (resumable) {
+      try {
+        await prepareResumeIndexEntry(resumeProjectDir, resumeEntry);
+      } catch (error: unknown) {
+        reportStorageDiagnostic('warn', `Unable to prepare the resume index for ${id}.`, error);
+      }
+    }
     const legacy = this.legacyFlatPath(id);
     const changesLocation = !fsSync.existsSync(targetPath)
       || (legacy !== targetPath && fsSync.existsSync(legacy));
@@ -3815,7 +3932,6 @@ export class FileSessionStorage implements KodaXSessionStorage {
       try {
         canonicalObserver?.beginTiming('tempWrite');
         const tempWriteStartedAt = performance.now();
-        await fs.mkdir(dir, { recursive: true });
         const handle = await fs.open(tempPath, 'w');
         try {
           try {
@@ -3851,8 +3967,6 @@ export class FileSessionStorage implements KodaXSessionStorage {
           canonicalObserver?.recordTiming('rename', elapsedMs(renameStartedAt));
         }
         canonicalObserver?.afterCommit();
-        const projectDir = path.basename(dir) === 'archived' ? path.dirname(dir) : dir;
-        await this.ensureProjectJson(projectDir, deriveProjectKeyFromData(data));
         // Lazy migrate-on-write: a legacy flat copy is now superseded by the
         // per-project file. Remove it (and relocate its sidecar) so the locator
         // never sees the same id in two places.
@@ -3889,6 +4003,15 @@ export class FileSessionStorage implements KodaXSessionStorage {
       }
     } else {
       await write();
+    }
+    try {
+      await commitResumeIndexEntry(
+        resumeProjectDir,
+        resumeEntry,
+        resumable,
+      );
+    } catch (error: unknown) {
+      reportStorageDiagnostic('warn', `Unable to refresh the resume index for ${id}.`, error);
     }
     if (conversationLineage === undefined) {
       // Without an explicit complete lineage, rebuilding from the main file
@@ -3963,6 +4086,20 @@ export class FileSessionStorage implements KodaXSessionStorage {
       // instead of regressing `activeEntryId` (the dual-writer corruption).
       lineage: resolveSnapshotLineage(data, existing?.data.lineage),
     };
+    if (existing !== null) {
+      const existingIdentity = deriveProjectKeyFromData(existing.data);
+      const nextIdentity = deriveProjectKeyFromData(merged);
+      if (
+        existingIdentity.canonicalRoot !== null
+        && nextIdentity.canonicalRoot !== null
+        && existingIdentity.canonicalRoot !== nextIdentity.canonicalRoot
+      ) {
+        throw new SessionReadError(
+          'data_changed',
+          `Refusing to move Session ${id} across project identities during an in-place save`,
+        );
+      }
+    }
     const archivedRecords = await this.readArchivedEntries(id);
     const reconciledLineage = reconcileCompactionLineage(
       merged.lineage!,
@@ -4156,8 +4293,37 @@ export class FileSessionStorage implements KodaXSessionStorage {
       parts.push(JSON.stringify(metaUpdate));
 
       const appendedContent = `\n${parts.join('\n')}`;
+      const nextScope = preparedDelta.scope ?? cached.scope ?? 'user';
+      const targetsActiveSession = path.basename(path.dirname(cached.filePath)) !== 'archived';
+      const resumable = targetsActiveSession
+        && nextScope !== 'managed-task-worker'
+        && nextActiveMessageCount > 0;
+      const resumeProjectDir = resumeIndexProjectDir(cached.filePath);
+      const resumeEntry = createResumeIndexEntry(
+        id,
+        preparedDelta.title,
+        nextActiveMessageCount,
+        undefined,
+        cached.surface,
+      );
+      if (resumable) {
+        try {
+          await prepareResumeIndexEntry(resumeProjectDir, resumeEntry);
+        } catch (error: unknown) {
+          reportStorageDiagnostic('warn', `Unable to prepare the resume index for ${id}.`, error);
+        }
+      }
       await fs.appendFile(cached.filePath, appendedContent, 'utf-8');
       committed = true;
+      try {
+        await commitResumeIndexEntry(
+          resumeProjectDir,
+          resumeEntry,
+          resumable,
+        );
+      } catch (error: unknown) {
+        reportStorageDiagnostic('warn', `Unable to refresh the resume index for ${id}.`, error);
+      }
       await this.updateConversationCacheAfterAppend(
         id,
         cached.filePath,
@@ -4187,6 +4353,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
         extensionCount: cached.extensionCount + newExtensions.length,
         activeEntryId: preparedDelta.activeEntryId,
         activeMessageCount: nextActiveMessageCount,
+        scope: nextScope,
         lineageIdentityFilter: nextLineageIdentityFilter,
         lineageIdentityFilterHash: nextLineageIdentityFilterHash,
         bundleBoundaryRevision: nextBoundary.revision,
@@ -4770,6 +4937,16 @@ export class FileSessionStorage implements KodaXSessionStorage {
     return data;
   }
 
+  async has(id: string): Promise<boolean> {
+    try {
+      await this.ensureMigrated();
+      return await this.resolveSessionLocation(id) !== null;
+    } catch (error: unknown) {
+      reportStorageDiagnostic('warn', `Unable to locate Session ${id}.`, error);
+      return false;
+    }
+  }
+
   async isArchived(id: string): Promise<boolean> {
     await this.ensureMigrated();
     const filePath = await this.resolveSessionLocation(id);
@@ -5125,20 +5302,22 @@ export class FileSessionStorage implements KodaXSessionStorage {
     // is no resolvable project root (rootless `kodax -c`), fall back to scanning
     // every project dir so the "show me everything" behavior is preserved.
     // Exclude `.archive.jsonl` island sidecars and the `archived/` subdir.
-    const locationBoundary = this.beginSessionLocationTraversal();
+    const locationBoundary = hasProjectIntent
+      ? undefined
+      : this.beginSessionLocationTraversal();
     const topEntries = await fs.readdir(this.sessionsDir, { withFileTypes: true });
-    // `trusted` files live in the resolved current-project dir — the folder key
-    // IS the canonical identity, so they skip the per-file canonical match
-    // filter below (which could otherwise hide a correctly-placed session on a
-    // stored-runtimeInfo quirk). Flat-pool files are untrusted and still filter.
-    const candidatePaths: Array<{ path: string; trusted: boolean; archived: boolean }> = [];
+    // A directory manifest authenticates the bucket, not every later file.
+    // Project-scoped reads still validate each metadata identity they already
+    // open so an out-of-band or legacy misplaced file cannot cross projects.
+    const candidatePaths: Array<{ path: string; archived: boolean }> = [];
     const locatedPaths: string[] = [];
-    const currentProjectKey = currentRuntime === undefined
+    const currentProjectIdentity = currentRuntime === undefined
       ? undefined
       : deriveProjectKeyFromData({
           gitRoot: currentGitRoot ?? undefined,
           runtimeInfo: currentRuntime,
-        }).key;
+        });
+    const currentProjectKey = currentProjectIdentity?.key;
     const isSidecar = (f: string): boolean => f.endsWith('.archive.jsonl') || f.endsWith('.islands.jsonl');
     const projectDirNames = currentProjectKey !== undefined
       ? [currentProjectKey]
@@ -5177,14 +5356,14 @@ export class FileSessionStorage implements KodaXSessionStorage {
           if (!file.endsWith('.jsonl') || isSidecar(file)) continue;
           const filePath = path.join(project.projectDir, file);
           locatedPaths.push(filePath);
-          candidatePaths.push({ path: filePath, trusted: hasProjectIntent, archived: false });
+          candidatePaths.push({ path: filePath, archived: false });
         }
         for (const file of project.archived.files) {
           if (!file.endsWith('.jsonl') || isSidecar(file)) continue;
           const filePath = path.join(project.projectDir, 'archived', file);
           locatedPaths.push(filePath);
           if (opts?.includeArchived) {
-            candidatePaths.push({ path: filePath, trusted: hasProjectIntent, archived: true });
+            candidatePaths.push({ path: filePath, archived: true });
           }
         }
       }
@@ -5199,15 +5378,19 @@ export class FileSessionStorage implements KodaXSessionStorage {
       ) {
         const filePath = path.join(this.sessionsDir, e.name);
         locatedPaths.push(filePath);
-        candidatePaths.push({ path: filePath, trusted: false, archived: false });
+        candidatePaths.push({ path: filePath, archived: false });
       }
     }
 
-    this.completeSessionLocationTraversal(
-      locationBoundary,
-      locatedPaths,
-      locationTraversalComplete,
-    );
+    if (locationBoundary === undefined) {
+      this.indexSessionLocations(locatedPaths, false);
+    } else {
+      this.completeSessionLocationTraversal(
+        locationBoundary,
+        locatedPaths,
+        locationTraversalComplete,
+      );
+    }
 
     const sessions: Array<{
       id: string;
@@ -5220,7 +5403,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
     }> = [];
 
     type SessionEntry = (typeof sessions)[number];
-    const parseSessionFile = async (filePath: string, trusted: boolean, archived: boolean): Promise<SessionEntry | null> => {
+    const parseSessionFile = async (filePath: string, archived: boolean): Promise<SessionEntry | null> => {
       try {
         const firstLine = await readSessionFirstLine(filePath);
         if (!firstLine) {
@@ -5236,27 +5419,17 @@ export class FileSessionStorage implements KodaXSessionStorage {
           const scope: KodaXSessionScope = first.scope === 'managed-task-worker'
             ? 'managed-task-worker'
             : 'user';
-          if (currentRuntime !== undefined && currentProjectKey !== undefined && !trusted) {
-            const sameCanonicalRepo = isSameCanonicalRepo(currentRuntime, sessionRuntime);
-            // FEATURE_157: Windows-aware comparison (case-insensitive on
-            // win32/darwin) — see `pathsEqual` JSDoc for the resume-loss
-            // failure shape this guards against. Branching preserved
-            // identical to the pre-FEATURE_157 logic: workspace branch
-            // when sessionRuntime carries workspaceRoot, gitRoot
-            // otherwise — only the equality operator changes.
-            const sameWorkspace = sessionRuntime?.workspaceRoot
-              ? pathsEqual(sessionRuntime.workspaceRoot, currentRuntime.workspaceRoot ?? '')
-              : Boolean(currentGitRoot && sessionGitRoot && pathsEqual(sessionGitRoot, currentGitRoot));
-            const sameExecutionCwd = sessionRuntime?.executionCwd
-              ? pathsEqual(sessionRuntime.executionCwd, currentRuntime.executionCwd ?? '')
-              : false;
-            const sameProjectKey = deriveProjectKeyFromData({
+          if (currentRuntime !== undefined && currentProjectKey !== undefined) {
+            const sameProject = sessionProjectMatchesAnyRoot({
               gitRoot: sessionGitRoot || undefined,
               runtimeInfo: sessionRuntime,
-            }).key === currentProjectKey;
-            if (!sameCanonicalRepo && !sameWorkspace && !sameExecutionCwd && !sameProjectKey) {
-              return null;
-            }
+            }, [
+              currentRuntime.canonicalRepoRoot,
+              currentRuntime.workspaceRoot,
+              currentRuntime.executionCwd,
+              currentGitRoot,
+            ].filter((root): root is string => typeof root === 'string' && root.length > 0));
+            if (!sameProject) return null;
           }
           if (scope !== 'user') {
             return null;
@@ -5319,7 +5492,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
     const seenIds = new Set<string>();
     for (let i = 0; i < candidatePaths.length; i += LIST_READ_CONCURRENCY) {
       const batch = await Promise.all(
-        candidatePaths.slice(i, i + LIST_READ_CONCURRENCY).map((c) => parseSessionFile(c.path, c.trusted, c.archived)),
+        candidatePaths.slice(i, i + LIST_READ_CONCURRENCY).map((c) => parseSessionFile(c.path, c.archived)),
       );
       for (const entry of batch) {
         if (entry && !seenIds.has(entry.id)) {
@@ -5396,6 +5569,18 @@ export class FileSessionStorage implements KodaXSessionStorage {
     }
   }
 
+  private async removeResumeMembership(id: string, mainPath: string): Promise<void> {
+    try {
+      await commitResumeIndexEntry(
+        resumeIndexProjectDir(mainPath),
+        createResumeIndexEntry(id, '', 0),
+        false,
+      );
+    } catch (error: unknown) {
+      reportStorageDiagnostic('warn', `Unable to remove ${id} from the resume index.`, error);
+    }
+  }
+
   private async archiveWithActorOwner(
     id: string,
     expectedOwnerId?: string,
@@ -5413,6 +5598,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
         for (const detached of this.sessionConversationCacheMainPaths(id, resolved.filePath).slice(1)) {
           await removeConversationPageCache(detached);
         }
+        await this.removeResumeMembership(id, resolved.filePath);
         result = true; // already archived
         return;
       }
@@ -5422,6 +5608,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
       await this.withSessionLocationTopologyChange(
         () => this.movePair(id, dir, archivedDir),
       );
+      await this.removeResumeMembership(id, resolved.filePath);
       const currentTopology = this.readSessionTopologyIdentitySync(id);
       const globallyVerified = verifiedTopology !== undefined
         && currentTopology !== undefined;
@@ -5473,10 +5660,38 @@ export class FileSessionStorage implements KodaXSessionStorage {
       }
       const verifiedTopology = this.verifiedLocationTopology(id);
       const activeDir = path.dirname(dir);
+      const activeMessageCount = resolved.data.lineage
+        ? countActiveLineageMessages(resolved.data.lineage)
+        : resolved.data.messages.length;
+      const resumable = resolved.data.scope !== 'managed-task-worker'
+        && activeMessageCount > 0;
+      const resumeEntry = createResumeIndexEntry(
+        id,
+        resolved.data.title,
+        activeMessageCount,
+        resolved.createdAt,
+        resolved.data.runtimeInfo?.surface,
+      );
+      if (resumable) {
+        try {
+          await prepareResumeIndexEntry(activeDir, resumeEntry);
+        } catch (error: unknown) {
+          reportStorageDiagnostic('warn', `Unable to prepare the resume index for ${id}.`, error);
+        }
+      }
       await this.removeSessionConversationCaches(id, resolved.filePath);
       await this.withSessionLocationTopologyChange(
         () => this.movePair(id, dir, activeDir),
       );
+      try {
+        await commitResumeIndexEntry(
+          activeDir,
+          resumeEntry,
+          resumable,
+        );
+      } catch (error: unknown) {
+        reportStorageDiagnostic('warn', `Unable to refresh the resume index for ${id}.`, error);
+      }
       const currentTopology = this.readSessionTopologyIdentitySync(id);
       const globallyVerified = verifiedTopology !== undefined
         && currentTopology !== undefined;
@@ -5671,6 +5886,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
       await this.withSessionLocationTopologyChange(
         () => this.removeFileSetAtomically(id, targets),
       );
+      await this.removeResumeMembership(id, located);
       this.sessionLocations.delete(id);
     });
   }

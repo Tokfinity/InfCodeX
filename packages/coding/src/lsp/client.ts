@@ -21,42 +21,20 @@ import {
   killChildProcessTreeSync,
   registerManagedChildProcess,
 } from '@kodax-ai/agent';
-import {
-  createProtocolConnection,
-  StreamMessageReader,
-  StreamMessageWriter,
-} from 'vscode-languageserver-protocol/node';
-import {
-  InitializeRequest,
-  InitializedNotification,
-  DidChangeConfigurationNotification,
-  DidOpenTextDocumentNotification,
-  DidChangeTextDocumentNotification,
-  PublishDiagnosticsNotification,
-  DefinitionRequest,
-  HoverRequest,
-  ReferencesRequest,
-  DocumentSymbolRequest,
-  WorkspaceSymbolRequest,
-  ImplementationRequest,
-  CallHierarchyPrepareRequest,
-  CallHierarchyIncomingCallsRequest,
-  CallHierarchyOutgoingCallsRequest,
-  ShutdownRequest,
-  ExitNotification,
-  type Diagnostic,
-  type InitializeParams,
-  type PublishDiagnosticsParams,
-  type Position,
-  type Location,
-  type LocationLink,
-  type Hover,
-  type DocumentSymbol,
-  type SymbolInformation,
-  type WorkspaceSymbol,
-  type CallHierarchyItem,
-  type CallHierarchyIncomingCall,
-  type CallHierarchyOutgoingCall,
+import type {
+  Diagnostic,
+  InitializeParams,
+  PublishDiagnosticsParams,
+  Position,
+  Location,
+  LocationLink,
+  Hover,
+  DocumentSymbol,
+  SymbolInformation,
+  WorkspaceSymbol,
+  CallHierarchyItem,
+  CallHierarchyIncomingCall,
+  CallHierarchyOutgoingCall,
 } from 'vscode-languageserver-protocol';
 import { languageIdForPath } from './language.js';
 import { normalizeFsPath } from './paths.js';
@@ -286,6 +264,30 @@ export async function waitForLspProcessExitOrGiveUp({
 export async function createLspClient(params: CreateLspClientParams): Promise<LspClient> {
   const { serverId, root, launch, debug } = params;
   const initTimeout = params.initializeTimeoutMs ?? DEFAULT_INITIALIZE_TIMEOUT_MS;
+  const [nodeProtocol, protocol] = await Promise.all([
+    import('vscode-languageserver-protocol/node'),
+    import('vscode-languageserver-protocol'),
+  ]);
+  const { createProtocolConnection, StreamMessageReader, StreamMessageWriter } = nodeProtocol;
+  const {
+    InitializeRequest,
+    InitializedNotification,
+    DidChangeConfigurationNotification,
+    DidOpenTextDocumentNotification,
+    DidChangeTextDocumentNotification,
+    PublishDiagnosticsNotification,
+    DefinitionRequest,
+    HoverRequest,
+    ReferencesRequest,
+    DocumentSymbolRequest,
+    WorkspaceSymbolRequest,
+    ImplementationRequest,
+    CallHierarchyPrepareRequest,
+    CallHierarchyIncomingCallsRequest,
+    CallHierarchyOutgoingCallsRequest,
+    ShutdownRequest,
+    ExitNotification,
+  } = protocol;
 
   const proc = spawnLspProcess(launch.command, launch.args, {
     cwd: root,

@@ -4,7 +4,8 @@
  * 支持 OpenAI API 格式的 Provider 基类
  */
 
-import OpenAI from 'openai';
+import { createRequire } from 'node:module';
+import type OpenAI from 'openai';
 import { KodaXBaseProvider } from './base.js';
 import { KodaXProviderError } from '../errors.js';
 import { parseToolInputWithSalvageTracked } from './tool-input-parser.js';
@@ -46,6 +47,14 @@ import {
 import { resolvePromptCacheDisabled } from '../run-scoped-config.js';
 
 const KODAX_OPENAI_COMPAT_USER_AGENT = 'KodaX';
+const requireModule = createRequire(import.meta.url);
+
+function createOpenAISdkClient(
+  options: ConstructorParameters<typeof OpenAI>[0],
+): OpenAI {
+  const sdk = requireModule('openai') as { readonly default: typeof OpenAI };
+  return new sdk.default(options);
+}
 
 type OpenAIReasoningAttempt =
   | 'profile'
@@ -332,7 +341,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
 
   protected buildClient(): OpenAI {
     const defaultHeaders = getOpenAICompatDefaultHeaders(this.config);
-    return new OpenAI({
+    return createOpenAISdkClient({
       apiKey: this.getApiKey(),
       baseURL: this.config.baseUrl,
       // Some OpenAI-compatible gateways block the SDK's default

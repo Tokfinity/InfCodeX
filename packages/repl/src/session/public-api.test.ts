@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { deriveProjectKeyFromRoot } from '../interactive/project-key.js';
 
 // Helpers —————————————————————————————————————————————————————————————————————
 
@@ -113,7 +114,7 @@ describe('Session Management Public SDK', () => {
           branch: 'main',
           workspaceKind: 'detected',
         })),
-        isSameCanonicalRepo: vi.fn(() => true),
+        isSameCanonicalRepo: actual.isSameCanonicalRepo,
       };
     });
 
@@ -159,6 +160,63 @@ describe('Session Management Public SDK', () => {
 
     const results = await api.listSessions({ scope: 'all', limit: 3 });
     expect(results.length).toBeLessThanOrEqual(3);
+  });
+
+  it('does not open foreign project files when projectRoot is explicit', async () => {
+    const projectRoot = '/tmp/test-repo';
+    const foreignRoot = '/tmp/foreign-repo';
+    const currentDir = path.join(sessionsDir, deriveProjectKeyFromRoot(projectRoot).key);
+    const foreignDir = path.join(sessionsDir, deriveProjectKeyFromRoot(foreignRoot).key);
+    await Promise.all([
+      writeMinimalSession(currentDir, 'current-project', {
+        gitRoot: projectRoot,
+        runtimeInfo: { canonicalRepoRoot: projectRoot, workspaceRoot: projectRoot },
+      }),
+      writeMinimalSession(foreignDir, 'foreign-project', {
+        gitRoot: foreignRoot,
+        runtimeInfo: { canonicalRepoRoot: foreignRoot, workspaceRoot: foreignRoot },
+      }),
+    ]);
+    const foreignPath = path.join(foreignDir, 'foreign-project.jsonl');
+    const open = vi.spyOn(fs.promises, 'open');
+
+    try {
+      await expect(api.listSessions({ projectRoot })).resolves.toEqual([
+        expect.objectContaining({ id: 'current-project' }),
+      ]);
+      expect(open.mock.calls.some(([candidate]) => path.resolve(String(candidate)) === foreignPath))
+        .toBe(false);
+    } finally {
+      open.mockRestore();
+    }
+  });
+
+  it('filters a foreign session misplaced inside the explicit project bucket', async () => {
+    const projectRoot = '/tmp/test-repo';
+    const foreignRoot = '/tmp/foreign-repo';
+    const currentDir = path.join(sessionsDir, deriveProjectKeyFromRoot(projectRoot).key);
+    await Promise.all([
+      mkdir(currentDir, { recursive: true }).then(() => writeFile(
+        path.join(currentDir, 'project.json'),
+        JSON.stringify({ canonicalRoot: projectRoot }),
+        'utf8',
+      )),
+      writeMinimalSession(currentDir, 'current-project', {
+        gitRoot: projectRoot,
+        runtimeInfo: { canonicalRepoRoot: projectRoot, workspaceRoot: projectRoot },
+      }),
+      writeMinimalSession(currentDir, 'misplaced-foreign', {
+        gitRoot: projectRoot,
+        runtimeInfo: { canonicalRepoRoot: foreignRoot },
+      }),
+    ]);
+
+    await expect(api.listSessions({ projectRoot })).resolves.toEqual([
+      expect.objectContaining({ id: 'current-project' }),
+    ]);
+    await expect(api.listSessions({ projectRoot, scope: 'all' })).resolves.toEqual([
+      expect.objectContaining({ id: 'current-project' }),
+    ]);
   });
 
   // ── Test 3: listSessions honors scope=all ────────────────────────────────
@@ -556,7 +614,7 @@ describe('Session Management Public SDK', () => {
           branch: 'main',
           workspaceKind: 'detected',
         })),
-        isSameCanonicalRepo: vi.fn(() => true),
+        isSameCanonicalRepo: actual.isSameCanonicalRepo,
       };
     });
     const storage = await import('../interactive/storage.js');

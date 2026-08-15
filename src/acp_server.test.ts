@@ -136,7 +136,10 @@ vi.mock('@kodax-ai/repl', async (importOriginal) => {
   };
 });
 
-import { KodaXAcpServer, type KodaXAcpServerOptions } from './acp_server.js';
+import {
+  KodaXAcpServer,
+  type KodaXAcpServerOptions,
+} from './acp_server.js';
 import { createKodaXRuntime } from './sdk-runtime.js';
 
 type PromptRequestWithEffort = PromptRequest & {

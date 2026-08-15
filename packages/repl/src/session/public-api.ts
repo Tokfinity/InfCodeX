@@ -69,7 +69,10 @@ export type {
   SessionConversationHistoryIssueCode,
   SessionConversationHistoryStatus,
 } from './conversation-history.js';
-import { deriveProjectKeyFromRoot } from '../interactive/project-key.js';
+import {
+  deriveProjectKeyFromRoot,
+  sessionProjectMatchesAnyRoot,
+} from '../interactive/project-key.js';
 import { ensureLayoutMigrated } from '../interactive/session-migration.js';
 import type { SessionData } from '../ui/utils/session-storage.js';
 import { KODAX_SESSIONS_DIR } from '../common/utils.js';
@@ -137,30 +140,25 @@ async function collectSessionFilePaths(
   return { paths: out, complete };
 }
 
-function normalizeComparableRoot(value: string | undefined): string | undefined {
-  if (!value || !value.trim()) {
-    return undefined;
-  }
-  const normalized = path.resolve(value).replace(/\\/g, '/');
-  return process.platform === 'win32' || process.platform === 'darwin'
-    ? normalized.toLowerCase()
-    : normalized;
-}
-
 function sessionMatchesProjectRoot(
   summaryRuntime: { workspaceRoot?: string; gitRoot?: string } | undefined,
   metaGitRoot: string | undefined,
   projectRoot: string | undefined,
 ): boolean {
-  const target = normalizeComparableRoot(projectRoot);
-  if (!target) {
-    return true;
-  }
-  return [
-    summaryRuntime?.gitRoot,
-    summaryRuntime?.workspaceRoot,
-    metaGitRoot,
-  ].some((candidate) => normalizeComparableRoot(candidate) === target);
+  if (!projectRoot?.trim()) return true;
+  return sessionProjectMatchesAnyRoot({
+    ...(metaGitRoot === undefined ? {} : { gitRoot: metaGitRoot }),
+    ...(summaryRuntime === undefined ? {} : {
+      runtimeInfo: {
+        ...(summaryRuntime.gitRoot === undefined ? {} : {
+          canonicalRepoRoot: summaryRuntime.gitRoot,
+        }),
+        ...(summaryRuntime.workspaceRoot === undefined ? {} : {
+          workspaceRoot: summaryRuntime.workspaceRoot,
+        }),
+      },
+    }),
+  }, [projectRoot]);
 }
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -599,7 +597,6 @@ async function listSessionsImpl(
 
     if (
       scope === 'user'
-      && !gitRoot
       && before === undefined
       && !includeArchived
       && tag === undefined

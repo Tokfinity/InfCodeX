@@ -1,7 +1,7 @@
 // @ts-nocheck
 import process from 'node:process';
 import React from 'react';
-import { throttle } from 'es-toolkit/compat';
+import throttle from 'es-toolkit/compat/throttle';
 import ansiEscapes from 'ansi-escapes';
 import isInCi from 'is-in-ci';
 import autoBind from 'auto-bind';
