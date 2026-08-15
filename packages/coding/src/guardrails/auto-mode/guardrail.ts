@@ -136,6 +136,12 @@ export interface AutoModeDecisionDiagnostics {
     | 'classifier_failure'
     | 'classifier_circuit_breaker'
     | 'configuration';
+  /**
+   * Bounded (≤512 chars) decision-rationale summary for display surfaces
+   * (permission prompts). Same text the guardrail already passes as the ask
+   * reason; never prompt content or raw response body.
+   */
+  readonly reason?: string;
   readonly classifierFailureKind?: ClassifierFailureKind;
   readonly classifierAttempts?: readonly ClassifierAttemptDiagnostics[];
 }
@@ -1825,6 +1831,7 @@ export function createAutoModeToolGuardrail(
         state.denials = recordDenialBlock(state.denials);
         return escalateOrAsk(decision.reason, {
           source: 'classifier_confirm',
+          reason: decision.reason.slice(0, 512),
           classifierAttempts: decision.attempts,
         });
 
@@ -1832,6 +1839,7 @@ export function createAutoModeToolGuardrail(
         state.breaker = recordBreakerError(state.breaker, Date.now());
         return allowOrAskOnClassifierFailure(decision.reason, {
           source: 'classifier_failure',
+          reason: decision.reason.slice(0, 512),
           classifierFailureKind: decision.failureKind,
           classifierAttempts: decision.attempts,
         });

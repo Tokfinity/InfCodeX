@@ -400,6 +400,35 @@ describe('AutoModeToolGuardrail — Tier 1', () => {
     expect(stream).not.toHaveBeenCalled();
   });
 
+  it('keeps a workspace grep with a very large pattern deterministic without calling the classifier', async () => {
+    const provider = new StubProvider(okResult(
+      '<decision>ask</decision><hazard>intent_conflict</hazard><reason>should not run</reason>',
+    ));
+    const stream = vi.spyOn(provider, 'stream');
+    const guardrail = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      projectRoot: process.cwd(),
+      executionCwd: process.cwd(),
+      resolveProvider: () => provider,
+      analyzeCall: undefined,
+    });
+
+    const verdict = await guardrail.beforeTool!(
+      {
+        id: 'sdk-grep-large',
+        name: 'grep',
+        input: {
+          path: 'src/sdk-runtime.ts',
+          pattern: Array.from({ length: 1_200 }, (_, index) => `symbol_${index}`).join('|'),
+        },
+      },
+      ctx([{ role: 'user', content: 'Search the runtime source for these symbols.' }]),
+    );
+
+    expect(verdict.action).toBe('allow');
+    expect(stream).not.toHaveBeenCalled();
+  });
+
   it('allows an exact deterministic git show review without calling the classifier', async () => {
     const provider = new StubProvider(okResult('<decision>ask</decision><hazard>intent_conflict</hazard><reason>should not happen</reason>'));
     const stream = vi.spyOn(provider, 'stream');
@@ -2966,6 +2995,42 @@ describe('AutoModeToolGuardrail — classifier verdicts', () => {
         outputWarnings: ['missing_hazard', 'missing_reason'],
       }],
     });
+  });
+
+  it('exposes the bounded classifier reason in confirm diagnostics', async () => {
+    const askUser = vi.fn<AutoModeAskUser>(async () => 'block');
+    const g = createAutoModeToolGuardrail(baseConfig(
+      '<decision>ask</decision><hazard>external_effect</hazard><reason>Command writes outside the workspace</reason>',
+      { askUser },
+    ));
+
+    const verdict = await g.beforeTool!(callBash('node scripts/task.js'), ctx());
+
+    expect(verdict.action).toBe('block');
+    expect(askUser).toHaveBeenCalledOnce();
+    expect(askUser.mock.calls[0]?.[3]).toMatchObject({
+      source: 'classifier_confirm',
+      reason: 'Command writes outside the workspace',
+    });
+  });
+
+  it('clamps an oversized classifier reason in confirm diagnostics to 512 chars', async () => {
+    const askUser = vi.fn<AutoModeAskUser>(async () => 'block');
+    const longReason = 'r'.repeat(600);
+    const g = createAutoModeToolGuardrail(baseConfig(
+      `<decision>ask</decision><hazard>external_effect</hazard><reason>${longReason}</reason>`,
+      { askUser },
+    ));
+
+    await g.beforeTool!(callBash('node scripts/task.js'), ctx());
+
+    expect(askUser).toHaveBeenCalledOnce();
+    const diagnostics = askUser.mock.calls[0]?.[3];
+    // parse-output truncates classifier reason to 500 chars upstream (499 kept
+    // + '…' marker); the guardrail's slice(0, 512) stays as defense-in-depth,
+    // always within the schema's 512 budget.
+    expect(diagnostics?.reason?.length).toBe(500);
+    expect(diagnostics?.reason).toBe(`${longReason.slice(0, 499)}…`);
   });
 
   it('does not count auxiliary warnings as circuit-breaker failures', async () => {
