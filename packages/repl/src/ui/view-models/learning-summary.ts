@@ -1,5 +1,13 @@
 import type { LearningSurfaceSnapshot } from '../types.js';
 
+const LEARNING_RECOVERY_NOTICE_ID = 'learning-recovery';
+
+export function dismissLearningRecoveryAfterQuerySubmit<Notice extends { readonly id: string }>(
+  notices: readonly Notice[],
+): readonly Notice[] {
+  return notices.filter((notice) => notice.id !== LEARNING_RECOVERY_NOTICE_ID);
+}
+
 export function formatLearningStatus(snapshot: LearningSurfaceSnapshot): string {
   return [
     `ready=${snapshot.ready}`,

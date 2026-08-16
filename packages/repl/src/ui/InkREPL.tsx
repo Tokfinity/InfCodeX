@@ -460,7 +460,10 @@ import {
 } from "./utils/ask-user.js";
 import { buildHelpMenuSections } from "./constants/layout.js";
 import { buildStatusBarViewModel } from "./view-models/status-bar.js";
-import { formatLearningRecoverySummary } from "./view-models/learning-summary.js";
+import {
+  dismissLearningRecoveryAfterQuerySubmit,
+  formatLearningRecoverySummary,
+} from "./view-models/learning-summary.js";
 import {
   buildPromptActivityViewModel,
   buildPromptPlaceholderText,
@@ -1729,6 +1732,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     readonly text: string;
     readonly tone: "warning" | "accent";
   }[]>([]);
+  const hasSubmittedQueryRef = useRef(false);
+  const dismissLearningRecovery = useCallback(() => {
+    hasSubmittedQueryRef.current = true;
+    setLearningNotices(dismissLearningRecoveryAfterQuerySubmit);
+  }, []);
   const [liveTokenCount, setLiveTokenCount] = useState<number | null>(null); // Live token count for real-time display
   const workflowIntentBoundaryQueueLockedRef = useRef(false);
   const terminalHostProfile = useMemo(() => detectTerminalHostProfile(), []);
@@ -1784,7 +1792,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     void refresh().then((snapshot) => {
       if (!active) return;
       const recovery = formatLearningRecoverySummary(snapshot);
-      if (recovery) {
+      if (recovery && !hasSubmittedQueryRef.current) {
         const tone: 'warning' | 'accent' = snapshot.attention > 0 || snapshot.ready > 0
           ? 'warning'
           : 'accent';
@@ -8698,6 +8706,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           return;
         }
 
+        dismissLearningRecovery();
+
         // FEATURE_149 Phase B1b (v0.7.38) — fast-abort path.
         //
         // When the in-flight tool is tagged `interruptBehavior: 'cancel'`
@@ -8736,6 +8746,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         touchContext(context);
         return;
       }
+
+      dismissLearningRecovery();
 
       // Banner remains visible - it will scroll up naturally as messages are added
       // (Removed showBanner toggle to keep layout stable)
@@ -9895,6 +9907,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       finalizeAllExecutingToolCalls,
       syncManagedForegroundToolGroup,
       clearWorkStripTimers,
+      dismissLearningRecovery,
       replaceWorkflowLiveStatus,
       updateWorkflowLiveStatus,
     ]
