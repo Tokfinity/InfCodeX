@@ -16806,7 +16806,7 @@ describe("createKodaXRuntime", () => {
     if (!runOptions) throw new Error("expected Runtime run options");
     const providerDefault =
       resolveProviderModelDescriptors("zai-coding")[0]?.id;
-    expect(providerDefault).toBe("glm-5.2");
+    expect(providerDefault).toBe("glm-5.3");
     expect(runOptions.provider).toBe("zai-coding");
     expect(runOptions.modelOverride).toBe(providerDefault);
 
