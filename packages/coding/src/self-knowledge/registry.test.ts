@@ -385,6 +385,19 @@ describe('FEATURE_218 manual registry', () => {
     expect(content).toMatch(/reuses\s+the PID/);
   });
 
+  it('documents the v0.7.89 web search and run-scoped Host Tool contracts', () => {
+    const tools = resolveKodaXManual({ topic: 'tools' }).content;
+    const mcp = resolveKodaXManual({ topic: 'mcp' }).content;
+
+    expect(tools).toContain('DuckDuckGo HTML');
+    expect(tools).toContain('Bing RSS');
+    expect(tools).toContain('KODAX_WEB_SEARCH_ENDPOINT');
+    expect(tools).toContain('freshness: unknown');
+    expect(tools).toContain('leased run');
+    expect(tools).toContain('never enter the global tool registry');
+    expect(mcp).toContain('Daemon-owned Host Tools publish a lease-scoped live');
+  });
+
   it('documents the v0.7.78 sensitive-home workspace containment boundary', () => {
     const content = resolveKodaXManual({ topic: 'sandbox' }).content;
 
