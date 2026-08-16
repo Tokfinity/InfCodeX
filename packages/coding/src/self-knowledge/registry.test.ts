@@ -69,13 +69,13 @@ describe('FEATURE_218 manual registry', () => {
     expect(content).toContain('defaults to high');
   });
 
-  it('documents the v0.7.87 GLM Coding Plan routes', () => {
+  it('documents the v0.7.88 GLM Coding Plan routes', () => {
     const content = resolveKodaXManual({ topic: 'providers' }).content;
 
     expect(content).toContain('`zhipu-coding` defaults to `glm-5.3`');
-    expect(content).toContain('`zai-coding` defaults to `glm-5.2`');
+    expect(content).toContain('`zai-coding` and `ark-coding` also default to `glm-5.3`');
     expect(content).toContain('keeps `glm-5.2`');
-    expect(content).toContain('keeps `glm-5.3`');
+    expect(content).toContain('`glm-latest` alias');
     expect(content).toContain('sent verbatim');
     expect(content).toContain('never append `[1m]`');
     expect(content).toContain('cannot disable thinking');
