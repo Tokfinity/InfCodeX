@@ -24,7 +24,7 @@ import { getProvider } from '@kodax-ai/llm';
 
 ## 内置 Provider Alias
 
-Capability 数据的单一来源是 `src/providers/provider-capabilities.json`（当前更新时间：2026-08-14）。
+Capability 数据的单一来源是 `src/providers/provider-capabilities.json`（当前更新时间：2026-08-15）。
 
 | Alias | Environment variable | Reasoning | Default model |
 |---|---|---|---|
@@ -37,15 +37,15 @@ Capability 数据的单一来源是 `src/providers/provider-capabilities.json`�
 | `qwen-token-plan` | `QWEN_TOKEN_API_KEY` | Yes | `qwen3.8-max` |
 | `zhipu` | `ZHIPU_API_KEY` | Yes | `glm-5` |
 | `zhipu-coding` | `ZHIPU_CODING_API_KEY` | Yes | `glm-5.3` |
-| `zai-coding` | `ZAI_CODING_API_KEY` | Yes | `glm-5.2` |
+| `zai-coding` | `ZAI_CODING_API_KEY` | Yes | `glm-5.3` |
 | `minimax-coding` | `MINIMAX_CODING_API_KEY` | Yes | `MiniMax-M3` |
 | `mimo-coding` | `MIMO_CODING_API_KEY` | Yes | `mimo-v2.5-pro` |
 | `mimo` | `MIMO_API_KEY` | Yes | `mimo-v2.5-pro` |
-| `ark-coding` | `ARK_CODING_API_KEY` | Yes | `glm-5.2` |
+| `ark-coding` | `ARK_CODING_API_KEY` | Yes | `glm-5.3` |
 | `gemini-cli` | `GEMINI_API_KEY` | No | CLI bridge default |
 | `codex-cli` | `OPENAI_API_KEY` | No | CLI bridge default |
 
-2026-08-14 模型快照重点：
+2026-08-15 模型快照重点：
 
 - OpenAI 默认 `gpt-5.3-codex`，并提供 `gpt-5.4` / `gpt-5.3-codex-spark`。
 - Qwen Token Plan 使用 Anthropic 兼容端点，默认 `qwen3.8-max`，并保留兼容项 `qwen3.8-max-preview`，另提供 `qwen3.7-max` / `qwen3.7-plus` / `qwen3.6-flash` / `glm-5.2` / `deepseek-v4-pro`；七个模型均为 1M context。两个 Qwen 3.8 ID、`qwen3.7-plus`、`qwen3.6-flash` 支持图片理解，其余三个为纯文本；Qwen 3.8 的思考模式不可关闭，最大输出为 131,072 token。
@@ -53,9 +53,9 @@ Capability 数据的单一来源是 `src/providers/provider-capabilities.json`�
 - Kimi Code 默认使用官方 `k3-256k`（Moderato 及以上，262,144 token），并直接请求同名上游 Model ID；`/model` 仍可选择 `k3`（本地按 Allegretto+ 的 1,048,576 token tier 配置）、`kimi-for-coding`（K2.7 Code）与 `kimi-for-coding-highspeed`。K3 支持 `low` / `high` / `max` 三档思考强度，默认 `high`，也支持显式关闭；`k3-256k` 支持图片但不支持视频输入。
 - `kimi` 使用开放平台 `KIMI_API_KEY`；`kimi-code` 是独立的 Kimi For Coding 订阅端点和 `KIMI_CODE_API_KEY`，两类密钥不可互换。
 - DeepSeek 默认 `deepseek-v4-flash`，并提供 `deepseek-v4-pro`；两者均为 1M context、纯文本模型。Flash 保留 low/high/max 映射，Pro 使用 high/max 映射；cost tracker 分别使用当前基础价与 cache-read 价格。
-- Zhipu 开放平台保留可调用的 `glm-5` 默认路由，并预登记 `glm-5.3`（1M context, 131072 max output）；官方仍标注普通 API 即将上线。`zhipu-coding` 默认 `glm-5.3` 并保留 `glm-5.2` 回退；海外 `zai-coding` 默认 `glm-5.2` 并保留 `glm-5.3` 供已获账号权限时选择。两个 Coding Plan alias 都原样发送 `glm-5.3` / `glm-5.2`，不附加 `[1m]`。GLM-5.3 默认 `max` effort，`none/minimal/light/low → low`、`medium/high → high`、`xhigh/max/ultra → max`；其 thinking 不可关闭，`off` / `none` 会降级为 `low`。
+- Zhipu 开放平台保留可调用的 `glm-5` 默认路由，并预登记 `glm-5.3`（1M context, 131072 max output）；官方仍标注普通 API 即将上线。`zhipu-coding` 默认 `glm-5.3` 并保留 `glm-5.2` 回退；海外 `zai-coding` 也默认 `glm-5.3`（2026-08-15 从 `glm-5.2` 切换）。三个 Coding Plan alias（含 `ark-coding`，同样默认 `glm-5.3`、128K 上限、保留 `glm-5.2` 别名 `glm-latest`）都原样发送 `glm-5.3` / `glm-5.2`，不附加 `[1m]`。GLM-5.3 默认 `max` effort，`none/minimal/light/low → low`、`medium/high → high`、`xhigh/max/ultra → max`；其 thinking 不可关闭，`off` / `none` 会降级为 `low`。（Ark 线上 2026-08-15 live probe：`glm-5.3` 直连 200；`glm-latest` / `glm-5.2` 请求当前也被上游解析为 GLM-5.3。）
 - MiniMax Coding 默认 `MiniMax-M3`（Frontier Coding, native multimodal, 1M context），并保留 `MiniMax-M2.7` / `MiniMax-M2.7-highspeed` 供显式兼容选择；旧 M2.5/M2.1/M2 路由已移除。
-- Ark Coding 默认 `glm-5.2`（wire alias `glm-latest`）；同一 gateway 暴露 Kimi K2.7 Code/K2.6、MiniMax M3/M2.7、DeepSeek V4 Pro/Flash、Doubao Seed 2.0 Code/Pro/Lite 与 Doubao Seed Code。
+- Ark Coding 默认 `glm-5.3`（1M context、128K max output，2026-08-15 live probe 确认直连可用）；保留 `glm-5.2`（wire alias `glm-latest`）。同一 gateway 暴露 Kimi K2.7 Code/K2.6、MiniMax M3/M2.7、DeepSeek V4 Pro/Flash、Doubao Seed 2.0 Code/Pro/Lite 与 Doubao Seed Code。
 
 OpenAI-compatible 自定义 provider 可设置
 `maxOutputTokensField: "max_tokens" | "max_completion_tokens"`；默认使用

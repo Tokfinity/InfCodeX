@@ -16,21 +16,25 @@ dedicated environment variable — no key is ever stored in config files.
 | `qwen-token-plan` | `QWEN_TOKEN_API_KEY` | Yes | `qwen3.8-max` |
 | `zhipu` | `ZHIPU_API_KEY` | Yes | `glm-5` |
 | `zhipu-coding` | `ZHIPU_CODING_API_KEY` | Yes | `glm-5.3` |
-| `zai-coding` | `ZAI_CODING_API_KEY` | Yes | `glm-5.2` |
+| `zai-coding` | `ZAI_CODING_API_KEY` | Yes | `glm-5.3` |
 | `minimax-coding` | `MINIMAX_CODING_API_KEY` | Yes | `MiniMax-M3` |
 | `mimo-coding` | `MIMO_CODING_API_KEY` | Yes | `mimo-v2.5-pro` |
 | `mimo` | `MIMO_API_KEY` | Yes | `mimo-v2.5-pro` |
-| `ark-coding` | `ARK_CODING_API_KEY` | Yes | `glm-5.2` |
+| `ark-coding` | `ARK_CODING_API_KEY` | Yes | `glm-5.3` |
 | `gemini-cli` | `GEMINI_API_KEY` | No | CLI bridge default |
 | `codex-cli` | `OPENAI_API_KEY` | No | CLI bridge default |
 
-> Model snapshot date: 2026-08-14. Run `kodax setup --help` for the latest list.
+> Model snapshot date: 2026-08-15. Run `kodax setup --help` for the latest list.
 
 ## GLM Coding Plan routes
 
 `zhipu-coding` defaults to `glm-5.3` and keeps `glm-5.2` as an explicit
-rollback route. The overseas `zai-coding` alias defaults to `glm-5.2` and keeps
-`glm-5.3` selectable for accounts whose Coding Plan has received access.
+rollback route. The overseas `zai-coding` alias also defaults to `glm-5.3`
+(switched from `glm-5.2` on 2026-08-15). `ark-coding` likewise defaults to
+`glm-5.3` (1M context, 128K output cap) and keeps `glm-5.2` (alias
+`glm-latest`; a 2026-08-15 live probe confirmed the Ark wire accepts
+`glm-5.3` verbatim and currently resolves `glm-latest` / `glm-5.2` requests
+to GLM-5.3 upstream as well).
 
 KodaX sends both upstream model IDs verbatim: `glm-5.3` and `glm-5.2`. Do not
 append `[1m]`; the context window belongs to local capability metadata, not the
