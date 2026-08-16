@@ -6,7 +6,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-<!-- Keep this section empty between releases. -->
+### Fixed
+
+- Managed compaction context replacement no longer makes a topology-valid
+  ordinary conversation ambiguous or exposes physical branch/copy duplicates.
+  Conversation page-cache v3 is invalidated so affected Sessions rebuild the
+  corrected projection after upgrade, and the incremental append fast path
+  passes managed-context envelopes through without projecting them, so
+  managed-heavy Sessions keep warm page caches.
+- Managed-context transparency now keys on the `_source` tag alone (matching
+  the compaction stripping side) and also covers the lineage-unavailable
+  fallback projection.
 
 ---
 

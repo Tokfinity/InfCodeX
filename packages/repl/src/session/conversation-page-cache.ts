@@ -12,6 +12,8 @@ import {
   createConversationEntryChain,
   createSessionConversationHistoryRevision,
   extendConversationEntryChain,
+  isManagedContextMessage,
+  isOrdinaryConversationMessageEntry,
   type SessionConversationHistoryData,
   type SessionConversationHistoryEntry,
   type SessionConversationHistoryIssue,
@@ -33,7 +35,8 @@ export {
   removeConversationPageCachesInDirectory,
 } from './conversation-page-cache-files.js';
 
-const CACHE_VERSION = 3;
+// v4 rebuilds caches created before managed context became topology-transparent.
+const CACHE_VERSION = 4;
 const INDEX_RECORD_BYTES = 24;
 const WRITE_BATCH_BYTES = 1024 * 1024;
 const MAX_CACHE_MANIFEST_BYTES = 1024 * 1024;
@@ -50,7 +53,7 @@ export interface ConversationPageCacheAdmission {
 }
 
 interface ConversationCacheManifest {
-  readonly version: 3;
+  readonly version: 4;
   readonly sessionId: string;
   readonly generation: string;
   readonly sourceRevision: string;
@@ -938,8 +941,15 @@ export function canAppendConversationPageCache(
   let parentId = priorActiveEntryId;
   const projected: SessionConversationHistoryEntry[] = [];
   for (const entry of appended) {
+    if (entry.type === 'message' && isManagedContextMessage(entry.message)) {
+      // Topology-transparent envelope: keep the physical parent chain
+      // linear without projecting it as an ordinary conversation entry.
+      if (entry.parentId !== parentId) return undefined;
+      parentId = entry.id;
+      continue;
+    }
     if (
-      entry.type !== 'message'
+      !isOrdinaryConversationMessageEntry(entry)
       || entry.parentId !== parentId
       || (entry.logicalId !== undefined && entry.logicalId !== entry.id)
       || entry.sourceEntryId !== undefined

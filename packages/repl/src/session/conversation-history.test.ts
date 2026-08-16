@@ -48,6 +48,29 @@ function compactionEntry(
   };
 }
 
+// Mirrors the writer-side managed envelopes (_synthetic + managed _source).
+function managedContextEntry(
+  id: string,
+  parentId: string,
+  source: 'managed-run-context' | 'managed-runtime-context' = 'managed-run-context',
+): KodaXSessionEntry {
+  return {
+    type: 'message',
+    id,
+    parentId,
+    timestamp,
+    logicalId: id,
+    message: {
+      role: 'user',
+      content: `=== Managed Run Context ===\n${id}`,
+      _synthetic: true,
+      _source: source,
+      turnId: 'turn-managed',
+      timestamp,
+    },
+  };
+}
+
 function project(entries: KodaXSessionEntry[], activeEntryId: string) {
   const lineage: KodaXSessionLineage = {
     version: 2,
@@ -68,6 +91,29 @@ describe('buildSessionConversationHistory', () => {
       entries: [],
       issues: [],
     });
+  });
+
+  it('hides managed context envelopes in the lineage-unavailable fallback', () => {
+    const history = buildLineageUnavailableConversationHistory([
+      {
+        role: 'user',
+        content: '=== Managed Run Context ===\ncanonical',
+        _synthetic: true,
+        _source: 'managed-run-context',
+      },
+      { role: 'user', content: 'legacy flat request' },
+      {
+        role: 'user',
+        content: '=== Managed Run Context ===\ndelta',
+        _synthetic: true,
+        _source: 'managed-runtime-context',
+      },
+    ], 'sha256:legacy-flat');
+
+    expect(history.status).toBe('partial');
+    expect(history.issues.map((issue) => issue.code)).toEqual(['lineage_unavailable']);
+    expect(history.entries.map((entry) => entry.message.content))
+      .toEqual(['legacy flat request']);
   });
 
   it('folds modern compaction copies by persisted provenance', () => {
@@ -105,6 +151,205 @@ describe('buildSessionConversationHistory', () => {
       boundaryId: 'u2',
       auditEntryIds: ['u2', 'u2-copy'],
     });
+  });
+
+  it('treats replaceable managed context as topology-transparent across compaction', () => {
+    const copied = (
+      id: string,
+      parentId: string,
+      sourceId: string,
+      role: 'user' | 'assistant',
+      content: string,
+    ) => messageEntry(id, parentId, role, content, {
+      logicalId: sourceId,
+      sourceEntryId: sourceId,
+    });
+    const history = project([
+      messageEntry('stable', null, 'assistant', 'stable answer'),
+      messageEntry('query-abandoned', 'stable', 'user', 'build the explainer'),
+      managedContextEntry('initial-context', 'stable', 'managed-run-context'),
+      messageEntry('query-active', 'initial-context', 'user', 'build the explainer'),
+      messageEntry('first', 'query-active', 'assistant', 'retained first'),
+      messageEntry('first-result', 'first', 'user', 'first tool result'),
+      managedContextEntry('runtime-context', 'first-result', 'managed-runtime-context'),
+      messageEntry('second', 'runtime-context', 'assistant', 'retained second'),
+      messageEntry('final-result', 'second', 'user', 'final tool result'),
+      compactionEntry('compact', 'first-copy'),
+      copied('first-copy', 'compact', 'first', 'assistant', 'retained first'),
+      copied('first-result-copy', 'first-copy', 'first-result', 'user', 'first tool result'),
+      copied('second-copy', 'first-result-copy', 'second', 'assistant', 'retained second'),
+      managedContextEntry('canonical-context', 'second-copy', 'managed-run-context'),
+      copied('final-result-copy', 'canonical-context', 'final-result', 'user', 'final tool result'),
+    ], 'final-result-copy');
+
+    expect(history.status).toBe('resolved');
+    expect(history.issues).toEqual([]);
+    expect(history.entries.map((entry) => entry.message.content)).toEqual([
+      'stable answer',
+      'build the explainer',
+      'retained first',
+      'first tool result',
+      'retained second',
+      'final tool result',
+    ]);
+    expect(history.entries.filter((entry) =>
+      entry.message.content === 'build the explainer')).toHaveLength(1);
+  });
+
+  it('keeps a managed first-kept entry transparent to the conversation boundary', () => {
+    const entries = [
+      messageEntry('query', null, 'user', 'repeat after compaction'),
+      messageEntry('answer', 'query', 'assistant', 'durable answer'),
+      compactionEntry('compact', 'canonical-context'),
+      managedContextEntry('canonical-context', 'compact'),
+      messageEntry('query-copy', 'canonical-context', 'user', 'repeat after compaction', {
+        logicalId: 'query',
+        sourceEntryId: 'query',
+      }),
+      messageEntry('answer-copy', 'query-copy', 'assistant', 'durable answer', {
+        logicalId: 'answer',
+        sourceEntryId: 'answer',
+      }),
+    ];
+    const lineage: KodaXSessionLineage = {
+      version: 2,
+      activeEntryId: 'answer-copy',
+      entries,
+    };
+    const history = buildSessionConversationHistory(lineage, 'sha256:first-managed');
+
+    expect(history.status).toBe('resolved');
+    expect(history.issues).toEqual([]);
+    expect(history.entries).toEqual([
+      expect.objectContaining({
+        auditEntryIds: ['query', 'query-copy'],
+        message: expect.objectContaining({ content: 'repeat after compaction' }),
+      }),
+      expect.objectContaining({
+        auditEntryIds: ['answer', 'answer-copy'],
+        message: expect.objectContaining({ content: 'durable answer' }),
+      }),
+    ]);
+    const forked = forkSessionConversationLineage(
+      lineage,
+      'answer-copy',
+      'sha256:first-managed',
+    );
+    expect(forked).not.toBeNull();
+    expect(buildSessionConversationHistory(forked!, 'sha256:fork').entries
+      .map((entry) => entry.message.content)).toEqual([
+        'repeat after compaction',
+        'durable answer',
+      ]);
+  });
+
+  it('keeps a managed envelope mid-suffix transparent within one compaction epoch', () => {
+    const entries = [
+      messageEntry('query', null, 'user', 'repeat after compaction'),
+      messageEntry('answer', 'query', 'assistant', 'durable answer'),
+      compactionEntry('compact', 'kept-user'),
+      messageEntry('kept-user', 'compact', 'user', 'repeat after compaction', {
+        logicalId: 'query',
+        sourceEntryId: 'query',
+      }),
+      managedContextEntry('mid-context', 'kept-user', 'managed-run-context'),
+      messageEntry('kept-answer', 'mid-context', 'assistant', 'durable answer', {
+        logicalId: 'answer',
+        sourceEntryId: 'answer',
+      }),
+    ];
+    const lineage: KodaXSessionLineage = {
+      version: 2,
+      activeEntryId: 'kept-answer',
+      entries,
+    };
+    const history = buildSessionConversationHistory(lineage, 'sha256:mid-managed');
+
+    expect(history.status).toBe('resolved');
+    expect(history.issues).toEqual([]);
+    expect(history.entries).toEqual([
+      expect.objectContaining({
+        auditEntryIds: ['query', 'kept-user'],
+        message: expect.objectContaining({ content: 'repeat after compaction' }),
+      }),
+      expect.objectContaining({
+        auditEntryIds: ['answer', 'kept-answer'],
+        message: expect.objectContaining({ content: 'durable answer' }),
+      }),
+    ]);
+  });
+
+  it('treats a managed-context tag without the synthetic flag as transparent', () => {
+    const history = project([
+      {
+        type: 'message',
+        id: 'ctx-unflagged',
+        parentId: null,
+        timestamp,
+        logicalId: 'ctx-unflagged',
+        message: {
+          role: 'user',
+          content: '=== Managed Run Context ===\nmissing _synthetic flag',
+          _source: 'managed-run-context',
+        },
+      },
+      messageEntry('query', 'ctx-unflagged', 'user', 'real request'),
+    ], 'query');
+
+    expect(history.status).toBe('resolved');
+    expect(history.entries.map((entry) => entry.message.content))
+      .toEqual(['real request']);
+  });
+
+  it('keeps other synthetic messages visible as ordinary history', () => {
+    const history = project([
+      {
+        type: 'message',
+        id: 'checkpoint',
+        parentId: null,
+        timestamp,
+        logicalId: 'checkpoint',
+        message: {
+          role: 'user',
+          content: 'compaction checkpoint',
+          _synthetic: true,
+          _source: 'compaction-checkpoint',
+        },
+      },
+      messageEntry('query', 'checkpoint', 'user', 'real request'),
+    ], 'query');
+
+    expect(history.status).toBe('resolved');
+    expect(history.entries.map((entry) => entry.message.content))
+      .toEqual(['compaction checkpoint', 'real request']);
+  });
+
+  it('keeps a managed-context tail transparent when it is the active entry', () => {
+    const history = project([
+      messageEntry('query', null, 'user', 'tail request'),
+      messageEntry('answer', 'query', 'assistant', 'tail answer'),
+      managedContextEntry('tail-context', 'answer'),
+    ], 'tail-context');
+
+    expect(history.status).toBe('resolved');
+    expect(history.issues).toEqual([]);
+    expect(history.entries.map((entry) => entry.message.content))
+      .toEqual(['tail request', 'tail answer']);
+  });
+
+  it('stays fail-closed when the retained suffix holds only managed context', () => {
+    const history = project([
+      messageEntry('query', null, 'user', 'original request'),
+      messageEntry('answer', 'query', 'assistant', 'original answer'),
+      compactionEntry('compact', 'canonical-context'),
+      managedContextEntry('canonical-context', 'compact'),
+    ], 'canonical-context');
+
+    expect(history.status).toBe('ambiguous');
+    expect(history.entries.map((entry) => entry.message.content)).toEqual([
+      'original request',
+      'original answer',
+    ]);
   });
 
   it('retains an archived source entry id in the compacted copy audit references', () => {

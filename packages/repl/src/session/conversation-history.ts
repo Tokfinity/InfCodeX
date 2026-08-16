@@ -61,7 +61,16 @@ interface ThreadPath {
 
 interface ConversationEpoch {
   readonly root: KodaXSessionEntry;
+  /** Ordinary projection: replaceable managed-context envelopes are excluded. */
   readonly messages: readonly KodaXSessionMessageEntry[];
+  /**
+   * First physical message entry on the epoch path, including
+   * topology-transparent managed-context envelopes. This is the id that
+   * must match the compaction writer's `firstKeptEntryId`; it deliberately
+   * differs from `messages[0]?.id` when the retained suffix starts with a
+   * managed envelope.
+   */
+  readonly firstPhysicalMessageEntryId?: string;
 }
 
 interface CompactionPredecessorCandidate {
@@ -134,6 +143,26 @@ function isThreadEntry(entry: KodaXSessionEntry): boolean {
   return entry.type === 'message'
     || entry.type === 'compaction'
     || entry.type === 'branch_summary';
+}
+
+/**
+ * Managed-context detection aligned with the compaction stripping side
+ * (packages/coding .../managed-run-context.ts): the `_source` tag alone
+ * identifies the two replaceable envelope kinds, independent of the
+ * `_synthetic` flag.
+ */
+export function isManagedContextMessage(message: KodaXMessage): boolean {
+  return message._source === 'managed-run-context'
+    || message._source === 'managed-runtime-context';
+}
+
+export function isOrdinaryConversationMessageEntry(
+  entry: KodaXSessionEntry,
+): entry is KodaXSessionMessageEntry {
+  if (entry.type !== 'message') return false;
+  // Managed context is a replaceable LLM envelope, not a user conversation
+  // record. The raw transcript API still exposes its physical audit entry.
+  return !isManagedContextMessage(entry.message);
 }
 
 function threadPath(
@@ -246,7 +275,7 @@ function retainedSuffixMatches(
 function compactionPredecessorCandidates(
   priorEntries: readonly KodaXSessionEntry[],
   root: KodaXSessionCompactionEntry,
-  currentMessages: readonly KodaXSessionMessageEntry[],
+  epoch: ConversationEpoch,
   issues: PendingConversationHistoryIssue[],
   checkpoint?: () => void,
 ): CompactionPredecessorCandidate[] {
@@ -308,7 +337,7 @@ function compactionPredecessorCandidates(
     return [];
   }
   if (root.firstKeptEntryId === undefined) return candidates;
-  if (currentMessages[0]?.id !== root.firstKeptEntryId) {
+  if (epoch.firstPhysicalMessageEntryId !== root.firstKeptEntryId) {
     issues.push({
       code: 'compaction_boundary_invalid',
       message: `Compaction ${root.id} does not identify its first retained message.`,
@@ -325,9 +354,9 @@ function compactionPredecessorCandidates(
     for (let index = 0; index < candidate.path.entries.length; index += 1) {
       if (index > 0 && index % 256 === 0) checkpoint?.();
       const entry = candidate.path.entries[index]!;
-      if (entry.type === 'message') messages.push(entry);
+      if (isOrdinaryConversationMessageEntry(entry)) messages.push(entry);
     }
-    if (retainedSuffixMatches(messages, currentMessages, checkpoint)) {
+    if (retainedSuffixMatches(messages, epoch.messages, checkpoint)) {
       matches.push(candidate);
     }
   }
@@ -335,7 +364,7 @@ function compactionPredecessorCandidates(
     issues.push({
       code: 'compaction_boundary_invalid',
       message: `Compaction ${root.id} retained suffix conflicts with every predecessor branch.`,
-      entryIds: [root.id, ...currentMessages.map((entry) => entry.id)],
+      entryIds: [root.id, ...epoch.messages.map((entry) => entry.id)],
     });
   }
   return matches;
@@ -344,14 +373,14 @@ function compactionPredecessorCandidates(
 function resolveCompactionPredecessor(
   priorEntries: readonly KodaXSessionEntry[],
   root: KodaXSessionCompactionEntry,
-  currentMessages: readonly KodaXSessionMessageEntry[],
+  epoch: ConversationEpoch,
   issues: PendingConversationHistoryIssue[],
   checkpoint?: () => void,
 ): KodaXSessionEntry | undefined {
   const candidates = compactionPredecessorCandidates(
     priorEntries,
     root,
-    currentMessages,
+    epoch,
     issues,
     checkpoint,
   );
@@ -374,10 +403,11 @@ function resolveCompactionPredecessor(
 
 function leadingExplicitRetainedCopies(
   root: KodaXSessionCompactionEntry,
-  currentMessages: readonly KodaXSessionMessageEntry[],
+  epoch: ConversationEpoch,
   checkpoint?: () => void,
 ): readonly KodaXSessionMessageEntry[] {
-  if (currentMessages[0]?.id !== root.firstKeptEntryId) return [];
+  if (epoch.firstPhysicalMessageEntryId !== root.firstKeptEntryId) return [];
+  const currentMessages = epoch.messages;
   let firstNonExplicit = -1;
   for (let index = 0; index < currentMessages.length; index += 1) {
     if (index > 0 && index % 256 === 0) checkpoint?.();
@@ -427,14 +457,18 @@ function isAppendOrderedPriorPath(
 
 function explicitCompactionPredecessorCandidates(
   root: KodaXSessionCompactionEntry,
-  currentMessages: readonly KodaXSessionMessageEntry[],
+  epoch: ConversationEpoch,
   rootIndex: number,
   entriesById: ReadonlyMap<string, KodaXSessionEntry>,
   appendIndex: ReadonlyMap<string, number>,
   messagesByIdentity: ReadonlyMap<string, readonly KodaXSessionMessageEntry[]>,
   checkpoint?: () => void,
 ): KodaXSessionMessageEntry[] {
-  const retainedCopies = leadingExplicitRetainedCopies(root, currentMessages, checkpoint);
+  const retainedCopies = leadingExplicitRetainedCopies(
+    root,
+    epoch,
+    checkpoint,
+  );
   const lastCopy = retainedCopies.at(-1);
   const lookupKey = lastCopy === undefined
     ? undefined
@@ -453,7 +487,7 @@ function explicitCompactionPredecessorCandidates(
     for (let index = 0; index < path.entries.length; index += 1) {
       if (index > 0 && index % 256 === 0) checkpoint?.();
       const entry = path.entries[index]!;
-      if (entry.type === 'message') priorMessages.push(entry);
+      if (isOrdinaryConversationMessageEntry(entry)) priorMessages.push(entry);
     }
     if (
       !path.complete
@@ -496,7 +530,7 @@ function indexMessagesByIdentity(
   for (let index = 0; index < entries.length; index += 1) {
     if (index > 0 && index % 256 === 0) checkpoint?.();
     const entry = entries[index]!;
-    if (entry.type !== 'message') continue;
+    if (!isOrdinaryConversationMessageEntry(entry)) continue;
     for (const key of new Set([entry.id, entry.logicalId, entry.sourceEntryId])) {
       if (key === undefined) continue;
       const matches = result.get(key) ?? [];
@@ -523,7 +557,7 @@ function conversationEpochs(
     if (!isThreadEntry(entry)) continue;
     threadEntries.push(entry);
     entriesById.set(entry.id, entry);
-    if (entry.type === 'message') messageEntryIds.push(entry.id);
+    if (isOrdinaryConversationMessageEntry(entry)) messageEntryIds.push(entry.id);
   }
   if (lineage.activeEntryId === null && messageEntryIds.length > 0) {
     issues.push({
@@ -558,15 +592,25 @@ function conversationEpochs(
     }
     visitedRoots.add(root.id);
     const currentMessages: KodaXSessionMessageEntry[] = [];
+    let firstPhysicalMessageEntryId: string | undefined;
     for (let index = 0; index < path.entries.length; index += 1) {
       if (index > 0 && index % 256 === 0) checkpoint?.();
       const entry = path.entries[index]!;
-      if (entry.type === 'message') currentMessages.push(entry);
+      // Physical track: any message entry — including topology-transparent
+      // managed-context envelopes — anchors the compaction boundary check.
+      if (entry.type === 'message' && firstPhysicalMessageEntryId === undefined) {
+        firstPhysicalMessageEntryId = entry.id;
+      }
+      if (isOrdinaryConversationMessageEntry(entry)) currentMessages.push(entry);
     }
-    epochs.push({
+    const epoch: ConversationEpoch = {
       root,
       messages: currentMessages,
-    });
+      ...(firstPhysicalMessageEntryId !== undefined
+        ? { firstPhysicalMessageEntryId }
+        : {}),
+    };
+    epochs.push(epoch);
     if (root.type !== 'compaction' || root.reason === 'rewind') break;
     const rootIndex = appendIndex.get(root.id) ?? 0;
     const priorEpochStart = priorEpochStartByCompactionId.get(root.id) ?? 0;
@@ -579,14 +623,14 @@ function conversationEpochs(
     let predecessor = resolveCompactionPredecessor(
       priorEntries,
       root,
-      currentMessages,
+      epoch,
       predecessorIssues,
       checkpoint,
     );
     if (predecessor === undefined) {
       const explicitCandidates = explicitCompactionPredecessorCandidates(
         root,
-        currentMessages,
+        epoch,
         rootIndex,
         entriesById,
         appendIndex,
@@ -722,19 +766,19 @@ function physicalAuditEntryIds(
 
 function provenLegacyOverlap(
   root: KodaXSessionCompactionEntry,
-  messages: readonly KodaXSessionMessageEntry[],
+  epoch: ConversationEpoch,
   prior: readonly MutableConversationEntry[],
   groupsByIdentity: ReadonlyMap<string, MutableConversationEntry>,
   issues: PendingConversationHistoryIssue[],
   checkpoint?: () => void,
 ): ReadonlyMap<string, MutableConversationEntry> {
   const mappings = new Map<string, MutableConversationEntry>();
+  const { messages } = epoch;
   const firstKeptId = root.firstKeptEntryId;
   if (firstKeptId === undefined || prior.length === 0 || messages.length === 0) {
     return mappings;
   }
-  const firstKeptIndex = messages.findIndex((entry) => entry.id === firstKeptId);
-  if (firstKeptIndex !== 0) {
+  if (epoch.firstPhysicalMessageEntryId !== firstKeptId) {
     issues.push({
       code: 'compaction_boundary_invalid',
       message: `Compaction ${root.id} does not identify the first retained message.`,
@@ -986,7 +1030,7 @@ export function buildSessionConversationHistory(
     || issue.code === 'compaction_predecessor_missing'
     || issue.code === 'lineage_path_incomplete');
   const messageEntries = lineage.entries.filter(
-    (entry): entry is KodaXSessionMessageEntry => entry.type === 'message',
+    isOrdinaryConversationMessageEntry,
   );
   const unreliableKnownOrAmbiguousSourceIds = new Set(
     messageEntries.map((entry) => entry.id),
@@ -1023,7 +1067,7 @@ export function buildSessionConversationHistory(
     const topologyMappings = root.type === 'compaction' && root.reason !== 'rewind'
       ? provenLegacyOverlap(
           root,
-          epoch.messages,
+          epoch,
           groups,
           groupsByIdentity,
           issues,
@@ -1130,11 +1174,13 @@ export function forkSessionConversationLineage(
   const activeMessages: KodaXSessionMessageEntry[] = [];
   const activeMessageIds = new Set<string>();
   let firstKeptIndex = -1;
+  let reachedFirstKept = false;
   for (let index = 0; index < activePath.length; index += 1) {
     if (index > 0 && index % 256 === 0) checkpoint?.();
     const entry = activePath[index]!;
-    if (entry.type !== 'message') continue;
-    if (entry.id === root.firstKeptEntryId) firstKeptIndex = activeMessages.length;
+    if (entry.id === root.firstKeptEntryId) reachedFirstKept = true;
+    if (!isOrdinaryConversationMessageEntry(entry)) continue;
+    if (reachedFirstKept && firstKeptIndex < 0) firstKeptIndex = activeMessages.length;
     activeMessages.push(entry);
     activeMessageIds.add(entry.id);
   }
@@ -1236,7 +1282,11 @@ export function buildLineageUnavailableConversationHistory(
   const entries: SessionConversationHistoryEntry[] = [];
   for (let index = 0; index < messages.length; index += 1) {
     if (index > 0 && index % 256 === 0) checkpoint?.();
-    entries.push({ auditEntryIds: [], message: messages[index]! });
+    const message = messages[index]!;
+    // Managed-context envelopes stay topology-transparent even in the
+    // lineage-unavailable fallback.
+    if (isManagedContextMessage(message)) continue;
+    entries.push({ auditEntryIds: [], message });
   }
   return {
     sourceRevision,

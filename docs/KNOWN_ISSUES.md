@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-08-15_
+_Last Updated: 2026-08-16_
 
 ---
 
@@ -14,6 +14,7 @@ _Last Updated: 2026-08-15_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 293 | High | Resolved | Managed compaction context replacement makes ordinary history ambiguous and duplicates paged conversations | v0.7.80 managed-run-context stripping | Unreleased | 2026-08-16 | 2026-08-16 |
 | 292 | High | Resolved | Actor settlement deadline conflates storage eligibility, canonical commit, and post-commit maintenance | v0.7.85 Actor settlement convergence | v0.7.88 release | 2026-08-15 | 2026-08-15 |
 | 291 | High | Resolved | Crashed inline Runtime owner leaves daemon startup permanently fenced | v0.7.69 owner-policy fencing | v0.7.86 release | 2026-08-11 | 2026-08-11 |
 | 290 | Medium | Resolved | Mixed-case custom provider aliases lose model autocomplete | custom provider model completion | v0.7.85 release | 2026-08-10 | 2026-08-10 |
@@ -195,6 +196,88 @@ _Last Updated: 2026-08-15_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 293: Managed compaction context replacement makes ordinary history ambiguous and duplicates paged conversations
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.80 managed-run-context stripping
+- **Fixed**: Unreleased
+- **Created**: 2026-08-16
+- **Resolved**: 2026-08-16
+
+#### Original Problem
+
+Space Session `20260816_110200_432759c1554ee5` displayed the latest user query
+twice and repeated earlier assistant output after loading older pages. Reloading
+could change the ordering but did not reliably restore a single conversation.
+The SDK conversation manifest reported `compaction_boundary_invalid` and
+`compaction_predecessor_missing`, so the UI correctly warned that old history
+had multiple possible interpretations and preserved every candidate.
+
+#### Root Cause
+
+Managed compaction intentionally removes replaceable
+`managed-runtime-context` messages and reinstalls one canonical
+`managed-run-context` message. Ordinary-history topology validation treated
+those private synthetic envelopes as durable conversation records. Their
+expected removal and relocation therefore made a valid retained suffix appear
+to conflict with every predecessor branch. The fail-closed ambiguous projection
+then returned all physical branch candidates, including the original and active
+copies of the same user turn and provenance-linked compacted assistant copies.
+An already-written v3 page cache preserved that stale projection across reload
+and pagination even after the resolver semantics changed.
+
+#### Resolution
+
+- Treat the two explicitly tagged replaceable managed-context message kinds
+  (detected by the `_source` tag alone, matching the compaction stripping
+  side) as topology-transparent in the ordinary conversation projection —
+  including the lineage-unavailable fallback; raw append-order audit history
+  remains unchanged.
+- Preserve the physical `firstKeptEntryId` boundary while matching the first
+  ordinary retained message, including forked conversation boundaries.
+- Increment the conversation page-cache format to v4 so existing ambiguous v3
+  projections are rejected and rebuilt from canonical lineage. The incremental
+  append fast path passes managed-context envelopes through without projecting
+  them (leading, mid-batch, and managed-only batches keep the fast path warm).
+- Keep genuine repeated user/assistant content distinct; no text-based dedupe
+  or branch guessing was added. Legacy branches that were distinguishable only
+  by managed-envelope content may now resolve as ambiguous (fail-closed, no
+  data loss) — an accepted trade-off consistent with preserving genuine
+  branches.
+
+#### Files Changed
+
+- `packages/repl/src/session/conversation-history.ts`
+- `packages/repl/src/session/conversation-history.test.ts`
+- `packages/repl/src/session/conversation-page-cache.ts`
+- `packages/repl/src/session/conversation-page-cache.test.ts`
+- `docs/test-guides/ISSUE_293_v0.7.89_REGRESSION_GUIDE.md`
+
+#### Tests Added
+
+- Managed context replacement inside a retained suffix resolves one proven
+  predecessor and folds physical compaction copies.
+- A managed-context `firstKeptEntryId` stays transparent through ordinary
+  history and conversation-boundary fork projection.
+- v3 page caches are invalidated after the ordinary-history projection change.
+- Topological transparency keys on the `_source` tag alone, matching the
+  compaction stripping side; other synthetic messages stay visible, the
+  lineage-unavailable fallback hides managed envelopes, and a
+  managed-context-only retained suffix stays fail-closed ambiguous.
+- Incremental cache append passes topology-transparent managed context
+  through the physical parent chain (leading, mid-batch, and managed-only
+  batches keep the fast path warm) while projecting only ordinary messages.
+- Passthrough appends stay byte-equivalent to canonical rebuilds (entryChain
+  and refresh reuse), managed-only batches persist their watermark without
+  data churn, and a managed batch that breaks the parent chain is rejected;
+  a managed envelope mid-suffix stays transparent within one epoch.
+
+#### Manual Verification
+
+- The original production Session now resolves with one latest query and one
+  audit group for each provenance-linked retained copy pair.
 
 ### 292: Actor settlement deadline conflates storage eligibility, canonical commit, and post-commit maintenance
 
@@ -12347,11 +12430,18 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 172 (27 Open, 145 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 173 (27 Open, 146 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-08-16: Issue 293 resolved (Unreleased)
+- Made managed run/runtime context envelopes topology-transparent to ordinary
+  conversation history while preserving raw audit history and legitimate
+  repeated content.
+- Invalidated v3 conversation page caches so affected Sessions rebuild the
+  corrected projection on first open or pagination.
 
 ### 2026-08-12: Issue 291 resolved (v0.7.86)
 - Atomically recovered only provably dead inline owner fences during daemon

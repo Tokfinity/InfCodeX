@@ -4,11 +4,16 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { KodaXSessionLineage } from '@kodax-ai/agent';
+import type { KodaXSessionEntry, KodaXSessionLineage } from '@kodax-ai/agent';
 
-import { buildSessionConversationHistory } from './conversation-history.js';
+import {
+  buildSessionConversationHistory,
+  createConversationEntryChain,
+  extendConversationEntryChain,
+} from './conversation-history.js';
 import {
   ConversationPageCacheStaleError,
+  appendConversationPageCache,
   canAppendConversationPageCache,
   readConversationPageCache,
   readConversationPageCacheManifest,
@@ -21,6 +26,44 @@ import {
 } from './source-revision.js';
 
 const roots: string[] = [];
+
+function messageEntry(
+  id: string,
+  parentId: string,
+  role: 'user' | 'assistant',
+  content: string,
+): KodaXSessionEntry {
+  return {
+    type: 'message',
+    id,
+    parentId,
+    timestamp: '2026-08-01T00:00:01.000Z',
+    logicalId: id,
+    message: { role, content },
+  };
+}
+
+// Keep the managed-envelope shape in sync with managedContextEntry in
+// conversation-history.test.ts.
+function managedContextEntry(
+  id: string,
+  parentId: string,
+  source: 'managed-run-context' | 'managed-runtime-context',
+): KodaXSessionEntry {
+  return {
+    type: 'message',
+    id,
+    parentId,
+    timestamp: '2026-08-01T00:00:01.000Z',
+    logicalId: id,
+    message: {
+      role: 'user',
+      content: 'replaceable managed context',
+      _synthetic: true,
+      _source: source,
+    },
+  };
+}
 
 async function fixture(content: string) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kodax-conversation-cache-'));
@@ -111,6 +154,31 @@ describe('Conversation page cache durability', () => {
 
     await expect(readConversationPageCacheManifest(value.mainPath)).resolves.toBeUndefined();
     expect(readFile).not.toHaveBeenCalled();
+  });
+
+  it('invalidates v3 caches after the ordinary-history projection changes', async () => {
+    const value = await fixture('old-projection');
+    await writeConversationPageCache(
+      value.mainPath,
+      'boundary:old-projection',
+      value.sourceRevisionState,
+      value.history,
+      value.lineage,
+      undefined,
+      1024,
+    );
+    const manifestPath = value.mainPath.replace(/\.jsonl$/, '.conversation-cache.json');
+    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as Record<string, unknown>;
+    manifest.version = 3;
+    await fs.writeFile(manifestPath, JSON.stringify(manifest));
+
+    await expect(readConversationPageCacheManifest(value.mainPath)).resolves.toBeUndefined();
+    await expect(readConversationPageCache(value.mainPath, 'boundary:old-projection', {
+      limit: 1,
+      maxPageBytes: 64 * 1024,
+      maxInlineEntryBytes: 64 * 1024,
+      reservedBytes: 0,
+    })).resolves.toBeNull();
   });
 
   it('rejects an oversized descriptor before allocating its declared length', async () => {
@@ -290,6 +358,81 @@ describe('Conversation page cache durability', () => {
     }, 'entry-1', appendedLineage.entries.slice(1), 'entry-2')).toBeUndefined();
   });
 
+  it('appends through leading topology-transparent managed context', async () => {
+    const value = await fixture('managed-context-prefix');
+    await writeConversationPageCache(
+      value.mainPath,
+      'boundary:managed-context',
+      value.sourceRevisionState,
+      value.history,
+      value.lineage,
+      undefined,
+      1024,
+    );
+    const manifest = await readConversationPageCacheManifest(value.mainPath);
+    if (manifest === undefined) throw new Error('Conversation cache manifest missing');
+
+    expect(canAppendConversationPageCache(manifest, 'entry-1', [
+      managedContextEntry('entry-managed', 'entry-1', 'managed-runtime-context'),
+      messageEntry('entry-query', 'entry-managed', 'user', 'real query'),
+    ], 'entry-query')).toEqual([{
+      boundaryId: 'entry-query',
+      auditEntryIds: ['entry-query'],
+      message: { role: 'user', content: 'real query' },
+    }]);
+  });
+
+  it('appends real messages around a mid-batch managed context', async () => {
+    const value = await fixture('managed-context-mid');
+    await writeConversationPageCache(
+      value.mainPath,
+      'boundary:managed-context-mid',
+      value.sourceRevisionState,
+      value.history,
+      value.lineage,
+      undefined,
+      1024,
+    );
+    const manifest = await readConversationPageCacheManifest(value.mainPath);
+    if (manifest === undefined) throw new Error('Conversation cache manifest missing');
+
+    expect(canAppendConversationPageCache(manifest, 'entry-1', [
+      messageEntry('entry-tool', 'entry-1', 'user', 'tool result'),
+      managedContextEntry('entry-managed', 'entry-tool', 'managed-runtime-context'),
+      messageEntry('entry-answer', 'entry-managed', 'assistant', 'final answer'),
+    ], 'entry-answer')).toEqual([
+      {
+        boundaryId: 'entry-tool',
+        auditEntryIds: ['entry-tool'],
+        message: { role: 'user', content: 'tool result' },
+      },
+      {
+        boundaryId: 'entry-answer',
+        auditEntryIds: ['entry-answer'],
+        message: { role: 'assistant', content: 'final answer' },
+      },
+    ]);
+  });
+
+  it('advances the append chain across a managed-context-only batch', async () => {
+    const value = await fixture('managed-context-only');
+    await writeConversationPageCache(
+      value.mainPath,
+      'boundary:managed-context-only',
+      value.sourceRevisionState,
+      value.history,
+      value.lineage,
+      undefined,
+      1024,
+    );
+    const manifest = await readConversationPageCacheManifest(value.mainPath);
+    if (manifest === undefined) throw new Error('Conversation cache manifest missing');
+
+    expect(canAppendConversationPageCache(manifest, 'entry-1', [
+      managedContextEntry('entry-managed', 'entry-1', 'managed-run-context'),
+    ], 'entry-managed')).toEqual([]);
+  });
+
   it('checks append identity conflicts without traversing the persisted lineage prefix', async () => {
     const value = await fixture('bounded-identity-filter');
     await writeConversationPageCache(
@@ -332,5 +475,182 @@ describe('Conversation page cache durability', () => {
       }],
       'entry-1',
     )).toBeUndefined();
+  });
+
+  it('keeps a leading managed passthrough append equivalent to a canonical rebuild', async () => {
+    const value = await fixture('passthrough-leading-equivalence');
+    await writeConversationPageCache(
+      value.mainPath,
+      'boundary:leading-equivalence',
+      value.sourceRevisionState,
+      value.history,
+      value.lineage,
+      undefined,
+      1024,
+    );
+    const manifest = await readConversationPageCacheManifest(value.mainPath);
+    if (manifest === undefined) throw new Error('Conversation cache manifest missing');
+    const appended = [
+      managedContextEntry('entry-managed', 'entry-1', 'managed-runtime-context'),
+      messageEntry('entry-query', 'entry-managed', 'user', 'real query'),
+    ];
+    const projected = canAppendConversationPageCache(
+      manifest,
+      'entry-1',
+      appended,
+      'entry-query',
+    );
+    if (projected === undefined) throw new Error('Fast-path admission unexpectedly failed');
+    const extendedLineage: KodaXSessionLineage = {
+      ...value.lineage,
+      activeEntryId: 'entry-query',
+      entries: [...value.lineage.entries, ...appended],
+    };
+    const canonical = buildSessionConversationHistory(
+      extendedLineage,
+      createSessionSourceRevision(value.sourceRevisionState),
+    );
+    expect(canonical.status).toBe('resolved');
+    expect(extendConversationEntryChain(manifest.entryChain, projected))
+      .toBe(createConversationEntryChain(canonical.entries));
+
+    await appendConversationPageCache(
+      value.mainPath,
+      manifest,
+      'boundary:leading-appended',
+      value.sourceRevisionState,
+      projected,
+      appended,
+      'entry-query',
+    );
+    await expect(refreshConversationPageCache(
+      value.mainPath,
+      'boundary:leading-appended',
+      value.sourceRevisionState,
+      canonical,
+      extendedLineage,
+      undefined,
+    )).resolves.toBe(true);
+  });
+
+  it('keeps a mid-batch managed passthrough append equivalent to a canonical rebuild', async () => {
+    const value = await fixture('passthrough-mid-equivalence');
+    await writeConversationPageCache(
+      value.mainPath,
+      'boundary:mid-equivalence',
+      value.sourceRevisionState,
+      value.history,
+      value.lineage,
+      undefined,
+      1024,
+    );
+    const manifest = await readConversationPageCacheManifest(value.mainPath);
+    if (manifest === undefined) throw new Error('Conversation cache manifest missing');
+    const appended = [
+      messageEntry('entry-tool', 'entry-1', 'user', 'tool result'),
+      managedContextEntry('entry-managed', 'entry-tool', 'managed-run-context'),
+      messageEntry('entry-answer', 'entry-managed', 'assistant', 'final answer'),
+    ];
+    const projected = canAppendConversationPageCache(
+      manifest,
+      'entry-1',
+      appended,
+      'entry-answer',
+    );
+    if (projected === undefined) throw new Error('Fast-path admission unexpectedly failed');
+    expect(projected).toHaveLength(2);
+    const canonical = buildSessionConversationHistory({
+      ...value.lineage,
+      activeEntryId: 'entry-answer',
+      entries: [...value.lineage.entries, ...appended],
+    }, createSessionSourceRevision(value.sourceRevisionState));
+    expect(canonical.status).toBe('resolved');
+    expect(extendConversationEntryChain(manifest.entryChain, projected))
+      .toBe(createConversationEntryChain(canonical.entries));
+  });
+
+  it('persists a managed-only batch watermark and keeps the fast path warm', async () => {
+    const value = await fixture('managed-only-watermark');
+    await writeConversationPageCache(
+      value.mainPath,
+      'boundary:managed-only-watermark',
+      value.sourceRevisionState,
+      value.history,
+      value.lineage,
+      undefined,
+      1024,
+    );
+    const manifest = await readConversationPageCacheManifest(value.mainPath);
+    if (manifest === undefined) throw new Error('Conversation cache manifest missing');
+    const batch = [managedContextEntry('entry-managed', 'entry-1', 'managed-run-context')];
+    const projected = canAppendConversationPageCache(manifest, 'entry-1', batch, 'entry-managed');
+    expect(projected).toEqual([]);
+    await appendConversationPageCache(
+      value.mainPath,
+      manifest,
+      'boundary:managed-only-appended',
+      value.sourceRevisionState,
+      projected,
+      batch,
+      'entry-managed',
+    );
+    const after = await readConversationPageCacheManifest(value.mainPath);
+    if (after === undefined) throw new Error('Conversation cache manifest missing');
+    expect(after.activeEntryId).toBe('entry-managed');
+    expect(after.lineageEntryCount).toBe(manifest.lineageEntryCount + 1);
+    expect(after.entryCount).toBe(manifest.entryCount);
+    expect(after.entryChain).toBe(manifest.entryChain);
+    expect(after.dataBytes).toBe(manifest.dataBytes);
+    expect(after.indexBytes).toBe(manifest.indexBytes);
+
+    const extendedLineage: KodaXSessionLineage = {
+      ...value.lineage,
+      activeEntryId: 'entry-managed',
+      entries: [...value.lineage.entries, ...batch],
+    };
+    const canonical = buildSessionConversationHistory(
+      extendedLineage,
+      createSessionSourceRevision(value.sourceRevisionState),
+    );
+    expect(canonical.status).toBe('resolved');
+    await expect(refreshConversationPageCache(
+      value.mainPath,
+      'boundary:managed-only-appended',
+      value.sourceRevisionState,
+      canonical,
+      extendedLineage,
+      undefined,
+    )).resolves.toBe(true);
+
+    expect(canAppendConversationPageCache(after, 'entry-managed', [
+      messageEntry('entry-query', 'entry-managed', 'user', 'next real query'),
+    ], 'entry-query')).toEqual([{
+      boundaryId: 'entry-query',
+      auditEntryIds: ['entry-query'],
+      message: { role: 'user', content: 'next real query' },
+    }]);
+  });
+
+  it('rejects a managed batch that does not extend the append chain', async () => {
+    const value = await fixture('managed-chain-break');
+    await writeConversationPageCache(
+      value.mainPath,
+      'boundary:managed-chain-break',
+      value.sourceRevisionState,
+      value.history,
+      value.lineage,
+      undefined,
+      1024,
+    );
+    const manifest = await readConversationPageCacheManifest(value.mainPath);
+    if (manifest === undefined) throw new Error('Conversation cache manifest missing');
+
+    expect(canAppendConversationPageCache(manifest, 'entry-1', [
+      managedContextEntry('entry-stray', 'entry-other', 'managed-runtime-context'),
+      messageEntry('entry-query', 'entry-stray', 'user', 'real query'),
+    ], 'entry-query')).toBeUndefined();
+    expect(canAppendConversationPageCache(manifest, 'entry-1', [
+      managedContextEntry('entry-managed', 'entry-1', 'managed-run-context'),
+    ], 'entry-1')).toBeUndefined();
   });
 });
