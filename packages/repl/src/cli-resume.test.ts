@@ -20,6 +20,10 @@ describe('listCliResumeSessions', () => {
     const tempHome = await mkdtemp(path.join(os.tmpdir(), 'kodax-cli-resume-'));
     tempDirs.push(tempHome);
     const sessionsDir = path.join(tempHome, 'sessions');
+    const projectRoot = path.join(tempHome, 'repo');
+    const otherProjectRoot = path.join(tempHome, 'other');
+    await mkdir(projectRoot, { recursive: true });
+    await mkdir(otherProjectRoot, { recursive: true });
     await mkdir(sessionsDir, { recursive: true });
 
     const writeSession = async (id: string, overrides: Record<string, unknown>): Promise<void> => {
@@ -27,11 +31,11 @@ describe('listCliResumeSessions', () => {
         _type: 'meta',
         id,
         title: id,
-        gitRoot: 'C:/repo',
+        gitRoot: projectRoot,
         createdAt: '2026-07-18T00:00:00.000Z',
         scope: 'user',
         activeMessageCount: 2,
-        runtimeInfo: { canonicalRepoRoot: 'C:/repo', surface: 'repl' },
+        runtimeInfo: { canonicalRepoRoot: projectRoot, surface: 'repl' },
         ...overrides,
       };
       await writeFile(path.join(sessionsDir, `${id}.jsonl`), `${JSON.stringify(meta)}\n`, 'utf8');
@@ -41,12 +45,12 @@ describe('listCliResumeSessions', () => {
     await writeSession('empty', { activeMessageCount: 0 });
     await writeSession('worker', { scope: 'managed-task-worker' });
     await writeSession('other-project', {
-      gitRoot: 'C:/other',
-      runtimeInfo: { canonicalRepoRoot: 'C:/other', surface: 'repl' },
+      gitRoot: otherProjectRoot,
+      runtimeInfo: { canonicalRepoRoot: otherProjectRoot, surface: 'repl' },
     });
 
     const sessions = await listCliResumeSessions({
-      projectRoot: 'C:/repo',
+      projectRoot,
       sessionsDir,
       limit: 1000,
     });
@@ -63,12 +67,14 @@ describe('listCliResumeSessions', () => {
     const tempHome = await mkdtemp(path.join(os.tmpdir(), 'kodax-cli-resume-'));
     tempDirs.push(tempHome);
     const sessionsDir = path.join(tempHome, 'sessions');
+    const projectRoot = path.join(tempHome, 'repo');
+    await mkdir(projectRoot, { recursive: true });
     await mkdir(sessionsDir, { recursive: true });
 
     const olderMeta = {
       _type: 'meta',
       title: 'Older',
-      gitRoot: 'C:/repo',
+      gitRoot: projectRoot,
       createdAt: '2026-07-17T00:00:00.000Z',
       scope: 'user',
     };
@@ -83,8 +89,8 @@ describe('listCliResumeSessions', () => {
       'utf8',
     );
 
-    const all = await listCliResumeSessions({ projectRoot: 'C:/repo', sessionsDir, limit: 10 });
-    const limited = await listCliResumeSessions({ projectRoot: 'C:/repo', sessionsDir, limit: 1 });
+    const all = await listCliResumeSessions({ projectRoot, sessionsDir, limit: 10 });
+    const limited = await listCliResumeSessions({ projectRoot, sessionsDir, limit: 1 });
 
     expect(all.map((item) => [item.id, item.msgCount])).toEqual([
       ['newer', 1],
@@ -97,14 +103,16 @@ describe('listCliResumeSessions', () => {
     const tempHome = await mkdtemp(path.join(os.tmpdir(), 'kodax-cli-resume-'));
     tempDirs.push(tempHome);
     const sessionsDir = path.join(tempHome, 'sessions');
+    const projectRoot = path.join(tempHome, 'repo');
+    await mkdir(projectRoot, { recursive: true });
 
     // Stamp the current layout first so this specifically exercises the
     // dual-layout reader rather than migration of the legacy fixture.
-    await listCliResumeSessions({ projectRoot: 'C:/repo', sessionsDir });
+    await listCliResumeSessions({ projectRoot, sessionsDir });
     const meta = {
       _type: 'meta',
       title: 'Archived legacy session',
-      gitRoot: 'C:/repo',
+      gitRoot: projectRoot,
       scope: 'user',
       activeMessageCount: 2,
     };
@@ -114,7 +122,7 @@ describe('listCliResumeSessions', () => {
       'utf8',
     );
 
-    await expect(listCliResumeSessions({ projectRoot: 'C:/repo', sessionsDir }))
+    await expect(listCliResumeSessions({ projectRoot, sessionsDir }))
       .resolves.toEqual([]);
   });
 
