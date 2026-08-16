@@ -230,13 +230,14 @@ describe('provider registry', () => {
     const ark = getProvider('ark-coding');
     expect(ark.name).toBe('ark-coding');
 
-    // Default + alts must cover all 11 models Ark's Coding Plan
-    // console lists (2026-07-03 refresh). Retired: glm-5.1 / glm-4.7 /
-    // deepseek-v3.2 (wire returns UnsupportedModel 404). GLM-5.2
-    // promoted to default (wire alias glm-latest). Added: doubao-seed-code
-    // (next-gen Doubao coding variant, no "2.0" suffix).
+    // Default + alts must cover all 12 models Ark's Coding Plan console
+    // lists. Retired: glm-5.1 / glm-4.7 / deepseek-v3.2 (wire returns
+    // UnsupportedModel 404). 2026-08-15: GLM-5.3 added and promoted to
+    // default (live probe: glm-5.3 200; glm-latest and glm-5.2 both
+    // currently resolve upstream to glm-5.3).
     const models = ark.getAvailableModels();
     expect(models).toEqual([
+      'glm-5.3',
       'glm-5.2',
       'kimi-k2.7-code',
       'kimi-k2.6',
@@ -251,9 +252,12 @@ describe('provider registry', () => {
     ]);
 
     // Per-model context window pins (user-confirmed against Volcengine
-    // console catalog). Ark's independent GLM-5.2 route remains at 1M,
+    // console catalog). Ark's GLM routes remain at 1M,
     // Kimi at 256K, MiniMax-M2.7 at 204_800, MiniMax-M3 at 1M
     // (Frontier Coding), DeepSeek V4 at 1M, Doubao Seed 2.0 at 256K.
+    expect(ark.getModel()).toBe('glm-5.3');
+    expect(ark.getWireModel()).toBe('glm-5.3');
+    expect(ark.getEffectiveContextWindow('glm-5.3')).toBe(1_000_000);
     expect(ark.getEffectiveContextWindow('glm-5.2')).toBe(1_000_000);
     expect(ark.getEffectiveContextWindow('kimi-k2.7-code')).toBe(256_000);
     expect(ark.getEffectiveContextWindow('kimi-k2.6')).toBe(256_000);
@@ -274,8 +278,12 @@ describe('provider registry', () => {
     // silently regress to either the provider-level 32_000 default
     // or the Zhipu-direct 131_072 value.
     expect(ark.getEffectiveMaxOutputTokens('glm-5.2')).toBe(128_000);
+    // GLM-5.3 inherits the same Ark gateway 128K cap until a live
+    // max-tokens probe proves a higher limit.
+    expect(ark.getEffectiveMaxOutputTokens('glm-5.3')).toBe(128_000);
 
     expect(getProviderConfiguredReasoningCapability('ark-coding', 'glm-5.2')).toBe('native-effort');
+    expectReasoningPreset('ark-coding', 'glm-5.3', 'zai-glm-5.3');
     expectReasoningPreset('ark-coding', 'glm-5.2', 'zai-glm-5.2');
     expectReasoningPreset('ark-coding', 'kimi-k2.7-code', 'kimi-k2.7-code');
     expectReasoningPreset('ark-coding', 'MiniMax-M3', 'minimax-m3');
@@ -420,9 +428,9 @@ describe('provider registry', () => {
     vi.stubEnv('ZAI_CODING_API_KEY', 'zai-test-key');
     const zai = getProvider('zai-coding');
     expect(zai.name).toBe('zai-coding');
-    expect(zai.getModel()).toBe('glm-5.2');
-    expect(zai.getWireModel()).toBe('glm-5.2');
-    expect(zai.getAvailableModels()).toEqual(['glm-5.2', 'glm-5.3', 'glm-5-turbo', 'glm-4.7']);
+    expect(zai.getModel()).toBe('glm-5.3');
+    expect(zai.getWireModel()).toBe('glm-5.3');
+    expect(zai.getAvailableModels()).toEqual(['glm-5.3', 'glm-5.2', 'glm-5-turbo', 'glm-4.7']);
     expect(zai.getEffectiveContextWindow('glm-5.2')).toBe(1_000_000);
     expect(zai.getEffectiveMaxOutputTokens('glm-5.2')).toBe(131_072);
     expect(zai.getEffectiveContextWindow('glm-5.3')).toBe(1_000_000);

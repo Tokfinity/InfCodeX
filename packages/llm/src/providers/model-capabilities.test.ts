@@ -123,15 +123,15 @@ describe('built-in provider model capabilities (no API key required)', () => {
   it('honors a models[] override even when the model IS the provider default (R3 regression)', () => {
     // Invariant: ANY provider whose default model ALSO has a models[] entry must
     // return that entry's override, not the bare provider defaults. zhipu-coding
-    // defaults to glm-5.3 (1M), while zai-coding and ark-coding default to
-    // their independent glm-5.2 routes (also 1M).
+    // defaults to glm-5.3 (1M), as do zai-coding and ark-coding (each with
+    // its own 1M-window override; ark caps output at 128K).
     // The pre-fix resolver used a bare default descriptor and returned the 200K/16K
     // provider defaults (the "context window shows 200K" bug); getEffective* already
     // returned the right values, so these metadata resolvers must now agree.
     for (const { provider, model, maxOut } of [
       { provider: 'zhipu-coding', model: 'glm-5.3', maxOut: 131_072 },
-      { provider: 'zai-coding', model: 'glm-5.2', maxOut: 131_072 },
-      { provider: 'ark-coding', model: 'glm-5.2', maxOut: 128_000 },
+      { provider: 'zai-coding', model: 'glm-5.3', maxOut: 131_072 },
+      { provider: 'ark-coding', model: 'glm-5.3', maxOut: 128_000 },
     ] as const) {
       const caps = getModelCapabilities(provider, model);
       expect(caps?.contextWindow, `${provider} ctx`).toBe(1_000_000);

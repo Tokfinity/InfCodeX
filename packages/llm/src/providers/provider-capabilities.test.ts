@@ -388,18 +388,18 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
       }));
     });
 
-    it('zai-coding keeps GLM-5.2 as default while retaining GLM-5.3', () => {
+    it('zai-coding defaults to GLM-5.3 while retaining GLM-5.2', () => {
       const z = getProviderSnapshots()['zai-coding'];
-      expect(z.model).toBe('glm-5.2');
-      expect(z.models?.map((m) => m.id)).toEqual(['glm-5.2', 'glm-5.3', 'glm-5-turbo', 'glm-4.7']);
+      expect(z.model).toBe('glm-5.3');
+      expect(z.models?.map((m) => m.id)).toEqual(['glm-5.3', 'glm-5.2', 'glm-5-turbo', 'glm-4.7']);
       expect(z.reasoningProfile).toMatchObject({
-        reasoningPreset: 'zai-glm-5.2',
-        supportsDisabledThinking: true,
+        reasoningPreset: 'zai-glm-5.3',
+        supportsDisabledThinking: false,
       });
-      expect(z.models?.find((m) => m.id === 'glm-5.3')).toEqual(expect.objectContaining({
+      expect(z.models?.find((m) => m.id === 'glm-5.2')).toEqual(expect.objectContaining({
         contextWindow: 1_000_000,
         maxOutputTokens: 131_072,
-        reasoningProfile: expect.objectContaining({ reasoningPreset: 'zai-glm-5.3' }),
+        reasoningProfile: expect.objectContaining({ reasoningPreset: 'zai-glm-5.2' }),
       }));
     });
 
@@ -418,11 +418,16 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
       // deepseek-v3.2 (wire returns UnsupportedModel 404); GLM-5.2
       // promoted to default with 1M/128K override (wire alias
       // glm-latest); Doubao Seed Code (next-gen, no "2.0") added.
+      // 2026-08-15: GLM-5.3 added and promoted to default (same 1M/128K
+      // pin); glm-5.2 retained as an explicit rollback route.
+      const glm53 = a.models?.find((m) => m.id === 'glm-5.3');
       const glm52 = a.models?.find((m) => m.id === 'glm-5.2');
       const v4pro = a.models?.find((m) => m.id === 'deepseek-v4-pro');
       const m3 = a.models?.find((m) => m.id === 'MiniMax-M3');
       const m27 = a.models?.find((m) => m.id === 'MiniMax-M2.7');
       const seedCode = a.models?.find((m) => m.id === 'doubao-seed-code');
+      expect(glm53?.contextWindow).toBe(1_000_000);
+      expect(glm53?.maxOutputTokens).toBe(128_000);
       expect(glm52?.contextWindow).toBe(1_000_000);
       expect(glm52?.maxOutputTokens).toBe(128_000);
       expect(v4pro?.contextWindow).toBe(1_000_000);

@@ -163,6 +163,10 @@ export const DEFAULT_COST_RATES: Readonly<Record<string, Readonly<Record<string,
     // promoted to default (with wire alias glm-latest). Doubao Seed Code
     // (no "2.0" suffix) added as the next-gen coding variant on the
     // Doubao route (probe-max-tokens.mjs green).
+    // 2026-08-15: GLM-5.3 added and promoted to default. Live probe of the
+    // Coding Plan wire: glm-5.3 returns HTTP 200; glm-latest and glm-5.2
+    // both currently resolve upstream to glm-5.3 as well.
+    'glm-5.3': { inputPer1M: 0.005, outputPer1M: 0.015 },
     'glm-5.2': { inputPer1M: 0.005, outputPer1M: 0.015 },
     'kimi-k2.7-code': { inputPer1M: 0.005, outputPer1M: 0.015 },
     'kimi-k2.6': { inputPer1M: 0.005, outputPer1M: 0.015 },
