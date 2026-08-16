@@ -249,6 +249,8 @@ v0.7.93。详见 [v0.7.83 发布清单](docs/release.md#v0783-release-preparatio
 
 **v0.7.88 发布**：本版本包含 Actor settlement convergence v2 持久化边界、受界定的启动/恢复工作、guardrail classifier reason 诊断，以及首次提交查询后自动收起过期 learning-recovery 提示的 REPL 修复。这些都是明确的 Runtime、Agent、LLM 与 REPL 系统代码改动。`zhipu-coding`、`zai-coding` 与 `ark-coding` 均默认使用 `glm-5.3`，同时保留 `glm-5.2` 作为显式路由；Ark 继续保留 `glm-latest` 别名。Coding Plan model ID 原样发送，不附加虚假的 context 后缀；GLM-5.3 的 `off` / `none` 会降为 `low`。详见 [v0.7.88 发布清单](docs/release.md#v0788-release-preparation)。
 
+**v0.7.89 发布**：本版本包含 Issue 293 的 managed context 拓扑透明投影与 v4 conversation page cache、FEATURE_293 的有界零服务 web search fallback（DuckDuckGo HTML → Bing RSS → Bing HTML），以及 FEATURE_294 的 run-scoped Host Tools。绑定到 Run 的 Host Tools 会出现在该 Run 的模型工具表和 capability catalog 中，按 registry-first 规则 dispatch，撤销后 fail-closed，不进入全局 registry，也不会泄漏到其他 CLI Run。自定义 web-search endpoint 仍保持隔离；本版本没有修改 shell/sandbox 系统代码。详见 [v0.7.89 发布清单](docs/release.md#v0789-release-preparation)。
+
 **v0.7.87 GLM Provider 发布**：`zhipu-coding` 默认使用 `glm-5.3`，并保留 `glm-5.2` 作为显式回退路由。`zai-coding` 当时保留两个模型但默认使用 `glm-5.2`，直到 v0.7.88 的海外 Coding Plan 路由切换。Coding Plan model ID 原样发送，不附加 context 后缀。GLM-5.3 的思考不可关闭，因此 `off` / `none` 会降级为 `low`，不会发送上游不支持的 disabled-thinking 请求。Issue 256 剩余的 Worker owner lease 边界在 v0.7.87 后仍保持 Open，且本版本不指定新的替代目标。详见 [v0.7.87 发布清单](docs/release.md#v0787-release-preparation)。
 
 Windows workspace Shell 还会保留大小写不敏感的 `PATH`/`Path` 与 `PATHEXT` 约定，

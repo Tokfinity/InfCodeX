@@ -1,9 +1,9 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-08-15
+> Last updated: 2026-08-16
 >
-> Current published baseline: `v0.7.88`
-> (`@kodax-ai/kodax@0.7.88`; npm publication remains manual)
+> Current published baseline: `v0.7.89`
+> (`@kodax-ai/kodax@0.7.89`; npm publication remains manual)
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -20,7 +20,7 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The published package is `@kodax-ai/kodax@0.7.88`. The v0.7.85 release
+The published package is `@kodax-ai/kodax@0.7.89`. The v0.7.85 release
 established
 controller-wide bounded Actor progress
 persistence, queue-aware terminal deadlines, root fail-closed fencing, and
@@ -52,8 +52,18 @@ durable cleanup outcome, while the `daemonShutdownVerification:1` capability
 lets hosts require it. Legacy daemons are deliberately not upgraded in place
 for this contract. The patch retains v0.7.82's causality and input-admission
 contracts; FEATURE_287 remains planned for v0.7.93 and the Worker owner-lease
-portion of Issue 256 remains open after v0.7.88 without a replacement target
+portion of Issue 256 remains open after v0.7.89 without a replacement target
 assigned by this release.
+
+The v0.7.89 implementation adds `conversationHistory` projection rules that
+hide replaceable managed context from ordinary topology while retaining the
+physical audit track and fail-closed ambiguity. `web-search.ts` owns the
+DuckDuckGo HTML → Bing RSS → Bing HTML bounded fallback and custom-endpoint
+isolation. The coding runtime owns `RunScopedToolDefinition` materialization,
+registry-first dispatch, permission predicates, and AMA/SA tool wiring; the
+Runtime daemon reverse bridge owns lease binding, revocation, catalog context,
+and `host:` authorization. These are additive to MCP and do not modify Shell
+or sandbox implementations.
 
 The v0.7.86 hardening adds atomic abandoned-inline-owner recovery, process-start
 identity records for Runtime and learning locks, and a Windows sandbox owner

@@ -81,6 +81,57 @@ version smoke is:
 dist/binary/linux-x64/kodax --version
 ```
 
+## v0.7.89 release preparation
+
+Release state: the root package, all four workspace packages, and every
+`package-lock.json` workspace entry must be version `0.7.89`. This release is
+prepared for the `v0.7.89` tag and GitHub Release; npm publication remains a
+separate manual operator step. It includes every commit after `v0.7.88`:
+
+- Issue 293: managed-run and managed-runtime context envelopes are transparent
+  to ordinary conversation topology and pagination, with v4 cache invalidation,
+  physical-track boundaries, and fail-closed ambiguity for unverifiable branches.
+- FEATURE_293: built-in zero-service `web_search` uses bounded DuckDuckGo HTML →
+  Bing RSS → Bing HTML fallback, truthful attempt diagnostics, normalized direct
+  URLs, freshness metadata, and isolated custom endpoint behavior.
+- FEATURE_294: leased Host Tools materialize as run-scoped agent tools, publish a
+  cache-stable host capability catalog line, dispatch registry-first, enforce
+  conservative plan-mode metadata, revoke fail-closed, reject collisions, and
+  support A2A `host:` authorization.
+- Documentation, `kodax_manual`, and human regression coverage are synchronized
+  for the two features and Issue 293.
+
+The release changes coding, REPL conversation projection, Runtime daemon host
+bridges, A2A authorization, and their tests. No shell or sandbox system code is
+changed by this release preparation; existing shell/sandbox gates remain
+mandatory and must pass on the exact release commit.
+
+Before tagging, all of the following must be true:
+
+1. all package versions, `CHANGELOG.md`, README/README_CN, PRD/HLD/DD/ADR,
+   feature tracker, known-issue record, public docs, this checklist,
+   `docs/features`, and `kodax_manual` agree on v0.7.89;
+2. focused tests cover Issue 293 topology-transparent history/cache behavior,
+   FEATURE_293 fallback ordering and custom endpoint isolation, and FEATURE_294
+   host-tool materialization, collision/revoke hardening, plan-mode policy,
+   registry-first dispatch, and A2A authorization;
+3. TypeScript, config-template checks, bundled SDK/Worker/sidecar builds, fast,
+   unit, contract, and system suites pass;
+4. the packed `kodax-ai-kodax-0.7.89.tgz` is inspected and smoke-installed into
+   an empty consumer for the root package and all 12 SDK subpaths;
+5. the human checks in `docs/test-guides/ISSUE_293_v0.7.89_REGRESSION_GUIDE.md`
+   and `docs/test-guides/ISSUE_294_v0.7.89_REGRESSION_GUIDE.md` are available
+   for release acceptance;
+6. root and `docs/features` are clean, with the submodule commit reachable from
+   its remote; `.codex*` local artifacts and alternate pnpm metadata are ignored
+   and not tracked;
+7. GitHub CI is green for the exact commit on Node 20/22, Unix Runtime,
+   Windows Shell, and packaged Electron gates; the tag-triggered Release job
+   produces all platform archives, sidecars, and `SHA256SUMS`. npm publication is
+   left to the maintainer.
+
+Only after these gates pass may the exact commit be tagged `v0.7.89`.
+
 ## v0.7.88 release preparation
 
 Release state: the root package, all four workspace packages, and every

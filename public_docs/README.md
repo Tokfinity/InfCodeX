@@ -2,7 +2,12 @@
 
 Public documentation for KodaX users and SDK integrators.
 
-The current release is `v0.7.88`. Its SDK guidance adds the GLM-5.3 Coding Plan
+The current release is `v0.7.89`. Its SDK guidance adds the Issue 293
+topology-transparent conversation projection, FEATURE_293 zero-service web
+search fallback, and FEATURE_294 run-scoped Host Tools. The host-tool surface is
+leased to one Run, registry-first, revocation-safe, and absent from unrelated
+CLI runs. Its custom web-search endpoint remains isolated. The v0.7.88 SDK
+guidance adds the GLM-5.3 Coding Plan
 routes with verbatim model IDs, keeps GLM-5.2 selectable, defaults
 `zhipu-coding`, `zai-coding`, and `ark-coding` to 5.3, and documents the GLM-5.3
 always-thinking effort mapping. It also covers atomic Runtime owner
@@ -15,7 +20,7 @@ in addition to the v0.7.85 Session-scoped
 Runtime Event Journals, the `sessionEventJournal:1` daemon contract,
 conversation-first Memory management, the additive experimental Memory
 management facade, and the startup/Worker lifecycle boundaries. Issue 256's
-remaining Worker owner-lease boundary remains open after v0.7.88; this release
+remaining Worker owner-lease boundary remains open after v0.7.89; this release
 assigns no replacement target.
 
 ## Getting Started

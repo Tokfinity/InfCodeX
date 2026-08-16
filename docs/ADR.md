@@ -1,6 +1,15 @@
 # KodaX Architecture Decision Records
 
-> Last updated: 2026-08-15
+> Last updated: 2026-08-16
+>
+> **v0.7.89 release addendum:** ordinary conversation topology treats
+> replaceable managed-run/runtime-context envelopes as transparent while the
+> physical audit track remains authoritative; page-cache v4 invalidates old
+> projections. Built-in web search uses a bounded DuckDuckGo HTML → Bing RSS →
+> Bing HTML fallback with truthful diagnostics and isolated explicit endpoints.
+> Daemon Host Tools are run-scoped, registry-first, revoke-safe, and authorized
+> through exact A2A `host:` capability ids. No shell or sandbox system contract
+> changed in this release.
 >
 > **v0.7.88 release addendum:** Actor snapshot persistence has
 > explicit boundaries for Actor mutation order, process-local storage dequeue,

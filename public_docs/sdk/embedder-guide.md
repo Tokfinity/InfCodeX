@@ -2787,6 +2787,28 @@ GLM-5.3 is always-thinking. Hosts may continue to express a stable `off` /
 use adaptive thinking plus `output_config.effort`, while OpenAI-compatible
 requests use enabled thinking plus `reasoning_effort`.
 
+### v0.7.89 web search and run-scoped Host Tools
+
+The built-in `web_search` remains zero-service and requires no API key or
+hosted search provider. Its default bounded attempts are DuckDuckGo's HTML
+results, Bing RSS, then Bing HTML. A structurally valid empty result is a
+successful empty result; transport, challenge, HTTP-status, or parse failures
+fall through with per-attempt diagnostics. Results expose normalized direct
+HTTP(S) locators, deduplicated items, `freshness: unknown` when freshness is not
+provable, and the winning transport metadata. `KODAX_WEB_SEARCH_ENDPOINT` is
+an explicit single-endpoint compatibility override and never silently joins the
+public fallback chain.
+
+When a daemon run binds a Host Tool lease, v0.7.89 materializes the leased
+descriptors into that run's model-facing tool table and adds a cache-stable
+`Host Capability Provider (run-bound)` catalog block. Host Tools remain outside
+`TOOL_REGISTRY`; dispatch is registry-first, so the executed schema is the one
+the model saw. `none` side effects are readonly/plan-allowed, while
+`idempotent` and `non_idempotent` tools are mutating/plan-blocked. Revocation,
+name collisions, malformed lease ids, and unknown capability paths fail closed;
+unrelated CLI runs do not inherit a Space lease. A2A role policies may authorize
+exact `host:<leaseId>:<tool>` capability ids.
+
 ### Worker-hosted embedded usage
 
 ```ts

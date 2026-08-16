@@ -692,6 +692,15 @@ the `glm-latest` alias. Coding Plan model IDs are sent verbatim without a
 synthetic context suffix, and GLM-5.3 `off` / `none` intent is lowered to
 `low`. See the [v0.7.88 release checklist](docs/release.md#v0788-release-preparation).
 
+**v0.7.89 release:** this release ships Issue 293's topology-transparent managed
+context projection and v4 conversation page cache, FEATURE_293's bounded
+zero-service web search fallback (DuckDuckGo HTML → Bing RSS → Bing HTML), and
+FEATURE_294's run-scoped Host Tools. Host tools appear in the leased run's model
+surface and capability catalog, dispatch registry-first, revoke fail-closed, and
+never enter the global registry or unrelated CLI runs. The web-search custom
+endpoint remains isolated, and no shell/sandbox system code changed in this
+release. See the [v0.7.89 release checklist](docs/release.md#v0789-release-preparation).
+
 **v0.7.87 GLM provider release:** `zhipu-coding` defaults to `glm-5.3` and
 retains `glm-5.2` as an explicit rollback route. `zai-coding` retained both
 models but defaulted to `glm-5.2` until the overseas Coding Plan rollout

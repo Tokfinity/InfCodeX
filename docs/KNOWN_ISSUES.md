@@ -14,7 +14,7 @@ _Last Updated: 2026-08-16_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
-| 293 | High | Resolved | Managed compaction context replacement makes ordinary history ambiguous and duplicates paged conversations | v0.7.80 managed-run-context stripping | Unreleased | 2026-08-16 | 2026-08-16 |
+| 293 | High | Resolved | Managed compaction context replacement makes ordinary history ambiguous and duplicates paged conversations | v0.7.80 managed-run-context stripping | v0.7.89 release | 2026-08-16 | 2026-08-16 |
 | 292 | High | Resolved | Actor settlement deadline conflates storage eligibility, canonical commit, and post-commit maintenance | v0.7.85 Actor settlement convergence | v0.7.88 release | 2026-08-15 | 2026-08-15 |
 | 291 | High | Resolved | Crashed inline Runtime owner leaves daemon startup permanently fenced | v0.7.69 owner-policy fencing | v0.7.86 release | 2026-08-11 | 2026-08-11 |
 | 290 | Medium | Resolved | Mixed-case custom provider aliases lose model autocomplete | custom provider model completion | v0.7.85 release | 2026-08-10 | 2026-08-10 |

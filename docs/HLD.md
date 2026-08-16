@@ -1,9 +1,9 @@
 # KodaX High-Level Design
 
-> Last updated: 2026-08-15
+> Last updated: 2026-08-16
 >
-> Current published baseline: `v0.7.88`
-> (`@kodax-ai/kodax@0.7.88`; npm publication remains manual)
+> Current published baseline: `v0.7.89`
+> (`@kodax-ai/kodax@0.7.89`; npm publication remains manual)
 >
 > This HLD is intentionally current-state only. The old pre-v0.7.43
 > chain/harness model has been removed from this active design document because
@@ -29,6 +29,15 @@ The published package is `@kodax-ai/kodax`. It exposes the root API plus twelve
 SDK subpaths: `/agent`, `/llm`, `/coding`, `/media`, `/repl`, `/skills`,
 `/mcp`, `/session`, `/runtime`, `/sandbox`, `/a2a`, and
 `/experimental-memory`.
+
+The v0.7.89 coding plane keeps built-in web search local and bounded: the
+default transport sequence is DuckDuckGo HTML, Bing RSS, then Bing HTML, while
+an explicit endpoint remains isolated. Daemon host bridges expose leased Host
+Tools through run-scoped definitions and a cache-stable capability catalog
+block; registry-first dispatch, revoke handling, side-effect metadata, and A2A
+authorization prevent cross-run or cross-provider leakage. Ordinary history
+projection treats replaceable managed context as topology-transparent and
+rebuilds pre-v4 page caches. Shell and sandbox boundaries are unchanged.
 
 For a Windows daemon Runtime, startup is a three-part process boundary:
 PowerShell creates the daemon suspended, assigns it to a kill-on-close Job

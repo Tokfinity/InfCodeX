@@ -132,6 +132,18 @@ or pre-start-unavailable containment returns to the already-authorized normal
 permission path. The remaining Worker owner-lease portion of Issue 256 is still
 open and scheduled for v0.7.87.
 
+The v0.7.89 release adds Issue 293's topology-transparent managed-context
+history projection and FEATURE_293's built-in zero-service `web_search`.
+Default search attempts are bounded and ordered as DuckDuckGo HTML → Bing RSS
+→ Bing HTML; valid empty results stop successfully, while transport/challenge/
+parse failures carry fallback diagnostics. `KODAX_WEB_SEARCH_ENDPOINT` remains
+an isolated explicit endpoint override. FEATURE_294 materializes daemon-bound
+Host Tools only for their leased Run, publishes a cache-stable host capability
+catalog line, dispatches registry-first, applies conservative plan-mode
+metadata, and removes the surface on revoke. Host Tools never enter the global
+registry or leak into unrelated CLI runs; `kodax_manual` documents the same
+contract.
+
 ## 安装 / 导入
 
 ```bash

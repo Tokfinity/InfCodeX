@@ -1,9 +1,9 @@
 # KodaX Product Requirements
 
-> Last updated: 2026-08-15
+> Last updated: 2026-08-16
 >
-> Current implementation baseline: `v0.7.88` release
-> (`@kodax-ai/kodax@0.7.88` workspace package; npm publication remains manual)
+> Current implementation baseline: `v0.7.89` release
+> (`@kodax-ai/kodax@0.7.89` workspace package; npm publication remains manual)
 >
 > This document describes the current product. Historical pre-v0.7.43
 > chain/harness designs have been removed from this current PRD because they no
@@ -29,7 +29,7 @@ before daemon application code runs. The daemon is placed in a kill-on-close Job
 Object, and shutdown is considered verified only after the durable cleanup
 outcome, daemon exit, and containment-supervisor exit are all observed. The
 broader Worker owner-lease boundary tracked by Issue 256 remains open after
-v0.7.87, with no replacement target assigned by this release; the v0.7.86
+v0.7.89, with no replacement target assigned by this release; the v0.7.86
 daemon, per-effect Job, ACL-owner, and termination-
 attestation boundaries do not claim to close
 that remaining Worker-owned descendant gap.
@@ -62,6 +62,16 @@ thinking, `off` / `none` is normalized to low effort. The same release also
 ships Actor settlement convergence v2, bounded startup/resume work, bounded
 classifier-reason diagnostics, and REPL learning-recovery dismissal after a
 query is submitted.
+
+The v0.7.89 baseline adds a topology-transparent ordinary conversation
+projection for replaceable managed context, with conversation page-cache v4 and
+fail-closed handling for unverifiable branches. FEATURE_293 makes built-in
+`web_search` useful without a hosted service by using bounded DuckDuckGo HTML,
+Bing RSS, and Bing HTML attempts with truthful diagnostics and isolated custom
+endpoints. FEATURE_294 materializes daemon-bound Host Tools only inside their
+leased Run, exposes a cache-stable capability catalog line, applies conservative
+plan-mode policy, and keeps registry, revoke, and A2A authorization boundaries
+fail-closed. This release does not change shell or sandbox system behavior.
 
 ## 2. Target Users
 

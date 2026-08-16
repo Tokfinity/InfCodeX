@@ -6,6 +6,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+---
+
+## [0.7.89] - 2026-08-16
+
 ### Fixed
 
 - Managed compaction context replacement no longer makes a topology-valid
@@ -28,6 +32,10 @@ All notable changes to this project will be documented in this file.
   advertising the bound server entry, tool names, and a content-hash
   revision that stays stable across runs. The `runBoundHostTools`
   capability bumps to `2` (`materializedAgentTools`).
+- Resilient zero-service web search (`FEATURE_293`) now tries DuckDuckGo HTML,
+  Bing RSS, and Bing HTML in a bounded order, preserving truthful fallback
+  diagnostics, normalized direct URLs, freshness metadata, and isolated custom
+  endpoint behavior without adding a hosted service or runtime dependency.
 
 ### Changed
 
@@ -47,6 +55,12 @@ All notable changes to this project will be documented in this file.
 - Remote managed agents (A2A) can now authorize host capability ids: the
   `authorizeMcp` id pattern accepts `host:` leases and role tool policy
   carries host tool authorization semantics.
+
+### Documentation
+
+- Updated the release checklist, product/architecture/design baselines,
+  feature tracker, public guides, `kodax_manual`, and v0.7.89 regression
+  guides for FEATURE_293, FEATURE_294, and Issue 293.
 
 ---
 
