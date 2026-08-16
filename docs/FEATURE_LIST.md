@@ -14,19 +14,19 @@
 | Current released version | `v0.7.88` (Git tag / GitHub Release) |
 | Current package version | `@kodax-ai/kodax@0.7.88` release (npm publication remains manual) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
-| Total tracked features | `76` |
+| Total tracked features | `77` |
 | InProgress | `1` |
 | Planned | `16` |
-| Completed | `53` |
+| Completed | `54` |
 | Reviewed out of active roadmap | `6` (`108, 231, 232, 235, 238, 244`) |
-| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 279, 280, 281, 282, 283, 284, 285, 286, 287, 288, 289, 290, 291, 292` |
+| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 279, 280, 281, 282, 283, 284, 285, 286, 287, 288, 289, 290, 291, 292, 293` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
 ### 一览表
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 53 | `292, 291, 290, 289, 286, 284, 281, 277, 276, 263, 275, 274, 273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `292`, `291`, `290`, and `289` shipped in v0.7.85; `286`, `284`, and `281` shipped in v0.7.79. npm publication remains manual. |
+| Completed | 54 | `293, 292, 291, 290, 289, 286, 284, 281, 277, 276, 263, 275, 274, 273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `293` is complete for the v0.7.89 candidate; `292`, `291`, `290`, and `289` shipped in v0.7.85. npm publication remains manual. |
 | InProgress | 1 | `225` | `225` remains the bounded v0.8.15 cleanup (moved from v0.7.105 on 2026-08-08). |
 | Planned, near-term | 0 | `-` | `v0.7.88` release scope is complete; Issue 256 remains Open without a replacement target assigned by this release. |
 | Planned, 0.8.x | 10 | `278, 279, 282, 283, 285, 280, 287, 288, 265, 105` | `v0.8.0` -> `v0.8.1` -> `v0.8.3` -> `v0.8.4` -> `v0.8.5` -> `v0.8.10` -> `v0.8.15` |
@@ -1289,6 +1289,7 @@ fixed GitHub binary archive sidecar omission before tagging.
 
 | ID | Title | Version | Design | Notes |
 |---|---|---|---|---|
+| `293` | Resilient Zero-Service Web Search Fallback | `v0.7.89` candidate | [v0.7.89](features/v0.7.89.md#feature_293-resilient-zero-service-web-search-fallback) | Adds the bounded DuckDuckGo HTML → Bing RSS → Bing HTML zero-service fallback, truthful failure diagnostics and freshness metadata, normalized deduplicated locators, isolated custom endpoints, and removal of the invalid `provider_id` contract. |
 | `292` | Natural-Language-First Memory Management | `v0.7.85` | [v0.7.85](features/v0.7.85.md#feature_292-natural-language-first-memory-management) | Makes ordinary remember, recall, correction, and forgetting conversational and immediate; reserves decisions for exceptional cases, keeps slash commands as an advanced escape hatch, and exposes the same governed operations through the experimental SDK. |
 | `291` | Session-Scoped Runtime Event Journals | `v0.7.85` | [v0.7.85](features/v0.7.85.md#feature_291-session-scoped-runtime-event-journals) | Replaces the Runtime-global event sequence lock with independent Session journals/cursors, scopes the breaking SDK replay API, negotiates the daemon contract, and binds each A2A Task to one Runtime Session. |
 | `290` | Memory Lesson and Verdict Production + failedWithLesson Admission | `v0.7.85` | [v0.7.85](features/v0.7.85.md#feature_290-memory-lesson-and-verdict-production--failedwithlesson-admission) | Ships the governed lesson/verdict production path, bounded review admission, and failedWithLesson safety gates with the accompanying human regression guide. |

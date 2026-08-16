@@ -909,13 +909,12 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
   },
   {
     name: 'web_search',
-    description: 'Search the web for discovery-oriented results with explicit trust and freshness signaling. Use this for "discover what is out there" queries when you do not yet have a specific URL — researching a library before integrating it, finding canonical docs for an API, identifying current best-practice patterns. Output includes provenance + trust signals; when relaying answers to the user, cite sources back in markdown link format (`[title](url)`). Pair with `web_fetch` to follow up on a specific result. Search results are geographically scoped (US-based) and freshness metadata reflects when each source was last indexed, not the moment of your query — interpret "current X" with that caveat. For finding code or documentation INSIDE the repo, prefer `grep` / `code_search` / `semantic_lookup` — those operate on the local checkout and do not consume network turns.',
+    description: 'Search the public web for discovery-oriented results with explicit provenance and trust signaling. The built-in zero-service path tries DuckDuckGo HTML, then Bing RSS, then Bing HTML; these public endpoints have no availability or freshness SLA. Use this when you do not yet have a specific URL, cite relevant results as markdown links, and follow up with `web_fetch` when full page content is needed. For code or documentation inside the repository, prefer `grep`, `code_search`, or `semantic_lookup`.',
     input_schema: {
       type: 'object',
       properties: {
         query: { type: 'string', description: 'Search query to run' },
         limit: { type: 'number', description: 'Maximum number of search results to return' },
-        provider_id: { type: 'string', description: 'Optional extension capability provider id for provider-backed search' },
       },
       required: ['query'],
     },
@@ -929,7 +928,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     planModeAllowed: true,
     toClassifierInput: (input) => {
       const i = input as Record<string, unknown>;
-      return `WebSearch query=${boundedText(i.query, 200, '<no-query>')} provider=${boundedText(i.provider_id, 80, '<default>')}`;
+      return `WebSearch query=${boundedText(i.query, 200, '<no-query>')}`;
     },
   },
   {

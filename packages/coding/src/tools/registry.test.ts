@@ -163,6 +163,14 @@ describe('tool registry', () => {
     expect(getRequiredToolParams('insert_after_anchor')).toEqual(['path', 'anchor', 'content']);
   });
 
+  it('keeps built-in web search independent from extension capability catalogs', () => {
+    const webSearch = listBuiltinToolDefinitions().find((tool) => tool.name === 'web_search');
+
+    expect(webSearch?.input_schema.properties).not.toHaveProperty('provider_id');
+    expect(webSearch?.input_schema.properties).toHaveProperty('query');
+    expect(webSearch?.input_schema.properties).toHaveProperty('limit');
+  });
+
   it('keeps MCP tool descriptions on the canonical capability id format', () => {
     const descriptions = [
       'mcp_search',
@@ -368,8 +376,8 @@ describe('v0.7.42 — tool sideEffect metadata', () => {
       provider_id: 'remote-fetch', capability_id: 'fetch:get',
     })).toMatch(/provider=remote-fetch.*capability=fetch:get/);
     expect(projection('web_search', {
-      query: 'current API documentation', provider_id: 'search-provider',
-    })).toMatch(/current API documentation.*provider=search-provider/);
+      query: 'current API documentation',
+    })).toBe('WebSearch query=current API documentation');
     expect(projection('code_search', {
       query: 'local symbol', path: 'src',
     })).toBe('');
