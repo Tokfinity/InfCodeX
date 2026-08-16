@@ -6,24 +6,46 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+<!-- Keep this section empty between releases. -->
+
+---
+
+## [0.7.88] - 2026-08-16
+
+> Git tag and GitHub Release are created by the release workflow. npm
+> publication remains a separate manual operator step.
+
+### Changed
+
+- Actor settlement persistence now separates Actor mutation order, process-local
+  storage dequeue, writer eligibility, cancellable pre-commit work, canonical
+  replacement, and serialized post-commit maintenance. The v2 contract is
+  exposed as `actorSettlementConvergence:2`.
+- Startup and resume paths bound their work and defer heavy provider, image,
+  LSP, TypeScript, and extension dependencies past the bootstrap boundary.
+- `zai-coding` and `ark-coding` now default to `glm-5.3` while retaining
+  `glm-5.2`; Ark retains the `glm-latest` alias. Coding Plan model IDs are sent
+  verbatim, without a synthetic context suffix. GLM-5.3 `off` / `none` intent
+  is normalized to low effort.
+
 ### Fixed
 
-- Issue 292: Actor snapshot persistence now separates Actor mutation order,
-  process-local storage dequeue, writer eligibility, cancellable pre-commit
-  work, the canonical file replacement, and serialized post-commit maintenance.
-  Legal local queue and Session writer waits no longer consume the
-  five-second canonical-commit deadline; pre-commit timeouts cannot write late,
-  rename-in-flight timeouts remain fail-closed, explicit rename errors use
-  authoritative JSON-persisted-shape snapshot readback, and cache/watermark maintenance
-  failures after a successful replacement no longer roll back terminal Actor
-  state. Per-attempt phase timings identify storage queue, file lock, read/CAS,
-  lineage, topology admission/epoch maintenance, temp write, fsync, rename, and
-  post-commit delay without overlapping the nested Session-file stages. Terminal
-  settlement now monitors a predecessor stuck in canonical replacement, and
-  same-owner repair uses the same phased contract instead of a monolithic save.
-- Runtime capability negotiation now exposes `actorSettlementConvergence:2`.
-  New SDK clients replace older v1 daemons, while v2 daemons continue to satisfy
-  clients that require the v1 contract.
+- Issue 292: storage eligibility, canonical Actor settlement, and post-commit
+  maintenance no longer compete for one deadline; authoritative persisted-shape
+  readback resolves explicit replacement errors and maintenance failures no
+  longer roll back a successful terminal Actor state.
+- Guardrail decision diagnostics now expose a bounded classifier reason.
+- REPL startup learning-recovery notices are dismissed after the first submitted
+  query instead of remaining stale over the active conversation.
+- CLI bundle startup no longer eagerly imports the Anthropic SDK or `jimp`,
+  restoring the audited startup dependency boundary.
+- Known-issue tracker totals are synchronized with the Issue 292 resolution.
+
+### Documentation
+
+- Synchronized README/README_CN, PRD/HLD/DD/ADR, feature tracker, public SDK
+  guides, `kodax_manual`, `docs/features`, release checklist, and v0.7.88
+  regression coverage.
 
 ---
 
