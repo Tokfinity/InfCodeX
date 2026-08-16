@@ -3436,6 +3436,14 @@ const WORKSPACE_SESSION_START_TIMEOUT_MS = 30_000;
 const WORKSPACE_SESSION_RPC_TIMEOUT_MS = 30_000;
 const WORKSPACE_SESSION_TERMINATE_GRACE_MS = 1_500;
 const WORKSPACE_SESSION_WINDOWS_RESET_GRACE_MS = 130_000;
+// A cleanup resets shared Windows ACL/WFP state and may legitimately wait
+// behind in-flight wraps on the session's serial queue, so it shares the
+// Windows reset grace budget instead of the generic RPC deadline. The budget
+// applies on every platform (the serial-queue wait exists everywhere); POSIX
+// simply rarely needs the full window.
+const WORKSPACE_SESSION_CLEANUP_TIMEOUT_MS = WORKSPACE_SESSION_WINDOWS_RESET_GRACE_MS;
+let workspaceSessionRpcTimeoutMs = WORKSPACE_SESSION_RPC_TIMEOUT_MS;
+let workspaceSessionCleanupTimeoutMs = WORKSPACE_SESSION_CLEANUP_TIMEOUT_MS;
 const MAX_CACHED_SCOPED_WORKSPACE_SESSIONS = 8;
 const workspaceSessions = new Map<string, Promise<WorkspaceSessionClient>>();
 const pendingWorkspaceSessionWarmups = new Set<Promise<WorkspaceSessionClient | undefined>>();
@@ -4019,9 +4027,21 @@ async function startWorkspaceSessionClientWithFence(
       pending.set(id, { resolve, reject });
     });
     const timeout = setTimeout(() => {
+      // Do not force-kill the session on an RPC timeout: a hard kill cannot
+      // exit cleanly, so its ACL reset stays unconfirmed and would poison the
+      // Windows sandbox owner marker for the whole boot. Fail the pending
+      // requests and retire the session through close(), which drains leases
+      // first and gives the child the orderly-close grace to reset cleanly.
       fail(new Error(`ASRT workspace session ${type} request timed out.`));
-      void terminate();
-    }, WORKSPACE_SESSION_RPC_TIMEOUT_MS);
+      void client.close(commandFenceHeld).catch((closeError: unknown) => {
+        emitKodaXDiagnostic({
+          source: 'sandbox:workspace-session',
+          level: 'warn',
+          message: 'Timed-out workspace sandbox request could not retire its session.',
+          detail: closeError,
+        });
+      });
+    }, type === 'cleanup' ? workspaceSessionCleanupTimeoutMs : workspaceSessionRpcTimeoutMs);
     timeout.unref();
     try {
       await new Promise<void>((resolve, reject) => {
@@ -4546,6 +4566,24 @@ export async function resetAsrtWorkspaceSessionsForTest(options: {
     rmSync(windowsSandboxAclPoisonDirectory(), { recursive: true, force: true });
     rmSync(legacyWindowsSandboxAclPoisonDirectory(), { recursive: true, force: true });
   }
+}
+
+/** Test-only override for workspace session RPC deadlines. */
+export function overrideWorkspaceSessionRpcTimeoutsForTest(options: {
+  readonly rpcMs?: number;
+  readonly cleanupMs?: number;
+}): () => void {
+  const restoreRpcMs = workspaceSessionRpcTimeoutMs;
+  const restoreCleanupMs = workspaceSessionCleanupTimeoutMs;
+  if (options.rpcMs !== undefined) workspaceSessionRpcTimeoutMs = options.rpcMs;
+  if (options.cleanupMs !== undefined) workspaceSessionCleanupTimeoutMs = options.cleanupMs;
+  let restored = false;
+  return () => {
+    if (restored) return;
+    restored = true;
+    workspaceSessionRpcTimeoutMs = restoreRpcMs;
+    workspaceSessionCleanupTimeoutMs = restoreCleanupMs;
+  };
 }
 
 /**

@@ -6,6 +6,21 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Workspace session RPC timeouts no longer force-kill the shared ASRT session:
+  a timed-out wrap/cleanup now fails its pending requests and retires the
+  session through the orderly close path (lease drain + Windows reset grace),
+  so a slow shared-queue cleanup can no longer poison the durable Windows ACL
+  owner marker as `unconfirmed-owner-*` for the rest of the boot.
+- Workspace session cleanup RPCs use the 130s Windows reset-grace budget
+  instead of the generic 30s RPC deadline on every platform, since cleanup
+  resets shared ACL/WFP state and may wait behind in-flight wraps on the
+  session's serial queue.
+- Daemon log diagnostics keep Error details diagnosable: `detail` payloads
+  serialize `name`/`message` plus `AggregateError.errors[]` and `cause` chains
+  instead of collapsing to `{}`.
+
 ---
 
 ## [0.7.89] - 2026-08-16

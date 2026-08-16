@@ -577,6 +577,90 @@ describe("runtime daemon host", () => {
     expect(logText).toContain("[test:diagnostic] bounded warning");
     expect(logText).toContain('"code":"E_TEST"');
 
+  await host.close();
+});
+
+it("keeps cyclic Error cause chains diagnosable in the daemon log", async () => {
+  const paths = resolveRuntimeDaemonPaths(tempHome(), "default");
+  const runtime = makeRuntime();
+  const lock = tryAcquireRuntimeDaemonLock(paths, {
+    runtimeId: runtime.identity.runtimeId,
+    pid: process.pid,
+    createdAt: runtime.identity.startedAt,
+  });
+  expect(lock).toBeDefined();
+  if (!lock) throw new Error("Expected daemon lock for cyclic-cause diagnostic test.");
+
+  const host = await startRuntimeDaemonHost({
+    runtime,
+    paths,
+    endpoint: await makeTestEndpoint(),
+    lock,
+  });
+  cleanupTasks.push(() => host.close());
+
+  const cyclic = new Error("ASRT workspace session retirement failed.");
+  cyclic.cause = cyclic;
+  const pairFirst = new Error("lease release failed");
+  const pairSecond = new Error("attestation missing");
+  pairFirst.cause = pairSecond;
+  pairSecond.cause = pairFirst;
+
+  emitKodaXDiagnostic({
+    source: "test:diagnostic",
+    level: "error",
+    message: "cyclic cleanup failure",
+    detail: new AggregateError([cyclic, pairFirst], "Workspace sandbox retirement failed."),
+  });
+
+  const logText = fs.readFileSync(paths.logFile, "utf8");
+  expect(logText).toContain("retirement failed");
+  expect(logText).toContain("lease release failed");
+  expect(logText).toContain("attestation missing");
+  expect(logText).toContain("[cyclic]");
+  expect(logText).not.toContain('"detail":{}');
+
+  await host.close();
+});
+
+it("keeps Error diagnostic details diagnosable in the daemon log", async () => {
+  const paths = resolveRuntimeDaemonPaths(tempHome(), "default");
+    const runtime = makeRuntime();
+    const lock = tryAcquireRuntimeDaemonLock(paths, {
+      runtimeId: runtime.identity.runtimeId,
+      pid: process.pid,
+      createdAt: runtime.identity.startedAt,
+    });
+    expect(lock).toBeDefined();
+    if (!lock) throw new Error("Expected daemon lock for error-detail diagnostic test.");
+
+    const host = await startRuntimeDaemonHost({
+      runtime,
+      paths,
+      endpoint: await makeTestEndpoint(),
+      lock,
+    });
+    cleanupTasks.push(() => host.close());
+
+    emitKodaXDiagnostic({
+      source: "test:diagnostic",
+      level: "warn",
+      message: "aggregate cleanup warning",
+      detail: new AggregateError(
+        [
+          new Error("ASRT workspace session cleanup request timed out."),
+          new Error("Required OS sandbox execution could not be attested."),
+        ],
+        "Workspace sandbox command cleanup failed.",
+      ),
+    });
+
+    const logText = fs.readFileSync(paths.logFile, "utf8");
+    expect(logText).toContain('"message":"Workspace sandbox command cleanup failed."');
+    expect(logText).toContain("cleanup request timed out");
+    expect(logText).toContain("could not be attested");
+    expect(logText).not.toContain('"detail":{}');
+
     await host.close();
   });
 

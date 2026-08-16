@@ -339,6 +339,27 @@ async function releaseHostOwnership(
   return false;
 }
 
+function normalizeDiagnosticDetail(detail: unknown, seen = new Set<unknown>()): unknown {
+  // JSON.stringify(new Error(...)) collapses to {}; daemon.log diagnostics must
+  // keep the message (and aggregate/cause chain) so cleanup failures stay
+  // diagnosable as timeout vs attestation vs deletion errors. The seen-set
+  // stops cyclic cause chains from overflowing the stack, which would lose the
+  // whole diagnostic to the append catch handler.
+  if (detail instanceof Error) {
+    if (seen.has(detail)) return "[cyclic]";
+    seen.add(detail);
+    return {
+      name: detail.name,
+      message: detail.message,
+      ...(detail instanceof AggregateError
+        ? { errors: detail.errors.map((error) => normalizeDiagnosticDetail(error, seen)) }
+        : {}),
+      ...(detail.cause === undefined ? {} : { cause: normalizeDiagnosticDetail(detail.cause, seen) }),
+    };
+  }
+  if (Array.isArray(detail)) return detail.map((entry) => normalizeDiagnosticDetail(entry, seen));
+  return detail;
+}
 function appendRuntimeDiagnostic(paths: RuntimeDaemonPaths, diagnostic: KodaXDiagnostic): void {
   try {
     appendRuntimeDaemonLog(
@@ -348,14 +369,15 @@ function appendRuntimeDiagnostic(paths: RuntimeDaemonPaths, diagnostic: KodaXDia
       {
         level: diagnostic.level,
         source: diagnostic.source,
-        ...(diagnostic.detail !== undefined ? { detail: diagnostic.detail } : {}),
+        ...(diagnostic.detail !== undefined
+          ? { detail: normalizeDiagnosticDetail(diagnostic.detail) }
+          : {}),
       },
     );
   } catch {
     // Diagnostic sinks must never affect the daemon runtime path.
   }
 }
-
 function createHostState(
   options: RuntimeDaemonHostOptions,
   status: RuntimeDaemonState['status'],

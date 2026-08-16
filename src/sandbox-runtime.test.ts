@@ -92,6 +92,8 @@ const workspaceSessionControl = vi.hoisted(() => ({
   releaseWrap: undefined as (() => void) | undefined,
   wrapFailure: undefined as string | undefined,
   cleanupFailure: undefined as string | undefined,
+  delayCleanup: false,
+  releaseCleanup: undefined as (() => void) | undefined,
   afterWrapResponse: undefined as (() => void) | undefined,
   cleanupRequests: 0,
   malformedReady: false,
@@ -401,6 +403,8 @@ vi.mock('node:child_process', async (importOriginal) => {
             };
             if (message.type === 'wrap' && workspaceSessionControl.delayWrap) {
               workspaceSessionControl.releaseWrap = reportResponse;
+            } else if (message.type === 'cleanup' && workspaceSessionControl.delayCleanup) {
+              workspaceSessionControl.releaseCleanup = reportResponse;
             } else {
               reportResponse();
             }
@@ -653,6 +657,7 @@ import {
   createAsrtShellSandbox,
   createAsrtSkillScriptRunner,
   doctorSandboxRuntime,
+  overrideWorkspaceSessionRpcTimeoutsForTest,
   prepareSandboxRuntimeForSetup,
   runKodaXSandboxed,
   runAsrtBrokerProcess,
@@ -712,6 +717,9 @@ afterEach(async () => {
   workspaceSessionControl.releaseWrap = undefined;
   workspaceSessionControl.wrapFailure = undefined;
   workspaceSessionControl.cleanupFailure = undefined;
+  workspaceSessionControl.delayCleanup = false;
+  workspaceSessionControl.releaseCleanup?.();
+  workspaceSessionControl.releaseCleanup = undefined;
   workspaceSessionControl.afterWrapResponse = undefined;
   workspaceSessionControl.cleanupRequests = 0;
   workspaceSessionControl.malformedReady = false;
@@ -2673,6 +2681,150 @@ describe('ASRT workspace shell adapter', () => {
       )))).toHaveLength(2);
     },
   );
+
+  it.runIf(process.platform === 'win32')(
+    'retires a timed-out cleanup request through an orderly session close without poisoning the ACL owner',
+    async () => {
+      const restoreTimeouts = overrideWorkspaceSessionRpcTimeoutsForTest({
+        rpcMs: 60,
+        cleanupMs: 60,
+      });
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-cleanup-timeout-'));
+      tempRoots.push(root);
+      const sandbox = createAsrtShellSandbox({
+        workspaceRoot: root,
+        shouldSandbox: () => true,
+      });
+      const prepare = (toolCallId: string) => sandbox.prepare({
+        toolCallId,
+        toolInput: { command: 'node --version' },
+        command: 'node --version',
+        executable: process.execPath,
+        args: ['--version'],
+        cwd: root,
+        env: process.env,
+      });
+      try {
+        const first = await prepare('bash-cleanup-timeout');
+        if (!first) throw new Error('expected workspace invocation');
+        workspaceSessionControl.delayCleanup = true;
+        await expect(first.cleanup()).rejects.toThrow('request cleanup failed');
+        const globalPoisonDirectory = path.join(
+          path.resolve(process.env.ProgramData!),
+          'KodaX',
+          'sandbox-runtime',
+          'acl-poison',
+        );
+        // The orderly retire must confirm the ACL reset and remove the active
+        // owner marker instead of renaming it to unconfirmed-owner-*.json.
+        await vi.waitFor(async () => {
+          await expect(readdir(globalPoisonDirectory)).resolves.toEqual([]);
+        });
+        await first.retire?.();
+        workspaceSessionControl.delayCleanup = false;
+        workspaceSessionControl.releaseCleanup?.();
+        workspaceSessionControl.releaseCleanup = undefined;
+        const replacement = await prepare('bash-after-cleanup-timeout');
+        if (!replacement) throw new Error('expected replacement workspace invocation');
+        await replacement.cleanup();
+        expect(capturedKillSignals).toHaveLength(0);
+        expect(capturedProcessTreeKillOptions).toHaveLength(0);
+        expect(capturedSpawnArgv.filter((argv) => argv.some((arg) => (
+          arg.includes('sandbox-workspace-session')
+          || arg === '__asrt-workspace-session'
+        )))).toHaveLength(2);
+      } finally {
+        workspaceSessionControl.delayCleanup = false;
+        restoreTimeouts();
+      }
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'retires a timed-out wrap request without force-killing the session or poisoning the ACL owner',
+    async () => {
+      const restoreTimeouts = overrideWorkspaceSessionRpcTimeoutsForTest({ rpcMs: 60 });
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-wrap-timeout-'));
+      tempRoots.push(root);
+      const sandbox = createAsrtShellSandbox({
+        workspaceRoot: root,
+        shouldSandbox: () => true,
+      });
+      const prepare = (toolCallId: string) => sandbox.prepare({
+        toolCallId,
+        toolInput: { command: 'node --version' },
+        command: 'node --version',
+        executable: process.execPath,
+        args: ['--version'],
+        cwd: root,
+        env: process.env,
+      });
+      try {
+        workspaceSessionControl.delayWrap = true;
+        await expect(prepare('bash-wrap-timeout')).resolves.toBeUndefined();
+        const globalPoisonDirectory = path.join(
+          path.resolve(process.env.ProgramData!),
+          'KodaX',
+          'sandbox-runtime',
+          'acl-poison',
+        );
+        await vi.waitFor(async () => {
+          await expect(readdir(globalPoisonDirectory)).resolves.toEqual([]);
+        });
+        workspaceSessionControl.releaseWrap?.();
+        workspaceSessionControl.delayWrap = false;
+        const replacement = await prepare('bash-after-wrap-timeout');
+        if (!replacement) throw new Error('expected replacement workspace invocation');
+        await replacement.cleanup();
+        expect(capturedKillSignals).toHaveLength(0);
+        expect(capturedProcessTreeKillOptions).toHaveLength(0);
+        expect(capturedSpawnArgv.filter((argv) => argv.some((arg) => (
+          arg.includes('sandbox-workspace-session')
+          || arg === '__asrt-workspace-session'
+        )))).toHaveLength(2);
+      } finally {
+        workspaceSessionControl.delayWrap = false;
+        restoreTimeouts();
+      }
+    },
+  );
+
+  it('gives cleanup requests a longer deadline than wrap requests', async () => {
+    const restoreTimeouts = overrideWorkspaceSessionRpcTimeoutsForTest({ rpcMs: 60 });
+    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-cleanup-deadline-'));
+    tempRoots.push(root);
+    const sandbox = createAsrtShellSandbox({
+      workspaceRoot: root,
+      shouldSandbox: () => true,
+    });
+    const invocation = await sandbox.prepare({
+      toolCallId: 'bash-cleanup-deadline',
+      toolInput: { command: 'node --version' },
+      command: 'node --version',
+      executable: process.execPath,
+      args: ['--version'],
+      cwd: root,
+      env: process.env,
+    });
+    if (!invocation) throw new Error('expected workspace invocation');
+    try {
+      workspaceSessionControl.delayCleanup = true;
+      const stalled = invocation.cleanup();
+      await vi.waitFor(() => {
+        expect(workspaceSessionControl.releaseCleanup).toBeTypeOf('function');
+      });
+      // The stalled cleanup outlives the wrap deadline but stays inside the
+      // dedicated cleanup deadline, so it must resolve instead of retiring.
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      workspaceSessionControl.releaseCleanup?.();
+      await expect(stalled).resolves.toBeUndefined();
+      expect(workspaceSessionControl.cleanupRequests).toBe(1);
+      expect(capturedKillSignals).toHaveLength(0);
+    } finally {
+      workspaceSessionControl.delayCleanup = false;
+      restoreTimeouts();
+    }
+  });
 
   it('releases a workspace lease even when broker request-file cleanup fails', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-request-cleanup-failure-'));
