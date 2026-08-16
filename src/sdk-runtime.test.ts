@@ -4342,6 +4342,7 @@ describe("createKodaXRuntime", () => {
     });
     const session = await runtime.sessions.create({
       title: "Managed Durable Boundary",
+      projectPath: tempRoot,
     });
     let signalStarted: (() => void) | undefined;
     let releaseQueuedInput: (() => void) | undefined;
@@ -6902,6 +6903,7 @@ describe("createKodaXRuntime", () => {
       const session = await runtime.sessions.create({
         sessionId: "legacy-replay-transcript",
         title: "Legacy replay transcript",
+        projectPath: tempRoot,
       });
       const manager = createSessionManager({ sessionsDir });
       const active = createSessionLineage([
@@ -7016,6 +7018,7 @@ describe("createKodaXRuntime", () => {
     try {
       const session = await runtime.sessions.create({
         title: "Searchable transcript",
+        projectPath: tempRoot,
       });
       const manager = createSessionManager({ sessionsDir });
       const lineage = applySessionCompaction(

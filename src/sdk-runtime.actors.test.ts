@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { FileSessionStorage } from '@kodax-ai/repl';
+import { FileSessionStorage, SessionReadError } from '@kodax-ai/repl';
 
 import { createKodaXRuntime } from './sdk-runtime.js';
 
@@ -83,11 +83,26 @@ describe('F270 Runtime Actor facade', () => {
     await runtime.agents.spawn(source.id, { taskName: 'scout', objective: 'Inspect.' });
     await runtime.agents.wait(source.id, 2, 1_000);
 
-    const forked = await runtime.sessions.fork({
-      sessionId: source.id,
-      newSessionId: 'forked',
-      title: 'Forked',
-    });
+    let forked: Awaited<ReturnType<typeof runtime.sessions.fork>>;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      try {
+        forked = await runtime.sessions.fork({
+          sessionId: source.id,
+          newSessionId: 'forked',
+          title: 'Forked',
+        });
+        break;
+      } catch (error: unknown) {
+        if (
+          !(error instanceof SessionReadError)
+          || error.code !== 'data_changed'
+          || attempt === 19
+        ) {
+          throw error;
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 25));
+      }
+    }
     if (!forked) throw new Error('Expected session fork to succeed.');
 
     expect((await runtime.agents.tree(source.id)).actors.map((actor) => actor.path)).toContain('/root/scout');
