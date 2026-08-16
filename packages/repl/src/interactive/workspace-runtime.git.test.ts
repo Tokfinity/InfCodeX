@@ -20,6 +20,7 @@ import {
 
 describe('workspace runtime Git inspection', () => {
   const tempDirs: string[] = [];
+  const mockedCwd = path.join(os.tmpdir(), 'kodax-mocked-git-repo');
 
   beforeEach(() => {
     mocks.active = 0;
@@ -53,7 +54,7 @@ describe('workspace runtime Git inspection', () => {
   });
 
   it('queries repository identity and branch concurrently after locating the root', async () => {
-    await expect(inspectWorkspaceRuntime({ cwd: 'C:/repo' })).resolves.toMatchObject({
+    await expect(inspectWorkspaceRuntime({ cwd: mockedCwd })).resolves.toMatchObject({
       canonicalRepoRoot: expect.stringMatching(/repo$/i),
       branch: 'main',
     });
@@ -62,7 +63,7 @@ describe('workspace runtime Git inspection', () => {
   });
 
   it('resolves lightweight project identity without querying the branch and bounds Git calls', async () => {
-    await expect(resolveCanonicalWorkspaceRoot({ cwd: 'C:/repo', timeoutMs: 321 }))
+    await expect(resolveCanonicalWorkspaceRoot({ cwd: mockedCwd, timeoutMs: 321 }))
       .resolves.toMatch(/repo$/i);
 
     expect(mocks.execFile).toHaveBeenCalledTimes(1);
