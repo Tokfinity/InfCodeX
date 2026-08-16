@@ -1,4 +1,3 @@
-import { Jimp } from 'jimp';
 import { ImageResizeError } from './errors.js';
 
 export const MAX_DIMENSION = 2000;
@@ -32,6 +31,7 @@ export async function normalizePastedImage(
 
   let image;
   try {
+    const { Jimp } = await import('jimp');
     image = await Jimp.read(input);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);

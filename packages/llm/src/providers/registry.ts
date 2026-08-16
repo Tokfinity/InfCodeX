@@ -5,7 +5,10 @@
  */
 
 import { KodaXBaseProvider } from './base.js';
-import { KodaXAnthropicCompatProvider } from './anthropic.js';
+import {
+  createAnthropicSdkClient,
+  KodaXAnthropicCompatProvider,
+} from './anthropic.js';
 import { KodaXOpenAICompatProvider } from './openai.js';
 import { KodaXGeminiCliProvider } from './gemini-cli.js';
 import { KodaXCodexCliProvider } from './codex-cli.js';
@@ -25,8 +28,7 @@ import {
   normalizeCapabilityProfile,
 } from './capability-profile.js';
 import { getProviderSnapshots } from './provider-capabilities.loader.js';
-import Anthropic from '@anthropic-ai/sdk';
-import OpenAI from 'openai';
+import type Anthropic from '@anthropic-ai/sdk';
 
 // ============== Provider 名称类型 ==============
 
@@ -181,7 +183,7 @@ class AnthropicProvider extends KodaXAnthropicCompatProvider {
   // Anthropic proper talks to api.anthropic.com and must keep the SDK's
   // native user agent — unlike the compat base, it adds no gateway headers.
   protected override buildClient(): Anthropic {
-    return new Anthropic({ apiKey: this.getApiKey() });
+    return createAnthropicSdkClient({ apiKey: this.getApiKey() });
   }
 }
 
