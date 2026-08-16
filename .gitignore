@@ -29,6 +29,10 @@ Thumbs.db
 
 # Project specific
 .codex*/
+# This repository's CI and release workflow use npm workspaces. Ignore
+# incomplete alternate-package-manager metadata created by local tooling.
+pnpm-lock.yaml
+pnpm-workspace.yaml
 .kodax/
 .dsh/
 .agent/
