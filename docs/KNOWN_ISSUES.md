@@ -14,7 +14,7 @@ _Last Updated: 2026-08-15_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
-| 292 | High | Resolved | Actor settlement deadline conflates storage eligibility, canonical commit, and post-commit maintenance | v0.7.85 Actor settlement convergence | v0.7.88 development | 2026-08-15 | 2026-08-15 |
+| 292 | High | Resolved | Actor settlement deadline conflates storage eligibility, canonical commit, and post-commit maintenance | v0.7.85 Actor settlement convergence | v0.7.88 release | 2026-08-15 | 2026-08-15 |
 | 291 | High | Resolved | Crashed inline Runtime owner leaves daemon startup permanently fenced | v0.7.69 owner-policy fencing | v0.7.86 release | 2026-08-11 | 2026-08-11 |
 | 290 | Medium | Resolved | Mixed-case custom provider aliases lose model autocomplete | custom provider model completion | v0.7.85 release | 2026-08-10 | 2026-08-10 |
 | 289 | High | Resolved | Windows workspace sandbox recursively stamped broad home and temp ACLs in the shell timeout | v0.7.85 Agent Home shell hardening | v0.7.85 release | 2026-08-10 | 2026-08-10 |
@@ -12347,7 +12347,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 171 (27 Open, 144 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 172 (27 Open, 145 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 

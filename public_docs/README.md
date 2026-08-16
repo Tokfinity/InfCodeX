@@ -2,9 +2,9 @@
 
 Public documentation for KodaX users and SDK integrators.
 
-The current release is `v0.7.87`. Its SDK guidance adds the GLM-5.3 Coding Plan
+The current release is `v0.7.88`. Its SDK guidance adds the GLM-5.3 Coding Plan
 routes with verbatim model IDs, keeps GLM-5.2 selectable, defaults
-`zhipu-coding` to 5.3 and `zai-coding` to 5.2, and documents the GLM-5.3
+`zhipu-coding`, `zai-coding`, and `ark-coding` to 5.3, and documents the GLM-5.3
 always-thinking effort mapping. It also covers atomic Runtime owner
 recovery, process-start identity locks, Windows sandbox termination attestation,
 durable ACL owner markers, and Windows workspace Shell PATH/executable scoping
@@ -15,7 +15,7 @@ in addition to the v0.7.85 Session-scoped
 Runtime Event Journals, the `sessionEventJournal:1` daemon contract,
 conversation-first Memory management, the additive experimental Memory
 management facade, and the startup/Worker lifecycle boundaries. Issue 256's
-remaining Worker owner-lease boundary remains open after v0.7.87; this release
+remaining Worker owner-lease boundary remains open after v0.7.88; this release
 assigns no replacement target.
 
 ## Getting Started

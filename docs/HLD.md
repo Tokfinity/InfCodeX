@@ -2,8 +2,8 @@
 
 > Last updated: 2026-08-15
 >
-> Current published baseline: `v0.7.87`
-> (`@kodax-ai/kodax@0.7.87`; npm publication remains manual)
+> Current published baseline: `v0.7.88`
+> (`@kodax-ai/kodax@0.7.88`; npm publication remains manual)
 >
 > This HLD is intentionally current-state only. The old pre-v0.7.43
 > chain/harness model has been removed from this active design document because
@@ -343,10 +343,11 @@ The separate `kimi-code` subscription alias defaults to the direct upstream
 1,048,576-token `k3` tier. Both K3 routes use `thinking.effort` for reasoning
 intent, defaulting to `high`.
 
-The v0.7.87 Zhipu Coding Plan routes keep logical model capacity separate from
+The v0.7.88 Zhipu Coding Plan routes keep logical model capacity separate from
 the upstream model identifier. `zhipu-coding` defaults to `glm-5.3` and keeps
-`glm-5.2`; `zai-coding` defaults to `glm-5.2` and keeps `glm-5.3` for entitled
-accounts. The Anthropic-compatible wire receives those IDs verbatim, without a
+`glm-5.2`; `zai-coding` and `ark-coding` also default to `glm-5.3` while
+keeping `glm-5.2` (Ark alias `glm-latest`). The compatible wires receive those
+IDs verbatim, without a
 synthetic `[1m]` suffix. GLM-5.3's always-thinking contract lowers `off` /
 `none` to low effort at the provider boundary.
 

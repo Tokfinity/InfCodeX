@@ -1,9 +1,9 @@
 # KodaX Product Requirements
 
-> Last updated: 2026-08-14
+> Last updated: 2026-08-15
 >
-> Current implementation baseline: `v0.7.87` release
-> (`@kodax-ai/kodax@0.7.87` workspace package; npm publication remains manual)
+> Current implementation baseline: `v0.7.88` release
+> (`@kodax-ai/kodax@0.7.88` workspace package; npm publication remains manual)
 >
 > This document describes the current product. Historical pre-v0.7.43
 > chain/harness designs have been removed from this current PRD because they no
@@ -54,11 +54,14 @@ POSIX workspace admission initializes fresh `KODAX_HOME` policy roots before
 identity capture, keeps warm-up waits within the Shell abort/deadline, and
 retires an invalid cached session after lease-cleanup failure before replacement.
 
-The v0.7.87 provider baseline adds GLM-5.3 to both Zhipu Coding Plan aliases
-without inventing wire aliases. `zhipu-coding` defaults to `glm-5.3` and keeps
-`glm-5.2`; overseas `zai-coding` defaults to `glm-5.2` and keeps `glm-5.3` for
-accounts with access. Both model IDs are sent verbatim. Because GLM-5.3 cannot
-disable thinking, `off` / `none` is normalized to low effort.
+The v0.7.88 provider baseline promotes GLM-5.3 across the Coding Plan routes
+without inventing wire aliases. `zhipu-coding`, `zai-coding`, and `ark-coding`
+default to `glm-5.3` while keeping `glm-5.2`; Ark retains `glm-latest` as its
+legacy alias. All model IDs are sent verbatim. Because GLM-5.3 cannot disable
+thinking, `off` / `none` is normalized to low effort. The same release also
+ships Actor settlement convergence v2, bounded startup/resume work, bounded
+classifier-reason diagnostics, and REPL learning-recovery dismissal after a
+query is submitted.
 
 ## 2. Target Users
 

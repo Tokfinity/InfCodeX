@@ -2773,12 +2773,13 @@ isolated embedder namespace, pass a private base directory and expect data at
 `<homeDir>/.kodax`. Passing `~/.kodax` as `homeDir` would instead select
 `~/.kodax/.kodax` and a different daemon namespace.
 
-### v0.7.87 GLM Coding Plan boundaries
+### v0.7.88 GLM Coding Plan boundaries
 
 The built-in model catalog exposes both `glm-5.3` and `glm-5.2` for
-`zhipu-coding` and `zai-coding`. The China Coding Plan alias defaults to 5.3;
-the overseas alias defaults to 5.2 and keeps 5.3 as an explicit, entitlement-
-dependent selection. Capability metadata still records the 1M context locally,
+`zhipu-coding` and `zai-coding`; both aliases default to `glm-5.3` (the
+overseas alias switched from `glm-5.2` on 2026-08-15). `ark-coding` likewise
+defaults to `glm-5.3` and keeps `glm-5.2` (alias `glm-latest`). Capability
+metadata still records the 1M context locally,
 but the provider sends the model ID verbatim and never appends `[1m]`.
 
 GLM-5.3 is always-thinking. Hosts may continue to express a stable `off` /

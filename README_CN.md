@@ -247,7 +247,9 @@ v0.7.93。详见 [v0.7.83 发布清单](docs/release.md#v0783-release-preparatio
 
 **v0.7.86 加固发布**：本补丁版本加入 abandoned inline Runtime owner 的原子恢复、Runtime 与 learning lock 的 OS process-start identity 校验，以及 Windows sandbox 生命周期 attestation。Sandbox ACL owner marker 持久化并在不同 Runtime profile 间串行恢复；停止流程在 ACL 恢复前等待 process-tree termination proof，保留组合清理错误；如果 Shell effect 未证明已 drain，则继续 fence 后续文件系统 effect，绝不重放可能已经产生副作用的命令。POSIX workspace session 会在策略身份计算前初始化全新的 `KODAX_HOME` 内部目录，仅在既有 Shell abort/deadline 内等待当前 workspace 的 warm-up，并在 lease cleanup 失败后退役失效缓存；进程树或清理结果无法确认时同样保持 fail-closed，不允许旧 session 与替换 session 竞态。规范化 workspace、Agent Home、附加文件系统、toolchain 与网络策略完全一致的命令，可以跨 KodaX 进程共享同一个 Windows sandbox policy group。文件系统 effect 协调锁会在合法进程交接时等待完整的 30 秒 stale-owner 证明窗口，但不同 effect 类别之间原有的一秒 fail-closed 边界不变；不同策略或目标启动前的 sandbox 基础设施失败会回到已经授权的普通权限执行路径，目标已经启动或启动状态未知时绝不重放。Runtime sandbox capability v3 会隔离旧 daemon 的执行策略版本。Issue 256 剩余的 Worker owner lease 边界仍未关闭，曾改期到 v0.7.87。详见 [v0.7.86 发布清单](docs/release.md#v0786-release-preparation)。
 
-**v0.7.87 GLM Provider 发布**：`zhipu-coding` 现在默认使用 `glm-5.3`，并保留 `glm-5.2` 作为显式回退路由。`zai-coding` 同时保留两个模型，但默认使用 `glm-5.2`，因为海外 Coding Plan 的 GLM-5.3 权限按账号开放。两个 alias 都向上游原样发送 `glm-5.3` / `glm-5.2`，不再附加 context 后缀。GLM-5.3 的思考不可关闭，因此 `off` / `none` 会降级为 `low`，不会发送上游不支持的 disabled-thinking 请求；REPL 不再提供无效的 off 档，旧配置会显示为 `off->low`。Issue 256 剩余的 Worker owner lease 边界不在本次 Provider 发布范围内，在 v0.7.87 后仍保持 Open，且本版本不指定新的替代目标。详见 [v0.7.87 发布清单](docs/release.md#v0787-release-preparation)。
+**v0.7.88 发布**：本版本包含 Actor settlement convergence v2 持久化边界、受界定的启动/恢复工作、guardrail classifier reason 诊断，以及首次提交查询后自动收起过期 learning-recovery 提示的 REPL 修复。这些都是明确的 Runtime、Agent、LLM 与 REPL 系统代码改动。`zhipu-coding`、`zai-coding` 与 `ark-coding` 均默认使用 `glm-5.3`，同时保留 `glm-5.2` 作为显式路由；Ark 继续保留 `glm-latest` 别名。Coding Plan model ID 原样发送，不附加虚假的 context 后缀；GLM-5.3 的 `off` / `none` 会降为 `low`。详见 [v0.7.88 发布清单](docs/release.md#v0788-release-preparation)。
+
+**v0.7.87 GLM Provider 发布**：`zhipu-coding` 默认使用 `glm-5.3`，并保留 `glm-5.2` 作为显式回退路由。`zai-coding` 当时保留两个模型但默认使用 `glm-5.2`，直到 v0.7.88 的海外 Coding Plan 路由切换。Coding Plan model ID 原样发送，不附加 context 后缀。GLM-5.3 的思考不可关闭，因此 `off` / `none` 会降级为 `low`，不会发送上游不支持的 disabled-thinking 请求。Issue 256 剩余的 Worker owner lease 边界在 v0.7.87 后仍保持 Open，且本版本不指定新的替代目标。详见 [v0.7.87 发布清单](docs/release.md#v0787-release-preparation)。
 
 Windows workspace Shell 还会保留大小写不敏感的 `PATH`/`Path` 与 `PATHEXT` 约定，
 按最终 PATH 和 shell executable 生成有界读取授权，并在 broker 层之间保留 `cmd.exe`
@@ -776,11 +778,11 @@ dist/binary/linux-x64/
 | qwen-token-plan | `QWEN_TOKEN_API_KEY` | Native | qwen3.8-max（Anthropic 协议；可 `/model` 切换兼容项 `qwen3.8-max-preview` 及 `qwen3.7-max` / `qwen3.7-plus` / `qwen3.6-flash` / `glm-5.2` / `deepseek-v4-pro`；均为 1M ctx；两个 Qwen 3.8 ID / 3.7 Plus / 3.6 Flash 支持图片理解） |
 | zhipu | `ZHIPU_API_KEY` | Native | glm-5（可 `/model` 切换 `glm-5.3` / `glm-5.2`，均为 1M ctx，另有 `glm-5.1` / `glm-5-turbo`；GLM-5.3 开放平台 API 仍标注为即将上线） |
 | zhipu-coding | `ZHIPU_CODING_API_KEY` | Native | glm-5.3（1M ctx、128K 最大输出；可回退到 `glm-5.2`，也可切换 `glm-5-turbo` / `glm-4.7`；原样发送上游 ID） |
-| zai-coding | `ZAI_CODING_API_KEY` | Native | glm-5.2（保留 `glm-5.3` 供已获海外 Coding Plan 权限的账号选择；原样发送上游 ID） |
+| zai-coding | `ZAI_CODING_API_KEY` | Native | glm-5.3（保留 `glm-5.2` 回退；原样发送上游 ID；2026-08-15 起默认从 glm-5.2 切换） |
 | minimax-coding | `MINIMAX_CODING_API_KEY` | Native | MiniMax-M3（Frontier Coding，原生多模态 + 1M ctx；仍可通过 `/model` 显式选择兼容模型 `MiniMax-M2.7` / `MiniMax-M2.7-highspeed`） |
 | mimo | `MIMO_API_KEY` | Native | mimo-v2.5-pro（小米 MiMo 按量计费，Anthropic 协议） |
 | mimo-coding | `MIMO_CODING_API_KEY` | Native | mimo-v2.5-pro（小米 MiMo Token Plan，Anthropic 协议） |
-| ark-coding | `ARK_CODING_API_KEY` | Native | glm-5.2（火山方舟 Coding Plan — GLM-5.2（别名 `glm-latest`） · Kimi K2.7 Code / K2.6 · MiniMax M3 / M2.7 · DeepSeek V4 Pro / V4 Flash · Doubao Seed 2.0 Code / Pro / Lite · Doubao Seed Code） |
+| ark-coding | `ARK_CODING_API_KEY` | Native | glm-5.3（火山方舟 Coding Plan — GLM-5.3（1M ctx、128K out） · GLM-5.2（别名 `glm-latest`） · Kimi K2.7 Code / K2.6 · MiniMax M3 / M2.7 · DeepSeek V4 Pro / V4 Flash · Doubao Seed 2.0 Code / Pro / Lite · Doubao Seed Code） |
 | deepseek | `DEEPSEEK_API_KEY` | Native | deepseek-v4-flash（可 `/model` 切换 `deepseek-v4-pro`） |
 | gemini-cli | 由 Provider CLI 完成认证（无 KodaX API-key 环境变量） | Prompt-only / CLI bridge | （通过 gemini CLI） |
 | codex-cli | 由 Provider CLI 完成认证（无 KodaX API-key 环境变量） | Prompt-only / CLI bridge | （通过 codex CLI） |

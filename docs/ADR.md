@@ -2,7 +2,7 @@
 
 > Last updated: 2026-08-15
 >
-> **v0.7.88 development Issue 292 addendum:** Actor snapshot persistence has
+> **v0.7.88 release addendum:** Actor snapshot persistence has
 > explicit boundaries for Actor mutation order, process-local storage dequeue,
 > file-writer eligibility, cancellable pre-commit work, canonical file
 > replacement, and full serialized maintenance completion. Process-local queue
@@ -24,6 +24,10 @@
 > repair is not timed by queue, lock, or post-commit maintenance delay.
 > Phase/timing diagnostics and `actorSettlementConvergence:2` make this contract
 > observable and prevent new SDK clients from reusing a v1 daemon.
+> The same release bounds startup/resume work and defers heavy provider, image,
+> LSP, and TypeScript dependencies past the CLI bootstrap boundary. REPL startup
+> learning-recovery notices are dismissed after the first submitted query, and
+> the guardrail classifier reason is exposed as a bounded diagnostic field.
 >
 > **v0.7.87 release addendum:** Coding Plan model IDs are transport facts, not
 > capacity annotations. `zhipu-coding` defaults to `glm-5.3` and keeps

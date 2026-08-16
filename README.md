@@ -682,16 +682,24 @@ policy revisions. Issue
 stays open and was scheduled for v0.7.87. See the
 [v0.7.86 release checklist](docs/release.md#v0786-release-preparation).
 
-**v0.7.87 GLM provider release:** `zhipu-coding` now defaults to `glm-5.3`
-and retains `glm-5.2` as an explicit rollback route. `zai-coding` retains both
-models but defaults to `glm-5.2`, because GLM-5.3 availability on the overseas
-Coding Plan is account-dependent. Both aliases send the upstream model IDs
-verbatim: `glm-5.3` and `glm-5.2`, without a context suffix. GLM-5.3 is an
-always-thinking model, so an `off` / `none` intent is lowered to `low` instead
-of sending an unsupported disabled-thinking request; REPL controls do not offer
-the impossible off rung and label a legacy saved choice as `off->low`. Issue 256's remaining
-Worker owner-lease boundary is not part of this provider release and remains
-open after v0.7.87; this release assigns no replacement target. See the
+**v0.7.88 release:** this release contains the Actor settlement convergence v2
+durability contract, bounded startup/resume work, the guarded classifier reason
+diagnostic, and the REPL fix that dismisses stale learning-recovery notices
+after the first submitted query. These are intentional Runtime, Agent, LLM,
+and REPL system-code changes. `zhipu-coding`, `zai-coding`, and `ark-coding`
+default to `glm-5.3` while retaining `glm-5.2` as an explicit route; Ark keeps
+the `glm-latest` alias. Coding Plan model IDs are sent verbatim without a
+synthetic context suffix, and GLM-5.3 `off` / `none` intent is lowered to
+`low`. See the [v0.7.88 release checklist](docs/release.md#v0788-release-preparation).
+
+**v0.7.87 GLM provider release:** `zhipu-coding` defaults to `glm-5.3` and
+retains `glm-5.2` as an explicit rollback route. `zai-coding` retained both
+models but defaulted to `glm-5.2` until the overseas Coding Plan rollout
+changed in v0.7.88. Coding Plan model IDs are sent verbatim without a context
+suffix. GLM-5.3 is an always-thinking model, so an `off` / `none` intent is
+lowered to `low` instead of sending an unsupported disabled-thinking request.
+Issue 256's remaining Worker owner-lease boundary remained open after v0.7.87;
+the release assigned no replacement target. See the
 [v0.7.87 release checklist](docs/release.md#v0787-release-preparation).
 
 The v0.7.77 release also adds an opt-in, host-configurable Shell Execution Contract.
@@ -1649,11 +1657,11 @@ await runInkInteractiveMode({ provider: 'zhipu-coding', effort: 'auto' });
 | qwen-token-plan | `QWEN_TOKEN_API_KEY` | Native | qwen3.8-max (Anthropic-compat; legacy `qwen3.8-max-preview` plus `qwen3.7-max` / `qwen3.7-plus` / `qwen3.6-flash` / `glm-5.2` / `deepseek-v4-pro` via `/model`; all 1M context; image input on both Qwen 3.8 IDs / 3.7 Plus / 3.6 Flash) |
 | zhipu | `ZHIPU_API_KEY` | Native | glm-5 (`glm-5.3` / `glm-5.2` 1M ctx, plus `glm-5.1` / `glm-5-turbo` via `/model`; GLM-5.3 is pre-registered while the public API remains marked upcoming) |
 | zhipu-coding | `ZHIPU_CODING_API_KEY` | Native | glm-5.3 (1M ctx, 128K output; `glm-5.2` rollback plus `glm-5-turbo` / `glm-4.7` via `/model`; raw upstream IDs) |
-| zai-coding | `ZAI_CODING_API_KEY` | Native | glm-5.2 (`glm-5.3` remains selectable when the overseas Coding Plan account has access; raw upstream IDs) |
+| zai-coding | `ZAI_CODING_API_KEY` | Native | glm-5.3 (`glm-5.2` rollback; raw upstream IDs; switched from glm-5.2 default on 2026-08-15) |
 | minimax-coding | `MINIMAX_CODING_API_KEY` | Native | MiniMax-M3 (Frontier Coding, native multimodal + 1M ctx; legacy `MiniMax-M2.7` / `MiniMax-M2.7-highspeed` remain selectable via `/model`) |
 | mimo | `MIMO_API_KEY` | Native | mimo-v2.5-pro (Xiaomi MiMo pay-per-token, Anthropic-compat) |
 | mimo-coding | `MIMO_CODING_API_KEY` | Native | mimo-v2.5-pro (Xiaomi Token Plan, Anthropic-compat) |
-| ark-coding | `ARK_CODING_API_KEY` | Native | glm-5.2 (Volcengine Ark Coding Plan — GLM-5.2 (alias: `glm-latest`) · Kimi K2.7 Code / K2.6 · MiniMax M3 / M2.7 · DeepSeek V4 Pro / V4 Flash · Doubao Seed 2.0 Code / Pro / Lite · Doubao Seed Code) |
+| ark-coding | `ARK_CODING_API_KEY` | Native | glm-5.3 (Volcengine Ark Coding Plan — GLM-5.3 (1M ctx, 128K out) · GLM-5.2 (alias: `glm-latest`) · Kimi K2.7 Code / K2.6 · MiniMax M3 / M2.7 · DeepSeek V4 Pro / V4 Flash · Doubao Seed 2.0 Code / Pro / Lite · Doubao Seed Code) |
 | deepseek | `DEEPSEEK_API_KEY` | Native | deepseek-v4-flash (`deepseek-v4-pro` via `/model`) |
 | gemini-cli | Provider CLI authentication (no KodaX API-key variable) | Prompt-only / CLI bridge | (via gemini CLI) |
 | codex-cli | Provider CLI authentication (no KodaX API-key variable) | Prompt-only / CLI bridge | (via codex CLI) |

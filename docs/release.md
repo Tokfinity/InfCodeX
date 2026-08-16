@@ -81,6 +81,71 @@ version smoke is:
 dist/binary/linux-x64/kodax --version
 ```
 
+## v0.7.88 release preparation
+
+Release state: the root package, all four workspace packages, and every
+`package-lock.json` workspace entry must be version `0.7.88`. This release is
+prepared for the `v0.7.88` tag and GitHub Release; npm publication remains a
+separate manual operator step. It includes every change after `v0.7.87`:
+
+- Actor settlement convergence v2: mutation order, process-local queue
+  dequeue, writer eligibility, cancellable pre-commit work, canonical
+  replacement, and serialized maintenance are distinct durability phases;
+  capability negotiation exposes `actorSettlementConvergence:2`;
+- bounded startup/resume work and the CLI startup dependency audit, including
+  deferred Anthropic SDK, image, LSP, TypeScript, and extension dependencies;
+- bounded guardrail classifier-reason diagnostics and REPL dismissal of stale
+  learning-recovery notices after a query is submitted;
+- GLM-5.3 as the default for `zhipu-coding`, `zai-coding`, and `ark-coding`,
+  with `glm-5.2` retained and Ark's `glm-latest` alias preserved; exact wire
+  IDs remain `glm-5.3` / `glm-5.2`, and `off` / `none` lowers to `low` for the
+  always-thinking GLM-5.3 route;
+- synchronized all current documentation, public SDK guides, `kodax_manual`,
+  the `docs/features` submodule, known-issue totals, and regression guides.
+
+The Actor controller, Runtime/storage, startup/resume, provider registry and
+capability metadata, REPL, and bundle-boundary changes are intentional system
+code changes, not test-only or release-process changes. The shell/sandbox
+contracts were not changed by the release preparation work; their existing
+regression gates remain mandatory. Issue 256's remaining Worker owner-lease
+boundary remains open after v0.7.88 and receives no replacement target here.
+
+Before tagging, all of the following must be true:
+
+1. all package versions, `CHANGELOG.md`, README/README_CN, PRD/HLD/DD/ADR,
+   feature tracker, known-issue record, public docs, this checklist,
+   `docs/features`, and `kodax_manual` agree on v0.7.88;
+2. focused tests cover GLM-5.3/5.2 availability, exact wire IDs, GLM
+   `off`/`none` lowering, lazy heavy imports, REPL recovery dismissal, and
+   Actor settlement convergence;
+3. the exact commit passes the deterministic gate:
+
+   ```bash
+   npm ci
+   npm run config:templates:check
+   npm run build:packages
+   npm run build:bundle
+   npm run build:dts
+   npm run test:full
+   npm run test:electron-daemon:built
+   node scripts/release.mjs --pack-only
+   ```
+
+4. the packed `kodax-ai-kodax-0.7.88.tgz` is inspected and smoke-installed
+   into an empty consumer for the root package and all 12 SDK subpaths;
+5. the human checks in
+   `docs/test-guides/ISSUE_292_v0.7.88_REGRESSION_GUIDE.md` and
+   `docs/test-guides/ISSUE_GLM53_v0.7.88_REGRESSION_GUIDE.md` pass;
+6. root and `docs/features` are clean, with the submodule commit reachable
+   from its remote; `.codex*` local artifacts are ignored and not tracked;
+7. GitHub CI is green for the exact commit on Node 20/22, Unix Runtime,
+   Windows Shell Contract, and packaged Electron jobs;
+8. the tag-triggered Release workflow is green and publishes all expected
+   archives, checksums, sidecars, and `SHA256SUMS`. npm publication is left to
+   the maintainer.
+
+Only after these gates pass may the exact commit be tagged `v0.7.88`.
+
 ## v0.7.87 release preparation
 
 Release state: the root package, all four workspace packages, and every
