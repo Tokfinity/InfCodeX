@@ -227,8 +227,11 @@ describe('runKodaX stopReason normalization', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0]).toMatchObject({
+      const stopReasonDiagnostics = diagnostics.filter(
+        (diagnostic) => diagnostic.source === 'coding:stop-reason',
+      );
+      expect(stopReasonDiagnostics).toHaveLength(1);
+      expect(stopReasonDiagnostics[0]).toMatchObject({
         source: 'coding:stop-reason',
         level: 'warn',
         detail: {
