@@ -63,6 +63,8 @@ export interface A2AToolPolicyConfig {
   readonly mcp: Readonly<Record<string, readonly string[]>>;
   readonly skillScripts: Readonly<Record<string, readonly string[]>>;
   readonly subagents: 'deny' | 'inherit';
+  /** Exact names of materialized host tools (capability ids host:<leaseId>:<toolName>) admitted by this policy. */
+  readonly hostTools?: readonly string[];
 }
 
 export interface A2AUserMarkdownAgentConfigRef {
@@ -176,6 +178,7 @@ const LIMIT_DEFAULTS: A2AServerLimitsConfig = {
 
 const LIMIT_KEYS = Object.keys(LIMIT_DEFAULTS) as readonly (keyof A2AServerLimitsConfig)[];
 const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const HOST_TOOL_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_.-]{0,127}$/;
 const ENV_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 function isExactLoopback(hostname: string): boolean {
@@ -222,6 +225,15 @@ function exactNames(value: unknown, label: string, allowEmpty = true): string[] 
     throw new Error(`${label} does not accept wildcard authority.`);
   }
   return items;
+}
+
+function hostToolNames(value: unknown, label: string): string[] {
+  return exactNames(value, label).map((name) => {
+    if (!HOST_TOOL_NAME_PATTERN.test(name)) {
+      throw new Error(`${label} entries must be valid host tool names.`);
+    }
+    return name;
+  });
 }
 
 function namedExactLists(value: unknown, label: string): Record<string, readonly string[]> {
@@ -448,7 +460,7 @@ function parseToolPolicy(value: unknown, workspace: A2AWorkspaceConfig): A2ATool
   if (value === undefined) return defaultToolPolicy(workspace);
   const source = record(value, 'A2A server execution.toolPolicy');
   const keys = ['workspace', 'process', 'network', 'tools', 'mcp', 'skillScripts', 'subagents'];
-  noUnknown(source, keys, 'A2A server execution.toolPolicy');
+  noUnknown(source, [...keys, 'hostTools'], 'A2A server execution.toolPolicy');
   if (keys.some((key) => source[key] === undefined)) {
     throw new Error('A2A server execution.toolPolicy must be a complete object when present.');
   }
@@ -477,6 +489,9 @@ function parseToolPolicy(value: unknown, workspace: A2AWorkspaceConfig): A2ATool
     mcp: namedExactLists(source.mcp, 'A2A toolPolicy.mcp'),
     skillScripts,
     subagents: source.subagents as A2AToolPolicyConfig['subagents'],
+    ...(source.hostTools === undefined
+      ? {}
+      : { hostTools: hostToolNames(source.hostTools, 'A2A toolPolicy.hostTools') }),
   };
 }
 

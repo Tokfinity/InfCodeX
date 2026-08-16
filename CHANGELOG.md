@@ -18,6 +18,36 @@ All notable changes to this project will be documented in this file.
   the compaction stripping side) and also covers the lineage-unavailable
   fallback projection.
 
+### Added
+
+- Host Tools first-class visibility (`FEATURE_294`): host tools bound to a
+  run by lease now materialize into the agent tool table as run-scoped
+  definitions (name + schema) on both the SA and managed-agent paths, so
+  models see them without calling `mcp_search`. The cached capability
+  catalog gains a `## Host Capability Provider (run-bound)` line
+  advertising the bound server entry, tool names, and a content-hash
+  revision that stays stable across runs. The `runBoundHostTools`
+  capability bumps to `2` (`materializedAgentTools`).
+
+### Changed
+
+- Materialized host tool dispatch routes through the run's capability
+  channel (`executeCapability('mcp', 'host:<leaseId>:<name>')`), reusing the
+  reverse-bridge timeout/idempotency/invocation state machine; results
+  render through the `mcp_call` retrieval pipeline. Host tool descriptors
+  map conservatively: `none` → readonly + plan-mode allowed,
+  `idempotent`/`non_idempotent` → mutates-state + plan-mode blocked
+  (fail-closed). Revoking a lease removes the materialized tools and the
+  catalog line from subsequent turns.
+- Run bindings whose host tool names collide with registered tools are
+  rejected up front with `invalid_params` (before any host-tool run
+  record), and host tool lease ids must match
+  `[A-Za-z0-9][A-Za-z0-9_-]{0,127}` (colon stays reserved for capability
+  ids).
+- Remote managed agents (A2A) can now authorize host capability ids: the
+  `authorizeMcp` id pattern accepts `host:` leases and role tool policy
+  carries host tool authorization semantics.
+
 ---
 
 ## [0.7.88] - 2026-08-16

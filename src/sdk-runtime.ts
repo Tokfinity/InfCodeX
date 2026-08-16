@@ -26,11 +26,13 @@ import {
   createExternalActorTurnExecutor,
   generateSessionId,
   listCodingDispatchableAgents,
+  listRunScopedTools,
   parseModelSpec,
   registerCustomProviders,
   resolveProviderModelDescriptors,
   resolveToolBridgeTarget,
   runManagedTask,
+  runScopedToolMap,
   normalizeShellExecutionContract,
   shellExecutionContractFingerprint,
   startKodaX,
@@ -736,7 +738,8 @@ export interface RuntimeCapabilityRequirements {
   readonly askUserTransport?: 1;
   readonly permissionCas?: 1;
   readonly providerCredentialBroker?: 1;
-  readonly runBoundHostTools?: 1;
+  /** v1: run-bound host tool leases. v2 additionally materializes bound host tools into the agent tool table and cached capability catalog. */
+  readonly runBoundHostTools?: 1 | 2;
   readonly coderOwnerFencing?: 1;
   readonly crashOutcomeModel?: 1;
   readonly coderFeatureMatrix?: 1;
@@ -20333,11 +20336,17 @@ function resolveRuntimePermissionPolicy(
     rawProjectRoot === undefined ? undefined : path.resolve(rawProjectRoot);
   const executionCwd = resolveRuntimeExecutionCwd(record);
   if (mode === "plan") {
+    // FEATURE_294: run-scoped host tools resolve plan-mode admission through
+    // their materialized metadata; unknown names stay fail-closed.
+    const runScopedTools = runScopedToolMap(
+      listRunScopedTools(record.start?.options.extensionRuntime),
+    );
     const blockReason = replApi.getPlanModeBlockReason(
       tool,
       input,
       projectRoot,
       executionCwd,
+      runScopedTools,
     );
     return blockReason === null
       ? true

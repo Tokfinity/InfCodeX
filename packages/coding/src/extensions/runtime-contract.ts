@@ -91,8 +91,39 @@ export interface CapabilityRuntimeContract {
   ): Promise<unknown>;
 
   getCapabilityPromptContext(providerId: string): Promise<string | undefined>;
+
+  /**
+   * Run-scoped tools materialized into the model-visible tool table for the
+   * current run only (e.g. daemon Host Tools bound by lease). Never entered
+   * into the process-global TOOL_REGISTRY; dispatch routes execution through
+   * `executeCapability` using each definition's `capabilityId`. Optional —
+   * runtimes without a materializable tool source simply omit it.
+   */
+  listRunTools?(providerId: string): readonly RunScopedToolDefinition[];
 }
 
+/**
+ * A tool materialized into the model-visible tool table for one run only.
+ * `sideEffect` mirrors `ToolSideEffect` from tools/types.ts; the union is
+ * repeated inline so this contract file keeps its no-`../types.js` import
+ * invariant (see header). The two unions meet at structurally-typed
+ * boundaries, so drift fails compilation rather than passing silently.
+ */
+export interface RunScopedToolDefinition {
+  readonly name: string;
+  readonly description: string;
+  readonly inputSchema: Readonly<Record<string, unknown>>;
+  /** Capability id that routes execution through the extension runtime. */
+  readonly capabilityId: string;
+  readonly sideEffect:
+    | 'readonly'
+    | 'reads-network'
+    | 'mutates-fs'
+    | 'mutates-shell'
+    | 'mutates-network'
+    | 'mutates-state';
+  readonly planModeAllowed: boolean;
+}
 export interface ExtensionRuntimeContract extends CapabilityRuntimeContract {
   getDefaults?(): RuntimeDefaultsSnapshot;
   bindController?(controller: BoundExtensionRuntimeController): (() => void) | void;

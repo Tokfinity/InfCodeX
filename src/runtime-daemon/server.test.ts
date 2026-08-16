@@ -10,6 +10,7 @@ import {
 import {
   createExtensionRuntime,
   getTool,
+  registerTool,
   setActiveExtensionRuntime,
   type KodaXToolExecutionContext,
 } from '@kodax-ai/coding';
@@ -1022,6 +1023,69 @@ describe('runtime daemon dispatcher', () => {
     await legacyExtensionRuntime.dispose();
   });
 
+  it('rejects a host tool binding whose names collide with registered tools', async () => {
+    // FEATURE_294: materialized host tools must never shadow a registry tool,
+    // so the binding is rejected up front (before any hostToolRuns record).
+    const disposeCollidingTool = registerTool({
+      name: 'space_colliding_tool',
+      description: 'Registered before the host binding attempts the same name',
+      input_schema: { type: 'object' },
+      handler: async () => 'ok',
+      sideEffect: 'readonly',
+      planModeAllowed: true,
+    });
+    try {
+      const runtime = makeRuntime();
+      const reverseBridgeHub = createRuntimeDaemonReverseBridgeHub();
+      const dispatcher = createRuntimeDaemonDispatcher({
+        runtime,
+        reverseBridgeHub,
+        notify() {},
+      });
+      await initializeDispatcher(dispatcher);
+      const transport: RuntimeDaemonClientTransport = {
+        async request(method, params, operation) {
+          const response = await dispatcher.handle(createRuntimeDaemonRequest(
+            `req-collide-${randomRequestSuffix()}`,
+            method,
+            params,
+            operation,
+          ));
+          if (isRuntimeDaemonSuccessResponse(response)) return response.result;
+          throw Object.assign(new Error(response.error.message), { code: response.error.code });
+        },
+        subscribe() {
+          return { close() {} };
+        },
+      };
+      const client = createRuntimeDaemonClient({
+        identity: runtime.identity,
+        transport,
+        capabilities: {},
+      });
+      const tools = await client.hostTools.register([{
+        name: 'space_colliding_tool',
+        description: 'Host duplicate of a registered tool',
+        inputSchema: { type: 'object' },
+        sideEffect: 'none',
+      }], {
+        async space_colliding_tool() {
+          return { content: 'never-reached' };
+        },
+      });
+      await expect(client.runs.start({
+        sessionId: 'session-1',
+        prompt: 'colliding host tool binding',
+        hostTools: { leaseId: tools.id },
+      })).rejects.toMatchObject({ code: 'invalid_params' });
+      await client.close();
+      dispatcher.close();
+      reverseBridgeHub.close();
+    } finally {
+      disposeCollidingTool();
+    }
+  });
+
   it('rejects initialize when the requested profile differs from the daemon identity', async () => {
     const dispatcher = createRuntimeDaemonDispatcher({ runtime: makeRuntime() });
 
@@ -1318,7 +1382,7 @@ describe('runtime daemon dispatcher', () => {
           askUserTransport: { version: 1 },
           permissionCas: { version: 1 },
           providerCredentialBroker: { version: 1 },
-          runBoundHostTools: { version: 1 },
+          runBoundHostTools: { version: 2, materializedAgentTools: true },
           coderOwnerFencing: { version: 1 },
           crashOutcomeModel: { version: 1 },
           sessionAdmission: { version: 1, partnerDenied: true },

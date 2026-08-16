@@ -263,6 +263,7 @@ import {
 // it).
 import { getToolExecutionOverride } from '../agent-runtime/permission-gate.js';
 import { applyToolVisibilityPolicy, filterExcludedTools } from '../agent-runtime/tool-resolution.js';
+import { listRunScopedTools, runScopedToolMap } from '../agent-runtime/run-scoped-tools.js';
 import { listToolDefinitions } from '../tools/index.js';
 import { activateSessionHistoryTools } from '../tools/session-history.js';
 import {
@@ -2011,6 +2012,10 @@ async function runManagedTaskViaRunnerInner(
   //      tier and started fresh; substrate parity restores it.
   //   3. empty messages — first turn / unknown session
   const resolvedInitial = await resolveInitialMessages(options, options.session?.id ?? resolvedSessionId);
+  // FEATURE_294: run-scoped host tools join the AMA candidate name list so the
+  // lease-bound surface stays consistent with the SA path; policy filtering
+  // resolves their metadata from the run-scoped map (fail-closed elsewhere).
+  const runScopedToolDefs = listRunScopedTools(extensionRuntime);
   const runtimeSessionState = buildRuntimeSessionState({
     loadedExtensionState: resolvedInitial.loadedExtensionState,
     loadedExtensionRecords: resolvedInitial.loadedExtensionRecords,
@@ -2018,10 +2023,14 @@ async function runManagedTaskViaRunnerInner(
     activeTools: activateSessionHistoryTools(
       applyToolVisibilityPolicy(
         filterExcludedTools(
-          listToolDefinitions().map((tool) => tool.name),
+          [
+            ...listToolDefinitions().map((tool) => tool.name),
+            ...runScopedToolDefs.map((definition) => definition.name),
+          ],
           options.context?.excludeTools,
         ),
         options.context?.toolVisibilityPolicy,
+        runScopedToolMap(runScopedToolDefs),
       ),
       baseCtx.loadSessionHistory !== undefined,
     ),

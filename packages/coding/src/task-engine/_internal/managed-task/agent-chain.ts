@@ -26,6 +26,12 @@ import {
   isMcpToolName,
   listToolDefinitions,
 } from '../../../tools/registry.js';
+import {
+  executeRunScopedTool,
+  listRunScopedTools,
+  lookupRunScopedTool,
+  toModelToolDefinition,
+} from '../../../agent-runtime/run-scoped-tools.js';
 import { DEFERRED_TOOL_HINTS, isDeferredTool } from '../../../tools/deferred-tools.js';
 import { TOOL_CALL_NAME, TOOL_DESCRIBE_NAME } from '../../../tools/tool-bridge.js';
 import { isSessionHistoryTool } from '../../../tools/session-history.js';
@@ -120,7 +126,8 @@ function isManagedToolVisibleForContext(
   if (name === 'run_workflow' && !ctx.workflowHost) return false;
   if (isSessionHistoryTool(name) && !ctx.loadSessionHistory) return false;
   if (ctx.toolVisibilityPolicy) {
-    const definition = getRegisteredToolDefinition(name);
+    const definition = getRegisteredToolDefinition(name)
+      ?? lookupRunScopedTool(ctx.extensionRuntime, name);
     if (!definition || !ctx.toolVisibilityPolicy({
       name: definition.name,
       sideEffect: definition.sideEffect,
@@ -295,6 +302,15 @@ function buildManagedToolCallBridge(
         };
       }
 
+      const runScopedTarget = lookupRunScopedTool(ctx.extensionRuntime, parsed.name);
+      if (runScopedTarget !== undefined) {
+        const content = await executeRunScopedTool(ctx, runScopedTarget, parsed.input);
+        return {
+          content,
+          isError: content.startsWith('[Tool Error]'),
+        };
+      }
+
       const registration = getRegisteredToolDefinition(parsed.name);
       if (!registration) {
         return {
@@ -357,9 +373,18 @@ function buildAgentToolsFromRegistry(
 ): RunnableTool[] {
   const exclude = getAmaRoleEffectiveExclude(role);
   const definitions = listToolDefinitions();
-  const bridgeTargetDefinitions = definitions.filter((definition) => (
-    isManagedToolVisibleForContext(definition.name, exclude, ctx)
-  ));
+  const registeredNames = new Set(definitions.map((definition) => definition.name));
+  const runScopedDefinitions = listRunScopedTools(ctx.extensionRuntime)
+    .filter((definition) => isManagedToolVisibleForContext(definition.name, exclude, ctx))
+    // Defense-in-depth: the server rejects registry-colliding host tool
+    // bindings up front; registered tools still win if a stale lease slips through.
+    .filter((definition) => !registeredNames.has(definition.name));
+  const bridgeTargetDefinitions: readonly ManagedToolDefinition[] = [
+    ...definitions.filter((definition) => (
+      isManagedToolVisibleForContext(definition.name, exclude, ctx)
+    )),
+    ...runScopedDefinitions.map(toModelToolDefinition),
+  ];
   const tools: RunnableTool[] = [];
 
   for (const def of definitions) {
@@ -418,6 +443,21 @@ function buildAgentToolsFromRegistry(
           input: Record<string, unknown>,
           execCtx: KodaXToolExecutionContext,
         ) => Promise<string>,
+        ctx,
+        budget,
+        events,
+      ),
+    );
+  }
+
+  // FEATURE_294: run-scoped host tools materialize per-run alongside the
+  // registry tools — they never register globally and disappear naturally
+  // once the lease binding is gone.
+  for (const definition of runScopedDefinitions) {
+    tools.push(
+      wrapCodingToolAsRunnable(
+        toModelToolDefinition(definition),
+        (input, execCtx) => executeRunScopedTool(execCtx, definition, input),
         ctx,
         budget,
         events,

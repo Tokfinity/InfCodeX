@@ -72,6 +72,8 @@ export interface RuntimeExecutionToolPolicy {
   readonly mcp: Readonly<Record<string, readonly string[]>>;
   readonly skillScripts: Readonly<Record<string, readonly string[]>>;
   readonly subagents: 'deny' | 'inherit';
+  /** Exact names of materialized host tools (capability ids host:<leaseId>:<toolName>) admitted by this policy. */
+  readonly hostTools?: readonly string[];
 }
 
 export interface RuntimeResolvedLocalAgent {
@@ -219,6 +221,8 @@ const SUBAGENT_TOOLS = [
 const PATH_TOOLS = new Set<string>([...NATIVE_READ_TOOLS, ...NATIVE_WRITE_TOOLS]);
 const SENSITIVE_PATH_PARTS = new Set(['.ssh', '.aws', '.azure', '.gnupg', '.kodax', '.agents']);
 const SENSITIVE_FILES = new Set(['.env', '.npmrc', '.pypirc', 'credentials', 'id_rsa', 'id_ed25519']);
+const HOST_TOOL_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_.-]{0,127}$/;
+const HOST_CAPABILITY_PATTERN = /^host:([^:]+):(.+)$/;
 
 function canonicalValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalValue);
@@ -291,6 +295,15 @@ function exactMap(value: unknown, label: string): Record<string, readonly string
     }));
 }
 
+function exactHostTools(value: readonly string[] | undefined, label: string): readonly string[] | undefined {
+  if (value === undefined) return undefined;
+  const names = exactList(value, label);
+  if (names.some((name) => !HOST_TOOL_NAME_PATTERN.test(name))) {
+    throw new Error(`${label} must contain valid host tool names.`);
+  }
+  return names;
+}
+
 function validatedToolPolicy(value: RuntimeExecutionToolPolicy): RuntimeExecutionToolPolicy {
   if (!['none', 'read', 'write'].includes(value?.workspace)) throw new Error('Runtime toolPolicy.workspace is invalid.');
   if (!['deny', 'isolated'].includes(value?.process)) throw new Error('Runtime toolPolicy.process is invalid.');
@@ -323,6 +336,9 @@ function validatedToolPolicy(value: RuntimeExecutionToolPolicy): RuntimeExecutio
     mcp: exactMap(value.mcp, 'Runtime toolPolicy.mcp'),
     skillScripts,
     subagents: value.subagents,
+    ...(value.hostTools === undefined
+      ? {}
+      : { hostTools: exactHostTools(value.hostTools, 'Runtime toolPolicy.hostTools') }),
   };
 }
 
@@ -677,7 +693,9 @@ function resolveToolSurface(input: {
   if (input.policy.workspace === 'write') NATIVE_WRITE_TOOLS.forEach((name) => allowed.add(name));
   if (input.hasSkills) allowed.add('skill');
   if (input.hasSkillScripts) allowed.add('run_skill_script');
-  if (Object.keys(input.policy.mcp).length > 0) MCP_TOOLS.forEach((name) => allowed.add(name));
+  if (Object.keys(input.policy.mcp).length > 0 || (input.policy.hostTools?.length ?? 0) > 0) {
+    MCP_TOOLS.forEach((name) => allowed.add(name));
+  }
   if (input.policy.subagents === 'inherit') SUBAGENT_TOOLS.forEach((name) => allowed.add(name));
 
   const registered = new Map(getAllRegisteredTools().map((tool) => [tool.name, tool]));
@@ -777,6 +795,12 @@ function authorizeMcp(
   if (!MCP_TOOLS.includes(name as typeof MCP_TOOLS[number])) return;
   if (name === 'mcp_search') {
     const server = input.server;
+    if (server === 'host') {
+      if ((policy.hostTools?.length ?? 0) === 0) {
+        throw new Error('MCP search requires an explicitly admitted server.');
+      }
+      return;
+    }
     if (typeof server !== 'string' || policy.mcp[server] === undefined) {
       throw new Error('MCP search requires an explicitly admitted server.');
     }
@@ -784,6 +808,17 @@ function authorizeMcp(
   }
   const id = input.id;
   if (typeof id !== 'string') throw new Error('MCP calls require a canonical capability id.');
+  const hostMatch = HOST_CAPABILITY_PATTERN.exec(id);
+  if (hostMatch) {
+    // Materialized host tools expose only the tool kind; the lease segment routes, hostTools authorize.
+    if (name !== 'mcp_call' && name !== 'mcp_describe') {
+      throw new Error('MCP capability id is invalid.');
+    }
+    if (!policy.hostTools?.includes(hostMatch[2] ?? '')) {
+      throw new Error('MCP tool is not admitted by the remote policy.');
+    }
+    return;
+  }
   const match = /^mcp:([^:]+):(tool|resource|prompt):(.+)$/.exec(id);
   if (!match) throw new Error('MCP capability id is invalid.');
   const [, server, kind, capability] = match;

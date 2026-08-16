@@ -11,6 +11,7 @@ import type {
 } from './types.js';
 import { BUILTIN_TOOL_DEFINITIONS } from './tool-definitions.js';
 import { safeFallbackToClassifierInput } from './classifier-projection.js';
+import type { RunScopedToolDefinition } from '../extensions/runtime-contract.js';
 const TOOL_REGISTRY: ToolRegistry = new Map();
 let nextToolRegistrationId = 0;
 
@@ -302,16 +303,28 @@ export function getAllRegisteredTools(): RegisteredToolDefinition[] {
  * preference to hardcoded `Set<string>` of tool names — adding a new
  * `'mutates-fs'` builtin will flow through automatically.
  */
-export function isToolPlanModeAllowed(name: string): boolean {
+export function isToolPlanModeAllowed(
+  name: string,
+  runScopedTools?: ReadonlyMap<string, RunScopedToolDefinition>,
+): boolean {
   const def =
     getActiveToolRegistration(name)
-    ?? BUILTIN_TOOL_DEFINITIONS.find((entry) => entry.name === name);
+      ?? BUILTIN_TOOL_DEFINITIONS.find((entry) => entry.name === name)
+      ?? runScopedTools?.get(name);
   if (!def) return false;
   if (def.planModeAllowed === true) return true;
   if (def.planModeAllowed === false) return false;
   return def.sideEffect === 'readonly';
 }
 
+function runScopedOrRegisteredDefinition(
+  name: string,
+  runScopedTools: ReadonlyMap<string, RunScopedToolDefinition> | undefined,
+) {
+  return getActiveToolRegistration(name)
+    ?? BUILTIN_TOOL_DEFINITIONS.find((entry) => entry.name === name)
+    ?? runScopedTools?.get(name);
+}
 /**
  * v0.7.42 — does this tool mutate the filesystem?
  *
@@ -320,10 +333,11 @@ export function isToolPlanModeAllowed(name: string): boolean {
  * previous practice of hardcoding `Set(["write", "edit"])`-style lookups
  * scattered across 5+ callsites.
  */
-export function isToolFileMutation(name: string): boolean {
-  const def =
-    getActiveToolRegistration(name)
-    ?? BUILTIN_TOOL_DEFINITIONS.find((entry) => entry.name === name);
+export function isToolFileMutation(
+  name: string,
+  runScopedTools?: ReadonlyMap<string, RunScopedToolDefinition>,
+): boolean {
+  const def = runScopedOrRegisteredDefinition(name, runScopedTools);
   return def?.sideEffect === 'mutates-fs';
 }
 
@@ -342,27 +356,27 @@ export function isToolFileMutation(name: string): boolean {
  * existing mutation-gate behavior is unchanged — use THIS predicate, or the
  * `sideEffect` value directly, to select the read-network class.
  */
-export function isToolNetworkRead(name: string): boolean {
-  const def =
-    getActiveToolRegistration(name)
-    ?? BUILTIN_TOOL_DEFINITIONS.find((entry) => entry.name === name);
+export function isToolNetworkRead(
+  name: string,
+  runScopedTools?: ReadonlyMap<string, RunScopedToolDefinition>,
+): boolean {
+  const def = runScopedOrRegisteredDefinition(name, runScopedTools);
   return def?.sideEffect === 'reads-network';
 }
-
 /**
  * v0.7.42 — does this tool mutate anything (FS, shell, network, state)?
  *
  * True for every `sideEffect` except `'readonly'`. Fail-closed (unknown
  * names return `true` — assumed mutating until proven otherwise).
  */
-export function isToolMutation(name: string): boolean {
-  const def =
-    getActiveToolRegistration(name)
-    ?? BUILTIN_TOOL_DEFINITIONS.find((entry) => entry.name === name);
+export function isToolMutation(
+  name: string,
+  runScopedTools?: ReadonlyMap<string, RunScopedToolDefinition>,
+): boolean {
+  const def = runScopedOrRegisteredDefinition(name, runScopedTools);
   if (!def) return true;
   return def.sideEffect !== 'readonly';
 }
-
 export function getRequiredToolParams(name: string): string[] {
   return getActiveToolRegistration(name)?.requiredParams ?? [];
 }

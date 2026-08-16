@@ -126,6 +126,7 @@ import {
   TOOL_CALL_NAME,
   TOOL_DESCRIBE_NAME,
 } from '../tools/index.js';
+import { executeRunScopedTool, lookupRunScopedTool, toModelToolDefinition } from './run-scoped-tools.js';
 import { emitActiveExtensionEvent } from '../extensions/runtime.js';
 import { isVisibleToolName } from './event-emitter.js';
 import { getToolExecutionOverride } from './permission-gate.js';
@@ -223,9 +224,8 @@ export async function executeToolCall(
   }
 
   if (toolCall.name === TOOL_DESCRIBE_NAME) {
-    return describeBridgeTools(toolCall.input ?? {}, activeToolNames);
+    return describeBridgeTools(toolCall.input ?? {}, activeToolNames, ctx.extensionRuntime);
   }
-
   if (toolCall.name === TOOL_CALL_NAME) {
     return executeBridgeToolCall({
       events,
@@ -247,6 +247,22 @@ export async function executeToolCall(
   // the per-call ctx so host-registered tools can correlate a handler invocation
   // to its event stream / de-duplicate retries — both the hooks and no-hooks
   // branch carry it.
+  // FEATURE_294: run-scoped host tools dispatch before the registry lookup so
+  // a materialized lease tool executes through the capability channel even
+  // though it never registers in TOOL_REGISTRY.
+  // Registry-first mirrors the model-facing table (tool-resolution): a tool
+  // registered after the binding wins, so the schema the model saw is the
+  // implementation that executes.
+  const runScopedDefinition = getToolDefinition(toolCall.name) === undefined
+    ? lookupRunScopedTool(ctx.extensionRuntime, toolCall.name)
+    : undefined;
+  if (runScopedDefinition === undefined
+    && getToolDefinition(toolCall.name) === undefined
+    && activeToolNames?.includes(toolCall.name)) {
+    // The name passed the frozen per-run candidate gate but resolves nowhere
+    // live: the run-scoped host tool lease was revoked or expired mid-run.
+    return `[Tool Error] ${toolCall.name}: Host tool lease was revoked or the tool is no longer bound to this run.`;
+  }
   const ctxWithToolHooks = createContextForToolCall(events, toolCall, ctx);
 
   events.onToolExecutionStart?.(
@@ -255,7 +271,9 @@ export async function executeToolCall(
   );
   let result: string;
   try {
-    result = await executeTool(toolCall.name, toolCall.input ?? {}, ctxWithToolHooks);
+    result = runScopedDefinition === undefined
+      ? await executeTool(toolCall.name, toolCall.input ?? {}, ctxWithToolHooks)
+      : await executeRunScopedTool(ctxWithToolHooks, runScopedDefinition, toolCall.input ?? {});
 
     // MCP fallback: when a built-in tool fails, try to find a same-name MCP tool.
     if (result.startsWith('[Tool Error]') && ctx.extensionRuntime) {
@@ -332,6 +350,7 @@ function createContextForToolCall(
 function describeBridgeTools(
   input: Record<string, unknown>,
   activeToolNames: readonly string[] | undefined,
+  extensionRuntime: KodaXToolExecutionContext['extensionRuntime'],
 ): string {
   const names = readBridgeToolNames(input);
   if (names.length === 0) {
@@ -345,7 +364,11 @@ function describeBridgeTools(
       lines.push(`<!-- ${name}: not active in the current runtime -->`);
       continue;
     }
-    const definition = getToolDefinition(name);
+    let definition = getToolDefinition(name);
+    if (definition === undefined) {
+      const runScoped = lookupRunScopedTool(extensionRuntime, name);
+      if (runScoped !== undefined) definition = toModelToolDefinition(runScoped);
+    }
     if (!definition) {
       lines.push(`<!-- ${name}: not registered -->`);
       continue;
@@ -425,13 +448,18 @@ async function executeBridgeToolCall(input: {
 
   const ctxWithToolHooks = createContextForToolCall(input.events, targetCall, input.ctx);
   const toolMeta = createToolEventMeta(input.events, targetCall.id);
+  const runScopedTarget = getToolDefinition(targetName) === undefined
+    ? lookupRunScopedTool(input.ctx.extensionRuntime, targetName)
+    : undefined;
   input.events.onToolExecutionStart?.(
     { id: targetCall.id, name: targetName },
     toolMeta,
   );
   let result: string;
   try {
-    result = await executeTool(targetName, targetInput, ctxWithToolHooks);
+    result = runScopedTarget === undefined
+      ? await executeTool(targetName, targetInput, ctxWithToolHooks)
+      : await executeRunScopedTool(ctxWithToolHooks, runScopedTarget, targetInput);
     if (result.startsWith('[Tool Error]') && input.ctx.extensionRuntime) {
       const fallbackResult = await tryMcpFallback(targetName, targetInput, input.ctx);
       if (fallbackResult !== undefined) result = fallbackResult;

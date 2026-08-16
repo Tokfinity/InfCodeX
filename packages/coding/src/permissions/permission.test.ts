@@ -15,6 +15,7 @@ import {
   isPlanModeAllowedPath,
   isToolCallAllowed,
 } from './permission.js';
+import type { RunScopedToolDefinition } from '../extensions/runtime-contract.js';
 import type {
   BashPrefixExtractor,
   BashPrefixResult,
@@ -49,6 +50,35 @@ afterEach(() => {
 });
 
 describe('plan mode writable path whitelist', () => {
+  it('FEATURE_294: run-scoped host tools resolve plan-mode admission through materialized metadata', () => {
+    const runScoped = new Map<string, RunScopedToolDefinition>([
+      ['space_report_export', {
+        name: 'space_report_export',
+        description: 'Export the current report.',
+        inputSchema: { type: 'object' },
+        capabilityId: 'host:lease-1:space_report_export',
+        sideEffect: 'readonly',
+        planModeAllowed: true,
+      }],
+      ['space_artifact_create', {
+        name: 'space_artifact_create',
+        description: 'Create a Space artifact.',
+        inputSchema: { type: 'object' },
+        capabilityId: 'host:lease-1:space_artifact_create',
+        sideEffect: 'mutates-state',
+        planModeAllowed: false,
+      }],
+    ]);
+    expect(
+      getPlanModeBlockReason('space_report_export', {}, undefined, undefined, runScoped),
+    ).toBeNull();
+    expect(
+      getPlanModeBlockReason('space_artifact_create', {}, undefined, undefined, runScoped),
+    ).toMatch(/not permitted in plan mode/);
+    // Fail-closed: without the run-scoped map the name is unknown and blocks.
+    expect(getPlanModeBlockReason('space_report_export', {})).toMatch(/side effects/);
+  });
+
   it('allows writes to the project plan mode document', () => {
     const projectRoot = createProjectRoot();
 

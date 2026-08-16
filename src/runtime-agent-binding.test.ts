@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createRuntimeAgentBindingService,
   type RuntimeAgentBindingHost,
+  type RuntimeBoundDefaultAgent,
   type RuntimeExecutionToolPolicy,
 } from './runtime-agent-binding.js';
 import type { RuntimeRunResult, RuntimeStartRunInput } from './sdk-runtime.js';
@@ -290,6 +291,93 @@ describe('FEATURE_267 Runtime local Agent binding', () => {
       workspace: { mode: 'managed' },
       toolPolicy: policy({ skillScripts: { reports: ['scripts/render.py'] } }),
     })).rejects.toThrow(/enabled together/i);
+  });
+});
+
+describe('FEATURE_269 Runtime host tool authorization', () => {
+  async function bindHostTools(
+    toolPolicy: RuntimeExecutionToolPolicy,
+  ): Promise<{ readonly binding: RuntimeBoundDefaultAgent; readonly guardrail: ToolGuardrail }> {
+    const service = createRuntimeAgentBindingService(host());
+    const owner = await service.openOwnerSession();
+    const binding = await service.bindDefault({
+      ownerSessionId: owner.ownerSessionId,
+      workspace: { mode: 'fixed', root: workspace },
+      toolPolicy,
+    });
+    await service.startDefault({
+      ownerSessionId: owner.ownerSessionId,
+      bindingId: binding.bindingId,
+      expectedExecutionPolicyRevision: binding.executionPolicyRevision,
+      sessionId: 'a2a-session',
+      input: { type: 'text', text: 'Use materialized host tools.' },
+    });
+    return { binding, guardrail: starts[0]?.options?.guardrails?.[0] as ToolGuardrail };
+  }
+
+  it('admits host capability ids exactly as hostTools authorizes', async () => {
+    const { binding, guardrail } = await bindHostTools(policy({ hostTools: ['host_search'] }));
+    const agent = createAgent({ name: 'test', instructions: '' });
+
+    expect(binding.effectiveTools).toContain('mcp_call');
+    expect(binding.effectiveTools).toContain('mcp_describe');
+    await expect(guardrail.beforeTool?.({
+      id: '1', name: 'mcp_call', input: { id: 'host:lease-1:host_search', args: {} },
+    }, { agent })).resolves.toEqual({ action: 'allow' });
+    await expect(guardrail.beforeTool?.({
+      id: '2', name: 'mcp_describe', input: { id: 'host:lease-2:host_search' },
+    }, { agent })).resolves.toEqual({ action: 'allow' });
+    await expect(guardrail.beforeTool?.({
+      id: '3', name: 'mcp_search', input: { server: 'host' },
+    }, { agent })).resolves.toEqual({ action: 'allow' });
+  });
+
+  it('rejects unauthorized host tools and non-tool capability kinds', async () => {
+    const { guardrail } = await bindHostTools(policy({ hostTools: ['host_search'] }));
+    const agent = createAgent({ name: 'test', instructions: '' });
+
+    await expect(guardrail.beforeTool?.({
+      id: '1', name: 'mcp_call', input: { id: 'host:lease-1:host_write', args: {} },
+    }, { agent })).resolves.toMatchObject({ action: 'block', reason: expect.stringMatching(/not admitted by the remote policy/i) });
+    await expect(guardrail.beforeTool?.({
+      id: '2', name: 'mcp_call', input: { id: 'host:lease-1' },
+    }, { agent })).resolves.toMatchObject({ action: 'block', reason: expect.stringMatching(/capability id is invalid/i) });
+    await expect(guardrail.beforeTool?.({
+      id: '3', name: 'mcp_read_resource', input: { id: 'host:lease-1:host_search' },
+    }, { agent })).resolves.toMatchObject({ action: 'block', reason: expect.stringMatching(/capability id is invalid/i) });
+  });
+
+  it('keeps the host pseudo-server closed without hostTools', async () => {
+    const { binding, guardrail } = await bindHostTools(policy({ mcp: { docs: ['list_files'] } }));
+    const agent = createAgent({ name: 'test', instructions: '' });
+
+    expect(binding.effectiveTools).toContain('mcp_search');
+    await expect(guardrail.beforeTool?.({
+      id: '1', name: 'mcp_search', input: { server: 'host' },
+    }, { agent })).resolves.toMatchObject({ action: 'block', reason: expect.stringMatching(/explicitly admitted server/i) });
+    await expect(guardrail.beforeTool?.({
+      id: '2', name: 'mcp_call', input: { id: 'host:lease-1:list_files', args: {} },
+    }, { agent })).resolves.toMatchObject({ action: 'block', reason: expect.stringMatching(/not admitted by the remote policy/i) });
+  });
+
+  it('rejects duplicate, wildcard, and malformed hostTools names', async () => {
+    const service = createRuntimeAgentBindingService(host());
+    const owner = await service.openOwnerSession();
+    await expect(service.bindDefault({
+      ownerSessionId: owner.ownerSessionId,
+      workspace: { mode: 'managed' },
+      toolPolicy: policy({ hostTools: ['host_search', 'host_search'] }),
+    })).rejects.toThrow(/duplicates/i);
+    await expect(service.bindDefault({
+      ownerSessionId: owner.ownerSessionId,
+      workspace: { mode: 'managed' },
+      toolPolicy: policy({ hostTools: ['*'] }),
+    })).rejects.toThrow(/wildcards/i);
+    await expect(service.bindDefault({
+      ownerSessionId: owner.ownerSessionId,
+      workspace: { mode: 'managed' },
+      toolPolicy: policy({ hostTools: ['1host'] }),
+    })).rejects.toThrow(/valid host tool names/i);
   });
 });
 

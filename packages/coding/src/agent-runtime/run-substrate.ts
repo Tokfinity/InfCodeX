@@ -219,6 +219,7 @@ import {
   getActiveToolDefinitions,
   getRuntimeActiveToolNames,
 } from './tool-resolution.js';
+import { listRunScopedTools, runScopedToolMap } from './run-scoped-tools.js';
 import { createRuntimeContextBudgetSnapshot } from './context-budget.js';
 import {
   emitPromptCacheDiagnosticRequest,
@@ -832,16 +833,26 @@ export async function runSubstrate(
     messages,
     options.context?.contextTokenSnapshot,
   );
+  // Run-scoped tools (daemon Host Tools bound by lease) are appended to the
+  // candidate name list ahead of exclude/policy filtering. They never enter
+  // the process-global registry, and later turns without the binding simply
+  // materialize nothing — removal falls out of per-turn assembly.
+  const runScopedToolDefs = listRunScopedTools(runtime);
+  const runScopedToolDefsByName = runScopedToolMap(runScopedToolDefs);
+  const baseAvailableTools = [
+    ...(runtimeDefaults?.activeTools ?? listToolDefinitions().map((tool) => tool.name)),
+    ...runScopedToolDefs.map((definition) => definition.name),
+  ];
   const contextAvailableTools = options.context?.skillScriptRunner
-    ? runtimeDefaults?.activeTools ?? listToolDefinitions().map((tool) => tool.name)
-    : (runtimeDefaults?.activeTools ?? listToolDefinitions().map((tool) => tool.name))
-      .filter((name) => name !== 'run_skill_script');
+    ? baseAvailableTools
+    : baseAvailableTools.filter((name) => name !== 'run_skill_script');
   const configuredActiveTools = applyToolVisibilityPolicy(
     filterExcludedTools(
       contextAvailableTools,
       options.context?.excludeTools,
     ),
     options.context?.toolVisibilityPolicy,
+    runScopedToolDefsByName,
   );
   const memoryRecallToolAllowed = configuredActiveTools.includes(MEMORY_RECALL_TOOL_NAME);
   const memoryIntentToolAllowed = configuredActiveTools.includes(MEMORY_INTENT_TOOL_NAME);
@@ -1442,6 +1453,7 @@ export async function runSubstrate(
         // FEATURE_221: white-label the kodax_manual description for this product.
         options.selfManual?.productName,
         options.context?.agentExecutorPlane !== undefined,
+        runScopedToolDefs,
       );
       // Direct Runner children do not pass through the managed-chain
       // workflowHost gate. Keep the model-visible schema truthful: without a

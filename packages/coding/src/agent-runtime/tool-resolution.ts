@@ -47,6 +47,8 @@
  */
 
 import type { KodaXRepoIntelligenceMode, KodaXToolVisibilityPolicy } from '../types.js';
+import type { RunScopedToolDefinition } from '../extensions/runtime-contract.js';
+import { toModelToolDefinition } from './run-scoped-tools.js';
 import {
   filterConstructionToolNames,
   filterAgentConstructionToolNames,
@@ -82,10 +84,11 @@ export function filterExcludedTools(
 export function applyToolVisibilityPolicy(
   tools: string[],
   policy: KodaXToolVisibilityPolicy | undefined,
+  runScopedTools?: ReadonlyMap<string, RunScopedToolDefinition>,
 ): string[] {
   if (!policy) return tools;
   return tools.filter((name) => {
-    const def = getRegisteredToolDefinition(name);
+    const def = getRegisteredToolDefinition(name) ?? runScopedTools?.get(name);
     if (!def) return false;
     return policy({
       name: def.name,
@@ -126,8 +129,16 @@ export function getActiveToolDefinitions(
   // FEATURE_221: white-label — re-brand the kodax_manual description per product.
   selfManualProductName?: string,
   hasAgentExecutorPlane = false,
+  runScopedTools?: readonly RunScopedToolDefinition[],
 ): ReturnType<typeof listToolDefinitions> {
-  const allTools = listToolDefinitions();
+  const registryTools = listToolDefinitions();
+  const registeredNames = new Set(registryTools.map((tool) => tool.name));
+  const allTools = [
+    ...registryTools,
+    ...(runScopedTools ?? [])
+      .filter((definition) => !registeredNames.has(definition.name))
+      .map(toModelToolDefinition),
+  ];
   if (activeToolNames.length === 0) {
     return [];
   }

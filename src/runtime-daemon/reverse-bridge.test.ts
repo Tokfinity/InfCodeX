@@ -398,6 +398,114 @@ describe('runtime daemon reverse bridge', () => {
     expect(notifications).toEqual([]);
     bridge.close();
   });
+
+  it('rejects host tool lease ids with reserved characters', () => {
+    const bridge = createRuntimeDaemonReverseBridge(() => {});
+    expect(() => bridge.registerHostTools({
+      leaseId: 'space:tools',
+      tools: [{
+        name: 'space_tool',
+        description: 'Reserved characters must be rejected',
+        inputSchema: { type: 'object' },
+        sideEffect: 'none',
+      }],
+    })).toThrow(/lease ID/i);
+    bridge.close();
+  });
+
+  it('materializes bound host tools as run-scoped definitions with fail-closed metadata', async () => {
+    const bridge = createRuntimeDaemonReverseBridge(() => {});
+    bridge.registerHostTools({
+      leaseId: 'space-tools',
+      tools: [
+        {
+          name: 'space_artifact_create',
+          description: 'Create an artifact in Space',
+          inputSchema: { type: 'object', properties: { title: { type: 'string' } } },
+          sideEffect: 'non_idempotent',
+        },
+        {
+          name: 'space_artifact_read',
+          description: 'Read an artifact',
+          inputSchema: { type: 'object' },
+          sideEffect: 'none',
+        },
+        {
+          name: 'space_verbose',
+          description: 'v'.repeat(400),
+          inputSchema: { type: 'object' },
+          sideEffect: 'idempotent',
+        },
+      ],
+    });
+    const runtime = bridge.createHostToolRuntime({
+      leaseId: 'space-tools',
+      sessionId: 'session-space',
+      runId: 'run-space',
+    });
+    const definitions = runtime.listRunTools?.('mcp') ?? [];
+    expect(definitions).toHaveLength(3);
+    expect(definitions.find((definition) => definition.name === 'space_artifact_create')).toMatchObject({
+      capabilityId: 'host:space-tools:space_artifact_create',
+      sideEffect: 'mutates-state',
+      planModeAllowed: false,
+    });
+    expect(definitions.find((definition) => definition.name === 'space_artifact_read')).toMatchObject({
+      sideEffect: 'readonly',
+      planModeAllowed: true,
+    });
+    const verbose = definitions.find((definition) => definition.name === 'space_verbose');
+    expect(verbose !== undefined && verbose.description.length <= 200).toBe(true);
+    expect(runtime.listRunTools?.('github') ?? []).toHaveLength(0);
+
+    // Revoking the lease removes the materialized surface fail-closed across
+    // every discovery channel (run tools, prompt context, search, describe).
+    expect(bridge.revokeHostTools('space-tools')).toBe(true);
+    expect(runtime.listRunTools?.('mcp') ?? []).toHaveLength(0);
+    await expect(runtime.getCapabilityPromptContext('mcp')).resolves.toBeUndefined();
+    await expect(runtime.searchCapabilities('mcp', 'artifact', { kind: 'tool', server: 'host' }))
+      .resolves.toHaveLength(0);
+    await expect(runtime.describeCapability('mcp', 'host:space-tools:space_artifact_create'))
+      .resolves.toBeUndefined();
+    bridge.close();  });
+
+  it('advertises a content-stable host capability catalog line', async () => {
+    const bridge = createRuntimeDaemonReverseBridge(() => {});
+    const register = () => bridge.registerHostTools({
+      leaseId: 'space-tools',
+      tools: [{
+        name: 'space_artifact_create',
+        description: 'Create an artifact in Space',
+        inputSchema: { type: 'object' },
+        sideEffect: 'non_idempotent',
+      }],
+    });
+    register();
+    const runtime = bridge.createHostToolRuntime({
+      leaseId: 'space-tools',
+      sessionId: 'session-space',
+      runId: 'run-space',
+    });
+    const first = await runtime.getCapabilityPromptContext('mcp');
+    expect(first).toBeDefined();
+    expect(first).toContain('## Host Capability Provider (run-bound)');
+    expect(first).toContain('"host": 1 tools / 0 resources / 0 prompts');
+    expect(first).toContain('space_artifact_create');
+    const revision = /revision=([0-9a-f]+)/.exec(first ?? '')?.[1];
+    expect(revision).toBeDefined();
+
+    // Same tool set under a fresh binding keeps the same revision (the hash
+    // covers content, not the per-run lease id).
+    bridge.revokeHostTools('space-tools');
+    register();
+    const second = await bridge.createHostToolRuntime({
+      leaseId: 'space-tools',
+      sessionId: 'session-space',
+      runId: 'run-space-2',
+    }).getCapabilityPromptContext('mcp');
+    expect(/revision=([0-9a-f]+)/.exec(second ?? '')?.[1]).toBe(revision);
+    bridge.close();
+  });
 });
 
 function readString(value: unknown, key: string): string {

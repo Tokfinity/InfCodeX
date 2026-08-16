@@ -1384,3 +1384,15 @@ The `v0.8.5.md` vision document (F007/030/093) slid wholesale to `v0.9.5.md`; th
 `v0.8.5.md` filename is now the FEATURE_265 home. Displaced tombstones (`v0.9.5`
 archived staging, `v0.8.15` cancelled FEATURE_125 design) were preserved verbatim in
 `FEATURES_ARCHIVED.md`.
+
+## 2026-08-16: FEATURE_294 — Host Tools first-class visibility
+
+- Status: Implemented (Unreleased, targets `v0.7.89`)
+- Design: [v0.7.89.md](features/v0.7.89.md)
+- Summary: run-bound host tools materialize into the agent tool table as
+  run-scoped definitions (never in `TOOL_REGISTRY`), the cached capability
+  catalog gains a `## Host Capability Provider (run-bound)` line with a
+  content-hash revision, lease revoke removes the surface fail-closed,
+  bindings with colliding names are rejected up front, and A2A can
+  authorize `host:` capability ids. Capability `runBoundHostTools` bumps
+  to `2` (`materializedAgentTools`).

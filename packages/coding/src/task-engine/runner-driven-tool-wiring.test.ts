@@ -435,3 +435,48 @@ describe('FEATURE_168 — registry orphan check (no registered tool falls off Wo
     expect(orphans, 'tools registered but exposed to no AMA role').toEqual([]);
   });
 });
+
+describe('FEATURE_294 — run-scoped host tools on the AMA managed path', () => {
+  function makeHostCtx(): KodaXToolExecutionContext {
+    return {
+      ...makeCtx(true, true),
+      extensionRuntime: {
+        listRunTools: () => [{
+          name: 'space_artifact_create',
+          description: 'Create a Space artifact.',
+          inputSchema: { type: 'object', properties: { title: { type: 'string' } } },
+          capabilityId: 'host:lease-ama:space_artifact_create',
+          sideEffect: 'mutates-state',
+          planModeAllowed: false,
+        }],
+        executeCapability: async (providerId, capabilityId) => ({
+          kind: 'tool' as const,
+          content: `host-called:${providerId}:${capabilityId}`,
+        }),
+      },
+    };
+  }
+
+  it('worker materializes run-scoped host tools next to the registry set', () => {
+    const chain = buildRunnerAgentChain(makeHostCtx(), makeRecorder());
+    const names = (chain.worker.tools ?? []).map((tool) => (tool as { name: string }).name);
+    expect(names).toContain('space_artifact_create');
+    // Plain runs without a host binding keep the surface unchanged.
+    expect(getAgentToolNames('worker', true, true)).not.toContain('space_artifact_create');
+  });
+
+  it('materialized host tool execution routes through the capability channel', async () => {
+    const chain = buildRunnerAgentChain(makeHostCtx(), makeRecorder());
+    const tools = (chain.worker.tools ?? []) as Array<{
+      name: string;
+      execute?: (input: Record<string, unknown>, ctx: { agent: unknown; toolCallId: string }) => Promise<{ content: string | readonly unknown[] }>;
+    }>;
+    const hostTool = tools.find((tool) => tool.name === 'space_artifact_create');
+    expect(hostTool?.execute, 'worker missing executable host tool').toBeTypeOf('function');
+    const result = await hostTool!.execute!(
+      { title: 'Report' },
+      { agent: chain.worker, toolCallId: 'host-1' },
+    );
+    expect(String(result.content)).toContain('host-called:mcp:host:lease-ama:space_artifact_create');
+  });
+});

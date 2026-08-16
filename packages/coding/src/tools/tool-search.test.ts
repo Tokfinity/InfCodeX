@@ -141,6 +141,27 @@ describe('FEATURE_189 B.2 — tool_search handler', () => {
     expect(getUnlockedDeferredTools(ctx).has('module_context')).toBe(true);
   });
 
+  it('FEATURE_294: select:<hostTool> resolves a run-scoped host tool schema', async () => {
+    const out = await toolSearchHandler(
+      { query: 'select:space_artifact_create' },
+      {
+        ...makeContext(),
+        extensionRuntime: {
+          listRunTools: () => [{
+            name: 'space_artifact_create',
+            description: 'Create a Space artifact.',
+            inputSchema: { type: 'object', properties: { title: { type: 'string' } } },
+            capabilityId: 'host:lease-1:space_artifact_create',
+            sideEffect: 'mutates-state',
+            planModeAllowed: false,
+          }],
+        },
+      },
+    );
+    expect(out).toContain('<function>');
+    expect(out).toContain('"name":"space_artifact_create"');
+  });
+
   it('FEATURE_221: white-labels the kodax_manual description on a select: lookup', async () => {
     // Default: the raw KodaX description (with config paths) is returned.
     const plain = await toolSearchHandler({ query: 'select:kodax_manual' }, makeContext());

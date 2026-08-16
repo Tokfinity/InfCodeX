@@ -3,6 +3,7 @@ import {
   DEFAULT_CLASSIFIER_TIMEOUT_MS,
   DEFAULT_SPECULATIVE_WINDOW_MS,
   getActiveExtensionRuntime,
+  listTools,
 } from "@kodax-ai/coding";
 import type {
   CapabilitySearchSnapshot,
@@ -2036,11 +2037,18 @@ async function bindTrustedRunInput(input: {
           sessionId: input.sessionId,
           runId: input.trustedRunId,
         });
+  const hostToolLeaseId =
+    hostToolBinding === undefined
+      ? undefined
+      : requireStringField(hostToolBinding, "leaseId");
+  if (hostToolLeaseId !== undefined) {
+    rejectHostToolNameCollisions(input.reverseBridge, hostToolLeaseId);
+  }
   const hostToolRuntime =
     hostToolBinding === undefined
       ? undefined
       : input.reverseBridge.createHostToolRuntime({
-          leaseId: requireStringField(hostToolBinding, "leaseId"),
+          leaseId: hostToolLeaseId,
           sessionId: input.sessionId,
           runId: input.trustedRunId,
         });
@@ -2098,6 +2106,27 @@ async function bindTrustedRunInput(input: {
         }
       : {}),
   };
+}
+
+function rejectHostToolNameCollisions(
+  reverseBridge: RuntimeDaemonReverseBridge,
+  leaseId: string,
+): void {
+  const lease = reverseBridge.getHostTools(leaseId);
+  if (lease === undefined) return; // createHostToolRuntime reports the missing lease.
+  const registered = new Set(listTools());
+  const collisions = lease.tools
+    .map((tool) => tool.name)
+    .filter((name) => registered.has(name))
+    .sort();
+  if (collisions.length > 0) {
+    throw daemonError(
+      "invalid_params",
+      `Host tool names collide with registered tools and the run binding is rejected: ${collisions.join(
+        ", ",
+      )}.`,
+    );
+  }
 }
 
 function isActiveRuntimeRunPhase(phase: string): boolean {
@@ -2370,7 +2399,8 @@ function runtimeDaemonCapabilities(
       requestTimeoutMs: reverseBridgeLimits.callTimeoutMs,
     },
     runBoundHostTools: {
-      version: 1,
+      version: 2,
+      materializedAgentTools: true,
       registrationConnectionBound: !reverseBridgeResume,
       stableClientResume: reverseBridgeResume,
       invocationStatusQuery: reverseBridgeResume,
@@ -2960,8 +2990,34 @@ function mergeExtensionRuntimeContracts(
       return base.getCapabilityPrompt(providerId, capabilityId, args);
     },
     getCapabilityPromptContext(providerId) {
-      return base.getCapabilityPromptContext(providerId);
+      return Promise.all([
+        base.getCapabilityPromptContext(providerId),
+        host.getCapabilityPromptContext(providerId),
+      ]).then((contexts) => {
+        const content = contexts
+          .filter(
+            (value): value is string =>
+              typeof value === "string" && value.trim().length > 0,
+          )
+          .join("\n\n");
+        return content.length > 0 ? content : undefined;
+      });
     },
+    ...(host.listRunTools !== undefined || base.listRunTools !== undefined
+      ? {
+          listRunTools(providerId: string) {
+            const seen = new Set<string>();
+            return [
+              ...(host.listRunTools?.(providerId) ?? []),
+              ...(base.listRunTools?.(providerId) ?? []),
+            ].filter((definition) => {
+              if (seen.has(definition.name)) return false;
+              seen.add(definition.name);
+              return true;
+            });
+          },
+        }
+      : {}),
     ...(base.getDefaults !== undefined
       ? { getDefaults: () => base.getDefaults!() }
       : {}),

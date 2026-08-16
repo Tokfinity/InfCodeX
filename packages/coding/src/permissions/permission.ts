@@ -22,8 +22,9 @@ import {
 } from '@kodax-ai/agent';
 import type { BashPrefixExtractor, BashPrefixResult } from '../guardrails/auto-mode/bash-prefix-extractor.js';
 import {
-  isToolPlanModeAllowed,
+isToolPlanModeAllowed,
 } from '../tools/registry.js';
+import type { RunScopedToolDefinition } from '../extensions/runtime-contract.js';
 import {
   BASH_SAFE_READ_COMMANDS,
   BASH_WRITE_COMMANDS,
@@ -2397,16 +2398,17 @@ export function getPlanModeBlockReason(
   input: Record<string, unknown>,
   projectRoot?: string,
   executionCwd = projectRoot,
+  runScopedTools?: ReadonlyMap<string, RunScopedToolDefinition>,
 ): string | null {
   const allowedLocations = formatPlanModeAllowedLocations(projectRoot);
 
   // (1) + (2): metadata says this tool is permitted in plan mode. Covers
   // read-only tools (no `planModeAllowed` flag needed) and explicitly
-  // plan-allowed mutating tools.
-  if (isToolPlanModeAllowed(toolName)) {
+  // plan-allowed mutating tools. Run-scoped host tools resolve through
+  // the optional map first (fail-closed when absent).
+  if (isToolPlanModeAllowed(toolName, runScopedTools)) {
     return null;
   }
-
   // (3) Path-aware FS-write escape. Tools in this set declare a `path`
   // input and mutate the filesystem; permit when the path is the
   // project plan doc or the system temp dir.

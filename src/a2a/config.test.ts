@@ -127,6 +127,32 @@ describe('FEATURE_267/268 A2A integration config', () => {
     })).toThrow(/skillScripts/i);
   });
 
+  it('admits exact hostTools and rejects duplicates, wildcards, and invalid names', () => {
+    const document = (hostTools: unknown) => parseA2AIntegrationDocument({
+      version: 2,
+      agents: {},
+      server: {
+        execution: {
+          kind: 'runtime-default',
+          toolPolicy: {
+            workspace: 'write', process: 'deny', network: { mode: 'deny' },
+            tools: [], mcp: {}, skillScripts: {}, subagents: 'deny',
+            ...(hostTools === undefined ? {} : { hostTools }),
+          },
+        },
+        published: published(),
+        authentication: authentication(),
+        dataDir: '~/.kodax/a2a/tasks',
+      },
+    });
+    expect(document(['host_search', 'host_write']).server?.execution.toolPolicy.hostTools)
+      .toEqual(['host_search', 'host_write']);
+    expect(document(undefined).server?.execution.toolPolicy.hostTools).toBeUndefined();
+    expect(() => document(['host_search', 'host_search'])).toThrow(/duplicates/i);
+    expect(() => document(['*'])).toThrow(/wildcard/i);
+    expect(() => document(['1host'])).toThrow(/valid host tool names/i);
+  });
+
   it('rejects credentials embedded in outbound and public A2A URLs', () => {
     expect(() => parseA2AIntegrationDocument({
       version: 2,

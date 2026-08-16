@@ -24,6 +24,7 @@
 import type { KodaXToolDefinition } from '@kodax-ai/llm';
 import type { LocalToolDefinition, ToolHandlerSync } from './types.js';
 import { getToolDefinition } from './index.js';
+import { lookupRunScopedTool, toModelToolDefinition } from '../agent-runtime/run-scoped-tools.js';
 import {
   DEFERRED_TOOL_HINTS,
   isDeferredTool,
@@ -64,7 +65,10 @@ function parseQuery(rawQuery: string): { mode: 'select' | 'keyword'; names: stri
   return { mode: 'keyword', names: [], required, loose };
 }
 
-function resolveSelectNames(names: readonly string[]): string[] {
+function resolveSelectNames(
+  names: readonly string[],
+  context: object,
+): string[] {
   const resolved: string[] = [];
   const seen = new Set<string>();
   for (const n of names) {
@@ -73,11 +77,10 @@ function resolveSelectNames(names: readonly string[]): string[] {
     if (isDeferredTool(n)) resolved.push(n);
     // For non-deferred tools requested by name, still resolve and emit —
     // useful when the LLM is uncertain whether a tool is deferred.
-    else if (getToolDefinition(n)) resolved.push(n);
+    else if (getToolDefinition(n) ?? lookupRunScopedTool((context as { extensionRuntime?: Parameters<typeof lookupRunScopedTool>[0] }).extensionRuntime, n)) resolved.push(n);
   }
   return resolved;
 }
-
 function searchKeywords(required: readonly string[], loose: readonly string[], maxResults: number): string[] {
   const deferredDefinitions = Object.keys(DEFERRED_TOOL_HINTS)
     .map((name) => getToolDefinition(name))
@@ -106,8 +109,13 @@ function buildResult(
       + '. Use query form `select:NAME` to fetch a specific schema.';
   }
   const lines: string[] = [];
+  const extensionRuntime = (context as { extensionRuntime?: Parameters<typeof lookupRunScopedTool>[0] }).extensionRuntime;
   for (const name of resolved) {
-    const def = getToolDefinition(name);
+    let def = getToolDefinition(name);
+    if (!def) {
+      const runScoped = lookupRunScopedTool(extensionRuntime, name);
+      if (runScoped) def = toModelToolDefinition(runScoped);
+    }
     if (!def) {
       lines.push(`<!-- ${name}: not registered (skipped) -->`);
       continue;
@@ -140,7 +148,7 @@ export const toolSearchHandler: ToolHandlerSync = async (input, context) => {
   const parsed = parseQuery(query);
   if (parsed.mode === 'select') {
     return buildResult(
-      resolveSelectNames(parsed.names),
+      resolveSelectNames(parsed.names, context),
       context,
       context.selfManual?.productName,
     );

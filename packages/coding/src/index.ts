@@ -439,6 +439,14 @@ export type {
   ToolOutputGcResult,
 } from './tools/index.js';
 
+export {
+  listRunScopedTools,
+  runScopedToolMap,
+  lookupRunScopedTool,
+  toModelToolDefinition,
+  executeRunScopedTool,
+} from './agent-runtime/run-scoped-tools.js';
+export type { RunScopedToolDefinition } from './extensions/runtime-contract.js';
 // ============== Repo Intelligence ==============
 
 export type {
