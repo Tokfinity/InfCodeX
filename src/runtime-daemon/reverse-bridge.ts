@@ -808,6 +808,20 @@ function validateHostToolDescriptor(tool: RuntimeHostToolDescriptor): void {
   if (!tool.name || !tool.description || !tool.inputSchema) {
     throw bridgeError('invalid_params', 'Host tool descriptors require name, description, and inputSchema.');
   }
+  // Minimal JSON-Schema shape gate (fail-closed): the descriptor's schema is
+  // materialized straight into the model tool table, so it must at least be a
+  // plain object; an optional `type` must be 'object' and an optional
+  // `properties` must itself be an object.
+  const schema = tool.inputSchema as Record<string, unknown> | null;
+  if (
+    typeof schema !== 'object'
+    || schema === null
+    || Array.isArray(schema)
+    || (schema.type !== undefined && schema.type !== 'object')
+    || (schema.properties !== undefined && typeof schema.properties !== 'object')
+  ) {
+    throw bridgeError('invalid_params', `Host tool inputSchema must be a JSON object schema: ${tool.name}.`);
+  }
   if (!['none', 'idempotent', 'non_idempotent'].includes(tool.sideEffect)) {
     throw bridgeError('invalid_params', `Invalid host tool sideEffect for ${tool.name}.`);
   }

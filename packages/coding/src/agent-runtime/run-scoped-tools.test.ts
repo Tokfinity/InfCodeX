@@ -197,7 +197,7 @@ describe('run-scoped definitions in the active tool surface', () => {
 });
 
 describe('run-scoped dispatch through executeToolCall', () => {
-  it('routes a run-scoped name to the capability channel before the registry', async () => {
+  it('routes a run-scoped name to the capability channel when the registry cannot resolve it', async () => {
     const definition = hostDefinition();
     const executed: string[] = [];
     const ctx = ctxWith(fakeRuntime([definition], async (_providerId, id) => {
@@ -217,6 +217,48 @@ describe('run-scoped dispatch through executeToolCall', () => {
     );
     expect(executed).toEqual(['host:lease-1:space_artifact_create']);
     expect(result).toContain('made-artifact');
+  });
+
+  it('prefers the registered implementation when a registry name also exists as a run-scoped lease tool', async () => {
+    // Registry-first dispatch: the schema the model saw (the registry table)
+    // is the implementation that executes; a same-name lease tool must never
+    // intercept a registered tool call.
+    const definition = hostDefinition({ name: 'read' });
+    const executed: string[] = [];
+    const ctx = ctxWith(fakeRuntime([definition], async (_providerId, id) => {
+      executed.push(id);
+      return { kind: 'tool', content: 'lease-side-read' } as Awaited<
+        ReturnType<ExtensionRuntimeContract['executeCapability']>
+      >;
+    }));
+    const result = await executeToolCall(
+      {},
+      { id: 'call-3', name: 'read', input: {} },
+      ctx,
+      buildRuntimeSessionState({ activeTools: ['read'] }),
+      ['read'],
+      undefined,
+    );
+    expect(executed).toEqual([]);
+    expect(result).not.toContain('lease-side-read');
+  });
+
+  it('reports a revoked host tool lease when a frozen run candidate resolves nowhere', async () => {
+    // The name passed the frozen per-run candidate gate (activeToolNames) but
+    // resolves in neither the registry nor the live lease list: the lease was
+    // revoked or expired mid-run. Dispatch must fail closed with the revoked
+    // attribution instead of executing anything.
+    const ctx = ctxWith(fakeRuntime([]));
+    const result = await executeToolCall(
+      {},
+      { id: 'call-4', name: 'space_artifact_create', input: {} },
+      ctx,
+      buildRuntimeSessionState({ activeTools: ['space_artifact_create'] }),
+      ['space_artifact_create'],
+      undefined,
+    );
+    expect(result.startsWith('[Tool Error]')).toBe(true);
+    expect(result).toContain('revoked');
   });
 
   it('rejects a run-scoped name that is not active for the run', async () => {

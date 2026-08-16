@@ -307,16 +307,12 @@ export function isToolPlanModeAllowed(
   name: string,
   runScopedTools?: ReadonlyMap<string, RunScopedToolDefinition>,
 ): boolean {
-  const def =
-    getActiveToolRegistration(name)
-      ?? BUILTIN_TOOL_DEFINITIONS.find((entry) => entry.name === name)
-      ?? runScopedTools?.get(name);
+  const def = runScopedOrRegisteredDefinition(name, runScopedTools);
   if (!def) return false;
   if (def.planModeAllowed === true) return true;
   if (def.planModeAllowed === false) return false;
   return def.sideEffect === 'readonly';
 }
-
 function runScopedOrRegisteredDefinition(
   name: string,
   runScopedTools: ReadonlyMap<string, RunScopedToolDefinition> | undefined,
@@ -325,9 +321,9 @@ function runScopedOrRegisteredDefinition(
     ?? BUILTIN_TOOL_DEFINITIONS.find((entry) => entry.name === name)
     ?? runScopedTools?.get(name);
 }
+
 /**
- * v0.7.42 — does this tool mutate the filesystem?
- *
+ * v0.7.42 — does this tool mutate the filesystem? *
  * Wraps `sideEffect === 'mutates-fs'`. Used by the REPL permission
  * pipeline's gitRoot guard and Space's permission broker. Replaces the
  * previous practice of hardcoding `Set(["write", "edit"])`-style lookups
@@ -363,9 +359,9 @@ export function isToolNetworkRead(
   const def = runScopedOrRegisteredDefinition(name, runScopedTools);
   return def?.sideEffect === 'reads-network';
 }
+
 /**
- * v0.7.42 — does this tool mutate anything (FS, shell, network, state)?
- *
+ * v0.7.42 — does this tool mutate anything (FS, shell, network, state)? *
  * True for every `sideEffect` except `'readonly'`. Fail-closed (unknown
  * names return `true` — assumed mutating until proven otherwise).
  */
@@ -377,6 +373,7 @@ export function isToolMutation(
   if (!def) return true;
   return def.sideEffect !== 'readonly';
 }
+
 export function getRequiredToolParams(name: string): string[] {
   return getActiveToolRegistration(name)?.requiredParams ?? [];
 }

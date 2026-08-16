@@ -23,8 +23,13 @@
 
 import type { KodaXToolDefinition } from '@kodax-ai/llm';
 import type { LocalToolDefinition, ToolHandlerSync } from './types.js';
+import type { KodaXToolExecutionContext } from '../types.js';
 import { getToolDefinition } from './index.js';
 import { lookupRunScopedTool, toModelToolDefinition } from '../agent-runtime/run-scoped-tools.js';
+
+/** Minimal context shape tool_search needs: the run's extension runtime for run-scoped lookups. */
+type ToolSearchContext = Pick<KodaXToolExecutionContext, 'extensionRuntime'>;
+
 import {
   DEFERRED_TOOL_HINTS,
   isDeferredTool,
@@ -67,7 +72,7 @@ function parseQuery(rawQuery: string): { mode: 'select' | 'keyword'; names: stri
 
 function resolveSelectNames(
   names: readonly string[],
-  context: object,
+  context: ToolSearchContext,
 ): string[] {
   const resolved: string[] = [];
   const seen = new Set<string>();
@@ -77,10 +82,11 @@ function resolveSelectNames(
     if (isDeferredTool(n)) resolved.push(n);
     // For non-deferred tools requested by name, still resolve and emit —
     // useful when the LLM is uncertain whether a tool is deferred.
-    else if (getToolDefinition(n) ?? lookupRunScopedTool((context as { extensionRuntime?: Parameters<typeof lookupRunScopedTool>[0] }).extensionRuntime, n)) resolved.push(n);
+    else if (getToolDefinition(n) ?? lookupRunScopedTool(context.extensionRuntime, n)) resolved.push(n);
   }
   return resolved;
 }
+
 function searchKeywords(required: readonly string[], loose: readonly string[], maxResults: number): string[] {
   const deferredDefinitions = Object.keys(DEFERRED_TOOL_HINTS)
     .map((name) => getToolDefinition(name))
@@ -100,7 +106,7 @@ function formatToolAsFunctionBlock(def: KodaXToolDefinition): string {
 
 function buildResult(
   resolved: readonly string[],
-  context: object,
+  context: ToolSearchContext,
   selfManualProductName?: string,
 ): string {
   if (resolved.length === 0) {
@@ -109,7 +115,7 @@ function buildResult(
       + '. Use query form `select:NAME` to fetch a specific schema.';
   }
   const lines: string[] = [];
-  const extensionRuntime = (context as { extensionRuntime?: Parameters<typeof lookupRunScopedTool>[0] }).extensionRuntime;
+  const extensionRuntime = context.extensionRuntime;
   for (const name of resolved) {
     let def = getToolDefinition(name);
     if (!def) {

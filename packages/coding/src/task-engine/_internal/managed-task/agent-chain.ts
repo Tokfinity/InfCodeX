@@ -302,6 +302,37 @@ function buildManagedToolCallBridge(
         };
       }
 
+      // Registry-first mirrors tool-dispatch and the model-facing table
+      // (tool-resolution): a tool registered after the binding wins, so the
+      // schema the model saw is the implementation that executes. Run-scoped
+      // host tools are the fallback for names the registry cannot resolve.
+      const registration = getRegisteredToolDefinition(parsed.name);
+      if (registration) {
+        if (registration.handler.constructor.name === 'AsyncGeneratorFunction') {
+          return {
+            content: `[Tool Error] ${parsed.name}: Tool requires a managed-path wrapper and cannot be called through ${TOOL_CALL_NAME}.`,
+            isError: true,
+          };
+        }
+        const runnable = wrapCodingToolAsRunnable(
+          targetDefinition,
+          registration.handler as (
+            targetInput: Record<string, unknown>,
+            execCtx: KodaXToolExecutionContext,
+          ) => Promise<string>,
+          ctx,
+          budget,
+          events,
+        );
+        const targetResult = await runnable.execute(parsed.input, targetRunnerCtx);
+        const content = resultContentToText(targetResult.content);
+        return {
+          content,
+          isError: targetResult.isError === true || content.startsWith('[Tool Error]'),
+          metadata: targetResult.metadata,
+        };
+      }
+
       const runScopedTarget = lookupRunScopedTool(ctx.extensionRuntime, parsed.name);
       if (runScopedTarget !== undefined) {
         const content = await executeRunScopedTool(ctx, runScopedTarget, parsed.input);
@@ -311,35 +342,9 @@ function buildManagedToolCallBridge(
         };
       }
 
-      const registration = getRegisteredToolDefinition(parsed.name);
-      if (!registration) {
-        return {
-          content: `[Tool Error] ${parsed.name}: Tool is not registered.`,
-          isError: true,
-        };
-      }
-      if (registration.handler.constructor.name === 'AsyncGeneratorFunction') {
-        return {
-          content: `[Tool Error] ${parsed.name}: Tool requires a managed-path wrapper and cannot be called through ${TOOL_CALL_NAME}.`,
-          isError: true,
-        };
-      }
-      const runnable = wrapCodingToolAsRunnable(
-        targetDefinition,
-        registration.handler as (
-          targetInput: Record<string, unknown>,
-          execCtx: KodaXToolExecutionContext,
-        ) => Promise<string>,
-        ctx,
-        budget,
-        events,
-      );
-      const targetResult = await runnable.execute(parsed.input, targetRunnerCtx);
-      const content = resultContentToText(targetResult.content);
       return {
-        content,
-        isError: targetResult.isError === true || content.startsWith('[Tool Error]'),
-        metadata: targetResult.metadata,
+        content: `[Tool Error] ${parsed.name}: Tool is not registered or bound to this run.`,
+        isError: true,
       };
     },
   };

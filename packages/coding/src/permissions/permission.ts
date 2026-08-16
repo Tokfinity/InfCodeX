@@ -21,9 +21,7 @@ import {
   resolveExecutionPath,
 } from '@kodax-ai/agent';
 import type { BashPrefixExtractor, BashPrefixResult } from '../guardrails/auto-mode/bash-prefix-extractor.js';
-import {
-isToolPlanModeAllowed,
-} from '../tools/registry.js';
+import { isToolPlanModeAllowed } from '../tools/registry.js';
 import type { RunScopedToolDefinition } from '../extensions/runtime-contract.js';
 import {
   BASH_SAFE_READ_COMMANDS,
