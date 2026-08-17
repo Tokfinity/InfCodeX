@@ -76,6 +76,7 @@ import { buildFallbackRoutingDecision, type ReasoningPlan } from '../reasoning.j
 // result.json / ... ) land inside a temp folder instead of polluting
 // the repo's cwd with `.agent/managed-tasks/` entries.
 let testWorkspaceRoot: string;
+const testActorControllers: Array<Awaited<ReturnType<typeof createAgentActorController>>> = [];
 
 beforeAll(async () => {
   testWorkspaceRoot = await mkdtemp(path.join(os.tmpdir(), 'kodax-runner-driven-'));
@@ -90,6 +91,11 @@ afterAll(async () => {
       retryDelay: 100,
     }).catch(() => undefined);
   }
+});
+
+afterEach(async () => {
+  await Promise.all(testActorControllers.splice(0).map((controller) =>
+    controller.shutdown('test complete')));
 });
 
 function makeCtx(): KodaXToolExecutionContext {
@@ -3293,6 +3299,7 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
 
   it('injects the current Actor capacity as dynamic context outside System', async () => {
     const controller = await createAgentActorController();
+    testActorControllers.push(controller);
     const options = makeOptions();
     options.context = {
       ...options.context,
@@ -3302,28 +3309,32 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
     let transcript: readonly KodaXMessage[] = [];
     let ephemeralSuffix: KodaXEphemeralSuffix | undefined;
 
-    await runManagedTaskViaRunner(
-      options,
-      'Review five independent dimensions.',
-      async (messages, _tools, system, suffix) => {
-        transcript = messages;
-        systemPrompt = system;
-        ephemeralSuffix = suffix;
-        return { textBlocks: [{ text: 'done' }], toolBlocks: [] };
-      },
-    );
+    try {
+      await runManagedTaskViaRunner(
+        options,
+        'Review five independent dimensions.',
+        async (messages, _tools, system, suffix) => {
+          transcript = messages;
+          systemPrompt = system;
+          ephemeralSuffix = suffix;
+          return { textBlocks: [{ text: 'done' }], toolBlocks: [] };
+        },
+      );
 
-    expect(ephemeralSuffix).toBeUndefined();
-    const managedContext = transcript.find((message) =>
-      message._source === 'managed-run-context');
-    expect(managedContext?.content).toContain('This Actor tree has 4 total concurrency slots');
-    expect(managedContext?.content).toContain('0 non-root turns are active');
-    expect(managedContext?.content).toContain('3 child start slots are available');
-    expect(managedContext?._synthetic).toBe(true);
-    expect(transcript.indexOf(managedContext!)).toBeLessThan(
-      transcript.findIndex((message) => message._synthetic !== true && message.role === 'user'),
-    );
-    expect(systemPrompt).not.toContain('ACTOR CAPACITY (authoritative runtime fact):');
+      expect(ephemeralSuffix).toBeUndefined();
+      const managedContext = transcript.find((message) =>
+        message._source === 'managed-run-context');
+      expect(managedContext?.content).toContain('This Actor tree has 4 total concurrency slots');
+      expect(managedContext?.content).toContain('0 non-root turns are active');
+      expect(managedContext?.content).toContain('3 child start slots are available');
+      expect(managedContext?._synthetic).toBe(true);
+      expect(transcript.indexOf(managedContext!)).toBeLessThan(
+        transcript.findIndex((message) => message._synthetic !== true && message.role === 'user'),
+      );
+      expect(systemPrompt).not.toContain('ACTOR CAPACITY (authoritative runtime fact):');
+    } finally {
+      await controller.shutdown('test complete');
+    }
   });
 
   it('refreshes changed Actor capacity before the next provider call', async () => {
@@ -3340,6 +3351,7 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
       }),
     };
     const controller = await createAgentActorController({ executor });
+    testActorControllers.push(controller);
     const options = {
       ...makeOptions(),
       session: { id: sessionId },
@@ -3352,63 +3364,72 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
     const transcripts: Array<readonly KodaXMessage[]> = [];
     let call = 0;
 
-    await runManagedTaskViaRunner(
-      options,
-      'Run one parallel review.',
-      async (messages, _tools, _system, suffix) => {
-        transcripts.push([...messages]);
-        suffixes.push(suffix);
-        call += 1;
-        if (call === 1) {
-          getMessageQueue().enqueue({
-            agentId: queueAgentId,
-            priority: 'user',
-            mode: 'prompt',
-            content: 'Keep this correction as the latest context.',
-          });
-          return {
-            textBlocks: [],
-            toolBlocks: [{
-              type: 'tool_use',
-              id: 'spawn-cache-state',
-              name: 'spawn_agent',
-              input: {
-                task_name: 'cache-state-lane',
-                objective: 'Wait until the parent observes capacity.',
-              },
-            }],
-          };
-        }
-        if (call === 2) {
-          return {
-            textBlocks: [],
-            toolBlocks: [{
-              type: 'tool_use',
-              id: 'interrupt-cache-state',
-              name: 'interrupt_agent',
-              input: { target: '/root/cache-state-lane' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'done' }], toolBlocks: [] };
-      },
-    );
+    try {
+      await runManagedTaskViaRunner(
+        options,
+        'Run one parallel review.',
+        async (messages, _tools, _system, suffix) => {
+          transcripts.push([...messages]);
+          suffixes.push(suffix);
+          call += 1;
+          if (call === 1) {
+            getMessageQueue().enqueue({
+              agentId: queueAgentId,
+              priority: 'user',
+              mode: 'prompt',
+              content: 'Keep this correction as the latest context.',
+            });
+            return {
+              textBlocks: [],
+              toolBlocks: [{
+                type: 'tool_use',
+                id: 'spawn-cache-state',
+                name: 'spawn_agent',
+                input: {
+                  task_name: 'cache-state-lane',
+                  objective: 'Wait until the parent observes capacity.',
+                },
+              }],
+            };
+          }
+          if (call === 2) {
+            return {
+              textBlocks: [],
+              toolBlocks: [{
+                type: 'tool_use',
+                id: 'interrupt-cache-state',
+                name: 'interrupt_agent',
+                input: { target: '/root/cache-state-lane' },
+              }],
+            };
+          }
+          return { textBlocks: [{ text: 'done' }], toolBlocks: [] };
+        },
+      );
 
-    expect(suffixes.every((suffix) => suffix === undefined)).toBe(true);
-    expect(transcripts[0]?.find((message) => message._source === 'managed-run-context')?.content)
-      .toContain('0 non-root turns are active');
-    expect(transcripts[1]?.find((message) => message._source === 'managed-runtime-context')?.content)
-      .toContain('1 non-root turns are active');
-    const deltaIndex = transcripts[1]?.findIndex((message) =>
-      message._source === 'managed-runtime-context') ?? -1;
-    const correctionIndex = transcripts[1]?.findIndex((message) => (
-      message.role === 'user'
-      && message._synthetic !== true
-      && JSON.stringify(message.content).includes('Keep this correction')
-    )) ?? -1;
-    expect(deltaIndex).toBeGreaterThanOrEqual(0);
-    expect(correctionIndex).toBeGreaterThan(deltaIndex);
-    expect(transcripts[1]?.at(-1)?.content).toContain('Keep this correction');
+      expect(suffixes.every((suffix) => suffix === undefined)).toBe(true);
+      expect(transcripts[0]?.find((message) => message._source === 'managed-run-context')?.content)
+        .toContain('0 non-root turns are active');
+      expect(transcripts[1]?.find((message) => message._source === 'managed-runtime-context')?.content)
+        .toContain('1 non-root turns are active');
+      const deltaIndex = transcripts[1]?.findIndex((message) =>
+        message._source === 'managed-runtime-context') ?? -1;
+      const correctionIndex = transcripts[1]?.findIndex((message) => (
+        message.role === 'user'
+        && message._synthetic !== true
+        && JSON.stringify(message.content).includes('Keep this correction')
+      )) ?? -1;
+      expect(deltaIndex).toBeGreaterThanOrEqual(0);
+      expect(correctionIndex).toBeGreaterThan(deltaIndex);
+      expect(transcripts[1]?.at(-1)?.content).toContain('Keep this correction');
+    } finally {
+      getMessageQueue().dequeue({
+        agentId: queueAgentId,
+        maxPriority: 'user',
+        mode: 'prompt',
+      });
+      await controller.shutdown('test complete');
+    }
   });
 
   it('does not append runtime context when the managed state is unchanged', async () => {
@@ -3452,6 +3473,7 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
       execute: async () => ({ output: 'strategy lane complete' }),
     };
     const controller = await createAgentActorController({ executor });
+    testActorControllers.push(controller);
     const root = controller.bind('/root');
     const startedTurnIds: string[] = [];
     const options: KodaXOptions = {
@@ -3511,6 +3533,7 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
       execute: async () => ({ output: 'queued strategy lane complete' }),
     };
     const controller = await createAgentActorController({ executor });
+    testActorControllers.push(controller);
     const root = controller.bind('/root');
     const startedTurnIds: string[] = [];
     const options: KodaXOptions = {
@@ -3586,6 +3609,7 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
     const sessionId = 'runner-mailbox-wait';
     const queueAgentId = `actor:${sessionId}:/root`;
     const controller = await createAgentActorController();
+    testActorControllers.push(controller);
     const options: KodaXOptions = {
       ...makeOptions(),
       session: { id: sessionId },
