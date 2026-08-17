@@ -1487,7 +1487,9 @@ export function archiveOldIslands(lineage: KodaXSessionLineage): {
   // clone points at (one hop — bounded retention; older generations archive naturally
   // once no newest clone references them). logicalId references are deliberately not
   // excluded: logical identity is stable by design and resolves through the archive
-  // merge-back.
+  // merge-back. A retained predecessor's own parentId may point at a now-archived
+  // ancestor (one hop keeps the predecessor, not its chain); that dangling parent
+  // is licensed topology and resolves through the same merge-back.
   const referencedByRetained = collectReferencedByRetained(lineage, preserved, byId);
   // 7. Collect entries to archive (everything NOT in preserve closure and not referenced)
   const toArchive: KodaXSessionEntry[] = [];
@@ -1527,15 +1529,16 @@ export function archiveOldIslands(lineage: KodaXSessionLineage): {
     const msgEntries = entries.filter((e): e is KodaXSessionMessageEntry => e.type === 'message');
     const preview = extractArchivePreview(msgEntries);
 
-    // Attach marker to the nearest preserved parent so tree topology
+    // Attach marker to the nearest retained parent so tree topology
     // doesn't drift.  If the archived group's root had a parent that's
-    // still in the preserved set, the marker becomes a child of that
-    // parent instead of a new root.
+    // still retained (preserved, or kept one hop as a referenced direct
+    // predecessor), the marker becomes a child of that parent instead of
+    // a new root.
     const groupRoot = byId.get(rootId);
-    const nearestPreservedParent = groupRoot?.parentId && preserved.has(groupRoot.parentId)
+    const nearestPreservedParent = groupRoot?.parentId
+      && (preserved.has(groupRoot.parentId) || referencedByRetained.has(groupRoot.parentId))
       ? groupRoot.parentId
       : null;
-
     const markerEntryId = generateEntryId();
     markers.push({
       type: 'archive_marker',

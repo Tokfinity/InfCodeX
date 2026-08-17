@@ -85,6 +85,21 @@ describe('run-scoped tool helpers', () => {
     expect(model.input_schema).toEqual(definition.inputSchema);
   });
 
+  it('normalizes an open schema shape onto the provider contract', () => {
+    const empty = toModelToolDefinition({ ...hostDefinition(), inputSchema: {} });
+    expect(empty.input_schema).toEqual({ type: 'object', properties: {} });
+
+    const partial = toModelToolDefinition({
+      ...hostDefinition(),
+      inputSchema: { properties: { title: { type: 'string' } }, required: ['title', 42] },
+    });
+    expect(partial.input_schema).toEqual({
+      type: 'object',
+      properties: { title: { type: 'string' } },
+      required: ['title'],
+    });
+  });
+
   it('executes through the capability channel and renders content', async () => {
     const definition = hostDefinition();
     const calls: Array<{ id: string; input: Record<string, unknown> }> = [];

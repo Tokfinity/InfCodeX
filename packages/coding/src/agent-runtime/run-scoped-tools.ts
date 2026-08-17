@@ -47,11 +47,34 @@ export function lookupRunScopedTool(
   return listRunScopedTools(runtime, providerId).find((definition) => definition.name === name);
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Normalize an open lease/embedder schema onto the provider contract
+ *  (`{ type: 'object', properties }`); a missing type makes Anthropic-
+ *  compatible providers reject the whole request. */
+function normalizeInputSchema(
+  schema: Readonly<Record<string, unknown>>,
+): KodaXToolDefinition['input_schema'] {
+  const required = Array.isArray(schema.required)
+    ? schema.required.filter((name): name is string => typeof name === 'string')
+    : undefined;
+  return {
+    type: 'object',
+    properties: isPlainRecord(schema.properties) ? schema.properties : {},
+    ...(required !== undefined ? { required } : {}),
+  };
+}
+
 export function toModelToolDefinition(definition: RunScopedToolDefinition): KodaXToolDefinition {
   return {
     name: definition.name,
     description: definition.description,
-    input_schema: definition.inputSchema as KodaXToolDefinition['input_schema'],
+    // Single materialization point shared by the daemon lease path and the
+    // embedder path; the reverse-bridge registration gate is bypassed by
+    // non-daemon embedders, so normalize here.
+    input_schema: normalizeInputSchema(definition.inputSchema),
   };
 }
 

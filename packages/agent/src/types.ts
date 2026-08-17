@@ -92,8 +92,8 @@ export interface KodaXSessionEntryBase {
    */
   logicalId?: string;
   /** Direct physical predecessor entry id this clone was copied from (the
-   *  clone source's own id, not a transitive root — see the SDK embedder guide). */
-   sourceEntryId?: string;
+   * clone source's own id, not a transitive root — see the SDK embedder guide). */
+  sourceEntryId?: string;
 }
 export interface KodaXSessionMessageEntry extends KodaXSessionEntryBase {
   type: 'message';

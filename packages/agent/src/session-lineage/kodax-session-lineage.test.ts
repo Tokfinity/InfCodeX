@@ -1423,6 +1423,10 @@ describe('archiveOldIslands', () => {
     // dangling references resolve again after the archive merge-back reload
     // (storage reconcile path, pinned by the epoch-2 reader test).
     const slimmedIds = new Set(slimmedLineage.entries.map((entry) => entry.id));
+    for (const marker of slimmedLineage.entries) {
+      if (marker.type !== 'archive_marker' || marker.parentId === null) continue;
+      expect(slimmedIds.has(marker.parentId)).toBe(true);
+    }
     for (const entry of messageEntries(slimmedLineage)) {
       if (entry.sourceEntryId === undefined || entry.sourceEntryId === entry.id) continue;
       expect(slimmedIds.has(entry.sourceEntryId)).toBe(true);
