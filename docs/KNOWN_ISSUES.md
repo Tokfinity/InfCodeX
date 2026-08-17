@@ -16,6 +16,13 @@ process/Job/ACL residue. Provider output replacement is also projected by
 logical response and physical request identity, while raw journals retain every
 attempt. Ambiguous ownership and same-boot POSIX recovery remain fail-closed.
 
+The same release bounds AskUser, permission, and MCP elicitation lifecycles.
+Owner AbortSignals close host UI on timeout/cancellation, valid defaults are
+selected only after Runtime validation, and stale prepared Session tails fall
+back to an authoritative delta after `data_changed`. These paths are covered
+by the v0.7.91 focused interaction and prepared-session tests; no new
+fail-closed shell or sandbox exception is introduced.
+
 ---
 
 ## v0.7.90 Release Corrections

@@ -30,6 +30,14 @@
 > while raw journals retain all attempts. Standalone binaries bundle lazy
 > provider SDK dependency graphs. These changes preserve fail-closed ownership,
 > shell, and sandbox boundaries.
+
+> **v0.7.91 interaction addendum:** AskUser, permission, and MCP elicitation
+> are owner-scoped interactions with independent bounded deadlines. Runtime
+> callbacks receive an AbortSignal, defaults are validated before they can
+> settle a request, and SDK permission hosts use Runtime-authoritative
+> resolution. Interactive Session hosts recover a stale prepared tail through
+> a full authoritative delta after `data_changed`; background persistence
+> errors are surfaced as diagnostics.
 >
 > **v0.7.88 release addendum:** Actor snapshot persistence has
 > explicit boundaries for Actor mutation order, process-local storage dequeue,
@@ -5148,3 +5156,32 @@ the local `runtimeExitSettlement:1` capability.
 **Rejected alternatives**: caching a PID/PGID, deleting markers by path,
 force-stopping a replacement owner, treating daemon exit alone as containment
 proof, or letting each host invent a timeout/replay policy.
+
+---
+
+## ADR-064: Runtime Owns Bounded Interactions and Stale Session Tail Recovery
+
+**Status**: Accepted (2026-08-17)
+
+**Driver**: a host prompt or permission dialog can outlive the authoritative
+Runtime request, while an interactive host can race a prepared Session append
+with another durable writer and either hang or lose the newest tail.
+
+**Decision**: Runtime creates one owner AbortSignal for each AskUser,
+permission, and MCP elicitation lifecycle, validates independent timeout
+options before embedded/Worker/daemon startup, and accepts a default answer only
+when it is valid for the request. SDK permission UI must resolve through
+`handleRuntimePermissionRequest()` so timeout, cancellation, or a competing
+response wins over a late callback. Interactive persistence may use a prepared
+tail for the bounded fast path, but a `data_changed` conflict must reload and
+merge through the authoritative full delta path; background write failures are
+diagnostics rather than swallowed state.
+
+**Consequences**: UI hosts can close prompts deterministically and configure
+`userInputTimeoutMs` separately from `permissionTimeoutMs`. A stale prepared
+boundary cannot silently drop new session state, and a persistence failure is
+observable without changing shell or sandbox fail-closed policy.
+
+**Rejected alternatives**: unbounded host callbacks, trusting late dialog
+answers, accepting arbitrary defaults, retrying a stale tail unchanged, or
+silently ignoring background persistence errors.

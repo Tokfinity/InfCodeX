@@ -146,6 +146,13 @@ remains a separate manual operator step. It includes every commit after
 - standalone Bun packaging of the lazy Anthropic/OpenAI SDK dependency graphs,
   including transitive provider packages previously resolved from filesystem
   `node_modules`;
+- bounded AskUser and permission lifecycles with owner AbortSignals, validated
+  Runtime defaults, timeout-aware MCP elicitation, and the public
+  `handleRuntimePermissionRequest()` host helper;
+- stale prepared Session tails now recover through an authoritative full delta
+  after `data_changed`; background persistence failures become diagnostics, and
+  CLI/SDK hosts can configure `userInputTimeoutMs` independently from
+  `permissionTimeoutMs`;
 - synchronized product, architecture, detailed-design, public SDK, release,
   feature-index, known-issue, regression-guide, and `kodax_manual` content.
 
@@ -161,6 +168,7 @@ Before tagging, all of the following must be true:
    `docs/features`, and `kodax_manual` agree on v0.7.91;
 2. focused tests cover crash-resumable exit settlement, exact owner and ACL
    recovery, output-segment replacement/continuation, lazy provider loading,
+   bounded user-input/permission lifecycles, stale prepared-session recovery,
    and the existing v0.7.90 regression contracts;
 3. TypeScript, config-template checks, bundled SDK/Worker/sidecar builds, fast,
    unit, contract, and system suites pass, with any host-only Windows sandbox

@@ -527,6 +527,11 @@ const TOPICS: readonly KodaXManualTopic[] = [
         + " resumes a crash-safe ticket, and repairs only verified Windows"
         + " process/Job/ACL residue. Same-boot POSIX ambiguity, active work,"
         + " foreign markers, PID reuse, and corrupt evidence remain fail-closed.",
+      "The same Runtime owner bounds AskUser, permission, and MCP elicitation"
+        + " lifecycles. SDK hosts receive an AbortSignal and can use"
+        + " `handleRuntimePermissionRequest()`; timeout, cancellation, or a"
+        + " competing response beats a late UI answer. Runtime validates"
+        + " `userInputTimeoutMs` and `permissionTimeoutMs` before startup.",
       "SDK embedders can use `@kodax-ai/kodax/sandbox` independently of permissions:",
       "`getKodaXSandboxCapability`, `doctorKodaXSandbox`, `activateKodaXSandbox`,",
       "`getKodaXSandboxSetupGuidance`, and `runKodaXSandboxed`. The generic executor accepts",
@@ -981,6 +986,11 @@ const TOPICS: readonly KodaXManualTopic[] = [
       "not the transitive root. During one-hop archive retention that predecessor remains",
       "addressable and the archive marker stays attached to the retained topology; use the",
       "SDK conversation projection instead of reconstructing this folding in the host.",
+      "Interactive hosts that use a prepared Session append must treat"
+        + " `SessionReadError.code === 'data_changed'` as a stale boundary:"
+        + " reload and merge through the authoritative full delta path. KodaX's"
+        + " Ink host uses this recovery and emits a diagnostic if background"
+        + " persistence still fails; it never silently drops the new tail.",
     ].join("\n"),
     sources: [
       {
@@ -1204,6 +1214,15 @@ const TOPICS: readonly KodaXManualTopic[] = [
       "accepts short caller timeouts and never exposes bare-PID kill or raw ACL deletion.",
       "The same release requires `liveOutputSegments:1` for new daemon consumers and",
       "bundles lazy Anthropic/OpenAI SDK dependency graphs in standalone binaries.",
+      "AskUser and permission prompts have independent bounded deadlines and"
+        + " owner AbortSignals. On expiry, Runtime accepts only a validated"
+        + " default; otherwise it dismisses the request. MCP reverse elicitation"
+        + " cancels through the same signal. `reclaimStaleKodaXFileLock` is the"
+        + " public Agent helper for an explicitly identified stale learning lock;"
+        + " it is not a general lock deletion primitive.",
+      "Configure `userInputTimeoutMs` independently from `permissionTimeoutMs`;"
+        + " both are validated before embedded, Worker, or daemon startup."
+        + " Permission timeout 0 retains its timer-disable meaning.",
       "",
       "Require `learningCenter:1` and `skillLearningLoop:1` when a host depends on the complete",
       "F263 project-canary contract. `runtime.learning` exposes list/get/snapshot/events/subscribe",

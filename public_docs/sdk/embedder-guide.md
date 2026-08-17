@@ -5,6 +5,12 @@
 > extensions, custom CLIs. If you are an end-user running the `kodax`
 > command-line tool, see the root [README.md](../../README.md) instead.
 
+This guide reflects the `v0.7.91` SDK contract. npm publication remains a
+manual maintainer step. The release adds bounded owner-scoped interactions,
+stale prepared-Session recovery, crash-resumable Runtime exit settlement,
+effective live output segments, and standalone lazy provider dependency
+bundling.
+
 This guide documents the SDK surfaces a host integrator needs that
 are NOT obvious from inspecting the type definitions alone:
 
@@ -917,6 +923,12 @@ and a stale boundary, prefix/sidecar change, duplicate identity, non-linear
 lineage tail, or concurrent durable write fails with
 `SessionReadError.code === 'data_changed'`. Reload, obtain a fresh boundary,
 and rebuild the tail before retrying.
+
+The Ink REPL host follows the same rule: its prepared-tail persistence helper
+falls back to `appendSessionDelta(id, data)` after `data_changed`, so the
+authoritative full snapshot merges the newest UI/session state. Background
+write failures are emitted as structured diagnostics; they are not swallowed
+and a stale tail is never retried unchanged.
 
 A non-null fulfilled append result is the reusable successor boundary. A
 fulfilled `null` means the tail did commit exactly once, but the successor

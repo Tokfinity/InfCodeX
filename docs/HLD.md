@@ -55,6 +55,14 @@ or force-signalled. The live output projection similarly separates logical
 responses from physical provider requests, so Runtime snapshots and raw
 journals serve different, explicit authorities.
 
+The same Runtime owner also bounds user interaction. AskUser and permission
+callbacks receive an AbortSignal tied to the authoritative request; separate
+`userInputTimeoutMs` and `permissionTimeoutMs` values are validated before
+startup, and the SDK helper resolves permission UI through the Runtime rather
+than trusting a late dialog result. Interactive hosts recover a stale prepared
+Session tail with a full authoritative delta, while background persistence
+errors remain visible diagnostics.
+
 For a Windows daemon Runtime, startup is a three-part process boundary:
 PowerShell creates the daemon suspended, assigns it to a kill-on-close Job
 Object, and resumes it; an out-of-Job supervisor waits for daemon exit and then

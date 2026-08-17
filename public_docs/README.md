@@ -2,7 +2,7 @@
 
 Public documentation for KodaX users and SDK integrators.
 
-The current release is `v0.7.90`. Its SDK guidance carries the v0.7.89 Issue 293
+The current release is `v0.7.91`. Its SDK guidance carries the v0.7.89 Issue 293
 topology-transparent conversation projection, FEATURE_293 zero-service web
 search fallback, and FEATURE_294 run-scoped Host Tools. The host-tool surface is
 leased to one Run, registry-first, revocation-safe, and absent from unrelated
@@ -28,6 +28,14 @@ workspace sessions, actionable daemon Error/aggregate/cause diagnostics, direct
 clone-predecessor lineage and topology-correct archive markers, and provider-
 valid object schemas for run-scoped tools. npm publication remains a manual
 operator step.
+
+The v0.7.91 SDK guidance adds the crash-resumable
+`settleKodaXRuntimeExit()` transaction and `runtimeExitSettlement:1` capability,
+effective live output segments (`responseId` + `providerRequestId`), and
+standalone lazy provider dependency bundling. It also documents bounded
+AskUser/permission deadlines, owner AbortSignal propagation,
+`handleRuntimePermissionRequest()`, validated default answers, and stale
+prepared-Session-tail recovery after a `data_changed` race.
 
 ## Getting Started
 

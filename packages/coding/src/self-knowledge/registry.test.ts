@@ -86,6 +86,7 @@ describe('FEATURE_218 manual registry', () => {
     const sdk = resolveKodaXManual({ topic: 'sdk' }).content;
     const tools = resolveKodaXManual({ topic: 'tools' }).content;
     const sandbox = resolveKodaXManual({ topic: 'sandbox' }).content;
+    const sessions = resolveKodaXManual({ topic: 'sessions' }).content;
 
     expect(sdk).toContain('runtimeExitSettlement:1');
     expect(sdk).toContain('settleKodaXRuntimeExit');
@@ -98,6 +99,11 @@ describe('FEATURE_218 manual registry', () => {
     expect(tools).toContain('liveOutputSegments:1');
     expect(sandbox).toContain('exact owner before stop');
     expect(sandbox).toContain('Same-boot POSIX ambiguity');
+    expect(sdk).toContain('owner AbortSignals');
+    expect(sdk).toContain('userInputTimeoutMs');
+    expect(sdk).toContain('reclaimStaleKodaXFileLock');
+    expect(sessions).toContain('SessionReadError.code === \'data_changed\'');
+    expect(sessions).toContain('authoritative full delta path');
   });
 
   it('documents the v0.7.79 provider, A2A, Session, and Runtime contracts', () => {

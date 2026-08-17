@@ -161,6 +161,10 @@ segment, continuation appends, and raw Runtime journals remain the audit
 authority. Standalone Bun packaging now embeds lazy provider SDK dependency
 graphs. See the [SDK Embedder Guide](../../public_docs/sdk/embedder-guide.md)
 for host integration rules.
+The same release bounds AskUser and permission interactions with owner
+AbortSignals, validates timeout defaults at the Runtime boundary, and keeps
+stale prepared Session tails recoverable through an authoritative delta merge
+instead of silently losing the latest host state.
 
 ## 安装 / 导入
 

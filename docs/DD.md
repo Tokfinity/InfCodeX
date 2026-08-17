@@ -20,7 +20,7 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The published package is `@kodax-ai/kodax@0.7.89`. The v0.7.85 release
+The published package is `@kodax-ai/kodax@0.7.91`. The v0.7.85 release
 established
 controller-wide bounded Actor progress
 persistence, queue-aware terminal deadlines, root fail-closed fencing, and

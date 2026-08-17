@@ -719,7 +719,12 @@ share a logical output-segment projection (`responseId` plus
 SDK dependency graphs. These are intentional Runtime, LLM, Coding runtime, and
 SDK system-code changes; shell and sandbox fail-closed boundaries remain
 unchanged. See the [v0.7.91 release checklist](docs/release.md#v0791-release-preparation)
-and [SDK Embedder Guide](public_docs/sdk/embedder-guide.md).
+and [SDK Embedder Guide](public_docs/sdk/embedder-guide.md). The same release
+also bounds AskUser/permission lifecycles with owner AbortSignals and validates
+default answers, exposes `handleRuntimePermissionRequest()` for SDK-owned
+permission UI, and recovers stale prepared Session tails through an
+authoritative merge. Background persistence failures are surfaced as
+diagnostics rather than hidden.
 
 **v0.7.87 GLM provider release:** `zhipu-coding` defaults to `glm-5.3` and
 retains `glm-5.2` as an explicit rollback route. `zai-coding` retained both

@@ -39,6 +39,11 @@ All notable changes to this project will be documented in this file.
   graphs while retaining first-use lazy loading, so provider startup no longer
   falls back to filesystem `node_modules` resolution or fails on transitive
   packages such as `standardwebhooks`.
+- Runtime user-input and permission lifecycles now carry an owner AbortSignal
+  and independent bounded deadlines. AskUser defaults are validated at the
+  Runtime boundary, MCP elicitation cancels on expiry, and SDK permission UI
+  can use `handleRuntimePermissionRequest()` so a late answer cannot revive a
+  settled interaction.
 
 ### Changed
 
@@ -50,6 +55,10 @@ All notable changes to this project will be documented in this file.
   `providerRequestId`. Replacement removes only the active failed segment,
   continuation appends, and stale provider deltas are ignored; raw journals
   still retain the complete audit trail.
+- Interactive REPL persistence now retries a prepared Session tail through a
+  full authoritative delta after a `data_changed` race. Background persistence
+  failures surface as diagnostics, and stale prepared-session tails are merged
+  instead of silently dropping the latest UI/session state.
 
 ### Documentation
 

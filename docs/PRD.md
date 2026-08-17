@@ -90,6 +90,14 @@ fail-closed. Provider retries and continuations also expose one effective live
 output projection while retaining raw audit events, and standalone binaries
 bundle their lazy provider SDK dependency graphs.
 
+The v0.7.91 follow-up interaction contract gives every AskUser and permission
+request an owner-scoped AbortSignal and independent bounded deadline. Runtime
+defaults are validated before admission, SDK permission hosts use
+`handleRuntimePermissionRequest()` for late-answer-safe UI ownership, and MCP
+elicitation cancels when its owner expires. Interactive Session persistence
+falls back from a stale prepared tail to an authoritative delta merge and
+surfaces background persistence failures as diagnostics.
+
 ## 2. Target Users
 
 - Developers who want a terminal-native agent for code changes, debugging,
