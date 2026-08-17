@@ -1,11 +1,20 @@
 # Known Issues
 
-_Last Updated: 2026-08-16_
+_Last Updated: 2026-08-17_
 
 ---
 
 > **Archive Notice**: Historical issue records are maintained in `docs/ISSUES_ARCHIVED.md`.
 > This file tracks the active issue backlog plus recently resolved issue records that have not yet been archived.
+
+## v0.7.90 Release Corrections
+
+The v0.7.90 patch closes follow-up correctness gaps without weakening the
+fail-closed contracts: timed-out workspace sessions use orderly retirement and
+retain actionable daemon Error diagnostics; chained compaction retains direct
+clone predecessors and topology-correct archive markers; and run-scoped tool
+schemas are normalized before provider dispatch. These corrections are covered
+by the focused sandbox, lineage, REPL, and coding-runtime tests.
 
 ---
 

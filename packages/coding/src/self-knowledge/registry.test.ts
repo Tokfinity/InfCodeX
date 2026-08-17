@@ -385,9 +385,11 @@ describe('FEATURE_218 manual registry', () => {
     expect(content).toMatch(/reuses\s+the PID/);
   });
 
-  it('documents the v0.7.89 web search and run-scoped Host Tool contracts', () => {
+  it('documents the v0.7.90 web search, run-scoped, lineage, and sandbox contracts', () => {
     const tools = resolveKodaXManual({ topic: 'tools' }).content;
     const mcp = resolveKodaXManual({ topic: 'mcp' }).content;
+    const sessions = resolveKodaXManual({ topic: 'sessions' }).content;
+    const sandbox = resolveKodaXManual({ topic: 'sandbox' }).content;
 
     expect(tools).toContain('DuckDuckGo HTML');
     expect(tools).toContain('Bing RSS');
@@ -395,7 +397,11 @@ describe('FEATURE_218 manual registry', () => {
     expect(tools).toContain('freshness: unknown');
     expect(tools).toContain('leased run');
     expect(tools).toContain('never enter the global tool registry');
+    expect(tools).toContain("{ type: 'object', properties, required? }");
     expect(mcp).toContain('Daemon-owned Host Tools publish a lease-scoped live');
+    expect(sessions).toContain('direct physical predecessor copy');
+    expect(sandbox).toContain('retires the shared session through orderly close');
+    expect(sandbox).toContain('AggregateError members');
   });
 
   it('documents the v0.7.78 sensitive-home workspace containment boundary', () => {

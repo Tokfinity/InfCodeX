@@ -1,9 +1,9 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-08-16
+> Last updated: 2026-08-17
 >
-> Current published baseline: `v0.7.89`
-> (`@kodax-ai/kodax@0.7.89`; npm publication remains manual)
+> Current published baseline: `v0.7.90`
+> (`@kodax-ai/kodax@0.7.90`; npm publication remains manual)
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -64,6 +64,14 @@ registry-first dispatch, permission predicates, and AMA/SA tool wiring; the
 Runtime daemon reverse bridge owns lease binding, revocation, catalog context,
 and `host:` authorization. These are additive to MCP and do not modify Shell
 or sandbox implementations.
+
+The v0.7.90 patch extends the implementation boundaries without changing their
+authority: `src/sandbox-runtime.ts` retires timed-out workspace sessions through
+orderly close and gives cleanup its reset-grace deadline; the daemon host
+serializes Error/aggregate/cause diagnostics; Agent lineage writes
+`sourceEntryId` as the direct physical predecessor and preserves referenced
+predecessors during archive slimming; and Coding's shared run-scoped tool
+materializer normalizes open schemas to `{ type: 'object', properties, required? }`.
 
 The v0.7.86 hardening adds atomic abandoned-inline-owner recovery, process-start
 identity records for Runtime and learning locks, and a Windows sandbox owner

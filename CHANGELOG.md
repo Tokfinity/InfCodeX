@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.90] - 2026-08-17
+
 ### Fixed
 
 - Workspace session RPC timeouts no longer force-kill the shared ASRT session:
@@ -20,6 +22,11 @@ All notable changes to this project will be documented in this file.
 - Daemon log diagnostics keep Error details diagnosable: `detail` payloads
   serialize `name`/`message` plus `AggregateError.errors[]` and `cause` chains
   instead of collapsing to `{}`.
+- Run-scoped tool materialization normalizes open lease/embedder input schemas to
+  the provider contract (`type: object`, `properties`, and valid string
+  `required` entries), so Anthropic-compatible requests cannot be rejected by a
+  missing schema type. Archive markers also stay attached to a retained direct
+  predecessor when one-hop clone retention keeps that predecessor alive.
 - Chained-compaction clone provenance now addresses the direct physical
   predecessor copy instead of the transitive root source, and archive
   collection never removes an entry that a retained clone physically
@@ -27,6 +34,16 @@ All notable changes to this project will be documented in this file.
   that could make repeated compaction resolve as ambiguous history;
   `sourceEntryId` semantics for hosts change from "root physical source" to
   "direct physical predecessor" (see the SDK embedder guide).
+
+### Documentation
+
+- Synchronized package metadata, release notes, architecture/product/design
+  baselines, feature tracking, public SDK guidance, `kodax_manual`, and
+  regression coverage for the v0.7.90 stabilization release.
+
+> v0.7.90 intentionally includes Runtime/sandbox, Agent lineage, Coding
+> runtime, and REPL persistence system-code fixes. npm publication remains a
+> separate manual operator step.
 
 ---
 

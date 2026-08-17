@@ -81,6 +81,52 @@ version smoke is:
 dist/binary/linux-x64/kodax --version
 ```
 
+## v0.7.90 release preparation
+
+Release state: the root package, all four workspace packages, and every
+`package-lock.json` workspace entry must be version `0.7.90`. This release is
+prepared for the `v0.7.90` tag and GitHub Release; npm publication remains a
+separate manual operator step. It includes every commit after `v0.7.89`:
+
+- workspace-session RPC timeouts fail pending requests and retire the shared
+  ASRT session through orderly close; cleanup uses the 130-second reset-grace
+  budget instead of the generic RPC deadline;
+- daemon diagnostics retain Error names/messages, AggregateError members, and
+  cyclic cause chains rather than collapsing details to `{}`;
+- chained-compaction clone provenance uses the direct physical predecessor,
+  keeps a retained predecessor addressable during one-hop archive slimming,
+  and attaches archive markers to the retained topology;
+- run-scoped tool materialization normalizes open lease/embedder schemas to the
+  provider object-schema contract and filters invalid `required` entries;
+- all product, architecture, SDK, public guide, release, feature-tracker, and
+  `kodax_manual` documentation is synchronized for this stabilization release.
+
+The release intentionally contains Runtime/sandbox, Agent lineage, Coding
+runtime, and REPL persistence system-code fixes. It does not weaken fail-closed
+cleanup, permission, or sandbox fallback contracts.
+
+Before tagging, all of the following must be true:
+
+1. all package versions, `CHANGELOG.md`, README/README_CN, PRD/HLD/DD/ADR,
+   feature tracker, known-issue record, public docs, this checklist,
+   `docs/features`, and `kodax_manual` agree on v0.7.90;
+2. focused tests cover orderly workspace-session timeout retirement and
+   diagnostics, direct clone provenance and archive topology, run-scoped schema
+   normalization, and the existing v0.7.89 feature contracts;
+3. TypeScript, config-template checks, bundled SDK/Worker/sidecar builds, fast,
+   unit, contract, and system suites pass;
+4. the packed `kodax-ai-kodax-0.7.90.tgz` is inspected and smoke-installed into
+   an empty consumer for the root package and all 12 SDK subpaths;
+5. root and `docs/features` are clean, with the submodule commit reachable from
+   its remote; `.codex*` local artifacts and alternate pnpm metadata are ignored
+   and not tracked;
+6. GitHub CI is green for the exact commit on Node 20/22, Unix Runtime,
+   Windows Shell, and packaged Electron gates; the tag-triggered Release job
+   produces all platform archives, sidecars, and `SHA256SUMS`. npm publication is
+   left to the maintainer.
+
+Only after these gates pass may the exact commit be tagged `v0.7.90`.
+
 ## v0.7.89 release preparation
 
 Release state: the root package, all four workspace packages, and every

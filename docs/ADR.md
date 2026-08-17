@@ -10,6 +10,17 @@
 > Daemon Host Tools are run-scoped, registry-first, revoke-safe, and authorized
 > through exact A2A `host:` capability ids. No shell or sandbox system contract
 > changed in this release.
+
+> **v0.7.90 release addendum:** workspace-session RPC timeout handling fails
+> pending requests and retires the shared ASRT session through orderly close;
+> cleanup uses the Windows reset-grace budget so serial ACL/WFP cleanup is not
+> cut short by the generic RPC deadline. Daemon diagnostics normalize Error,
+> AggregateError, and cyclic cause details instead of serializing them as `{}`.
+> Session lineage records the direct physical clone predecessor, keeps that
+> predecessor addressable during one-hop archive retention, and attaches archive
+> markers to the retained topology. Run-scoped tool schemas normalize to the
+> provider object-schema contract at materialization. These are system-code
+> fixes with no new shell permission or sandbox policy weakening.
 >
 > **v0.7.88 release addendum:** Actor snapshot persistence has
 > explicit boundaries for Actor mutation order, process-local storage dequeue,

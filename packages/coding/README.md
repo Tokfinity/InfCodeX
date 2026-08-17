@@ -144,6 +144,13 @@ metadata, and removes the surface on revoke. Host Tools never enter the global
 registry or leak into unrelated CLI runs; `kodax_manual` documents the same
 contract.
 
+The v0.7.90 stabilization release hardens the shared run-scoped tool
+materializer: open lease/embedder schemas are normalized to the provider
+contract (`type: object`, `properties`, and valid string `required` entries)
+before either daemon or embedded dispatch. It also carries the Agent lineage
+archive-topology and Runtime workspace-session orderly-retirement fixes; these
+are intentional system-code changes with no weaker sandbox fallback.
+
 ## 安装 / 导入
 
 ```bash

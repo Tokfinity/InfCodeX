@@ -701,6 +701,14 @@ never enter the global registry or unrelated CLI runs. The web-search custom
 endpoint remains isolated, and no shell/sandbox system code changed in this
 release. See the [v0.7.89 release checklist](docs/release.md#v0789-release-preparation).
 
+**v0.7.90 release:** this stabilization release keeps the v0.7.89 contracts
+while fixing workspace-session timeout retirement and daemon Error diagnostics,
+direct clone-predecessor lineage/archive-marker topology, and provider-valid
+schemas for run-scoped tools. These are intentional Runtime/sandbox, Agent,
+Coding runtime, and REPL persistence system-code fixes; the fail-closed safety
+boundaries remain unchanged. See the
+[v0.7.90 release checklist](docs/release.md#v0790-release-preparation).
+
 **v0.7.87 GLM provider release:** `zhipu-coding` defaults to `glm-5.3` and
 retains `glm-5.2` as an explicit rollback route. `zai-coding` retained both
 models but defaulted to `glm-5.2` until the overseas Coding Plan rollout

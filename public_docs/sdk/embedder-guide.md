@@ -2811,6 +2811,27 @@ name collisions, malformed lease ids, and unknown capability paths fail closed;
 unrelated CLI runs do not inherit a Space lease. A2A role policies may authorize
 exact `host:<leaseId>:<tool>` capability ids.
 
+### v0.7.90 stabilization boundaries
+
+The v0.7.90 patch preserves the v0.7.89 SDK contracts while tightening three
+follow-up boundaries. A workspace-session RPC timeout fails its pending request
+and retires the shared session through orderly close; cleanup may use the full
+reset-grace budget before a replacement is admitted. Daemon diagnostics encode
+Error names/messages, `AggregateError.errors`, and `cause` chains, including
+cyclic chains, so hosts can distinguish timeout, attestation, and deletion
+failures.
+
+Session lineage `sourceEntryId` is the direct physical predecessor copy, not a
+transitive root. The archive slimmer keeps a direct predecessor referenced by a
+retained clone addressable for one hop and places its archive marker under the
+retained parent. Hosts should continue to use `readConversationHistory()` for
+ordinary-chat folding and `readFullTranscript()` for raw audit scrollback.
+
+Run-scoped leased/embedded tool schemas are normalized at the shared model
+materialization point to `{ type: 'object', properties, required? }`; only
+string names remain in `required`. This keeps the schema shown to the model and
+the provider wire contract aligned across daemon and embedded hosts.
+
 ### Worker-hosted embedded usage
 
 ```ts

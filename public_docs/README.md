@@ -2,7 +2,7 @@
 
 Public documentation for KodaX users and SDK integrators.
 
-The current release is `v0.7.89`. Its SDK guidance adds the Issue 293
+The current release is `v0.7.90`. Its SDK guidance carries the v0.7.89 Issue 293
 topology-transparent conversation projection, FEATURE_293 zero-service web
 search fallback, and FEATURE_294 run-scoped Host Tools. The host-tool surface is
 leased to one Run, registry-first, revocation-safe, and absent from unrelated
@@ -22,6 +22,12 @@ conversation-first Memory management, the additive experimental Memory
 management facade, and the startup/Worker lifecycle boundaries. Issue 256's
 remaining Worker owner-lease boundary remains open after v0.7.89; this release
 assigns no replacement target.
+
+The v0.7.90 SDK guidance also documents orderly retirement for timed-out
+workspace sessions, actionable daemon Error/aggregate/cause diagnostics, direct
+clone-predecessor lineage and topology-correct archive markers, and provider-
+valid object schemas for run-scoped tools. npm publication remains a manual
+operator step.
 
 ## Getting Started
 

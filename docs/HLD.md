@@ -1,9 +1,9 @@
 # KodaX High-Level Design
 
-> Last updated: 2026-08-16
+> Last updated: 2026-08-17
 >
-> Current published baseline: `v0.7.89`
-> (`@kodax-ai/kodax@0.7.89`; npm publication remains manual)
+> Current published baseline: `v0.7.90`
+> (`@kodax-ai/kodax@0.7.90`; npm publication remains manual)
 >
 > This HLD is intentionally current-state only. The old pre-v0.7.43
 > chain/harness model has been removed from this active design document because
@@ -38,6 +38,13 @@ block; registry-first dispatch, revoke handling, side-effect metadata, and A2A
 authorization prevent cross-run or cross-provider leakage. Ordinary history
 projection treats replaceable managed context as topology-transparent and
 rebuilds pre-v4 page caches. Shell and sandbox boundaries are unchanged.
+
+The v0.7.90 hardening keeps the same boundary while making failure recovery
+explicit. A workspace session that times out fails its pending RPC and closes
+orderly before replacement; cleanup receives the reset-grace budget, and daemon
+diagnostics preserve Error causes. Lineage/archive maintenance retains direct
+clone predecessors, while the coding materializer supplies provider-valid object
+schemas for run-scoped tools.
 
 For a Windows daemon Runtime, startup is a three-part process boundary:
 PowerShell creates the daemon suspended, assigns it to a kill-on-close Job
