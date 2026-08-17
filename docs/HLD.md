@@ -281,6 +281,14 @@ model/timeout, project boundary, execution directory, and provider/model are
 part of the guardrail reuse key, so a setting change gets a fresh guardrail
 rather than stale classification state.
 
+The Runtime owner also owns interaction deadlines. Permission and AskUser have
+independent five-minute defaults: permission expires fail-closed, while AskUser
+uses only a validated model-supplied recommended default and otherwise
+dismisses. Runtime resolution aborts host prompts through SDK AbortSignals, so
+a late UI answer cannot retain the event stream or restart resolved work.
+Agent-layer MCP elicitation shares the bounded AbortSignal UI contract and
+cancels at the same default deadline.
+
 REPL-to-Runtime Auto settings are serialized per Session. The UI may project the
 configured engine immediately while the owner acknowledgement is pending, then
 reconcile to the persisted engine; this prevents both a transient bare `Auto`

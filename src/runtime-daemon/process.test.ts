@@ -58,6 +58,35 @@ describe("runtime daemon child process environment", () => {
     ]);
   });
 
+  it("passes independent interaction deadlines to a newly spawned daemon", () => {
+    const args = buildRuntimeDaemonServeArgs(
+      {
+        profile: "coder",
+        homeDir: "runtime-home",
+        configHome: "runtime-config",
+        permissionTimeoutMs: 300_000,
+        userInputTimeoutMs: 600_000,
+      },
+      undefined,
+      [],
+    );
+
+    expect(args).toEqual([
+      "daemon",
+      "serve",
+      "--profile",
+      "coder",
+      "--home",
+      "runtime-home",
+      "--config-home",
+      "runtime-config",
+      "--permission-timeout-ms",
+      "300000",
+      "--user-input-timeout-ms",
+      "600000",
+    ]);
+  });
+
   it("does not retain the Electron bootstrap variable in the daemon environment", () => {
     const parentEnv: NodeJS.ProcessEnv = {
       ELECTRON_RUN_AS_NODE: "0",

@@ -3166,7 +3166,36 @@ Await `ready` before another client starts work that may request permission;
 this creates an explicit cross-connection ordering boundary. Only the first
 valid response wins. Wrong-run or stale responses are rejected.
 Abort, runtime close, daemon stop, and timeout reject unresolved permission
-requests so tool approval promises do not hang forever.
+requests so tool approval promises do not hang forever. Permission timeout is
+a fail-closed `{ type: 'reject', cause: 'approval_timeout' }` decision.
+
+Hosts that render approval UI should use the public lifecycle helper instead
+of awaiting a dialog directly from an event listener:
+
+```ts
+import { handleRuntimePermissionRequest } from '@kodax-ai/kodax/runtime';
+
+await handleRuntimePermissionRequest(runtime, request, async (pending, context) => {
+  // Close the popup when context.signal aborts. Runtime timeout, cancellation,
+  // or a response from another client can all win before this UI does.
+  return showPermissionDialog(pending, { signal: context.signal });
+});
+```
+
+`handleRuntimePermissionRequest()` subscribes before showing the prompt,
+rechecks pending state, and makes Runtime resolution authoritative. A late UI
+answer is ignored. Embedded AskUser callbacks receive the same optional third
+argument, `{ signal }`; abort the visible prompt when it fires.
+
+`createKodaXRuntime({ userInputTimeoutMs })` and daemon auto-start use an
+independent AskUser deadline (300,000 ms by default). The value must be a
+positive integer no greater than 2,147,483,647 and is validated before
+embedded, Worker, or daemon startup. The same bound applies to
+`permissionTimeoutMs`, except that its existing value `0` disables the
+permission timer. On expiry, the Runtime accepts only a model-supplied default that is
+valid for the rendered options and selection bounds; otherwise it dismisses
+the question. MCP reverse elicitation uses the same five-minute bounded UI
+lifecycle and safely cancels a stalled prompt.
 
 SDK clients that create a concrete request may pass `toolInput` and
 `executionCwd` to `runtime.permissions.request(...)` in both embedded and
@@ -4768,7 +4797,19 @@ crashes and concurrent Runtime instances.
 AskUser is no longer an in-process callback for daemon Coder runs. Any client
 with the responder scope can list the pending request and answer or dismiss it.
 The request revision and run binding prevent a stale UI from answering a new
-request. Exactly one concurrent answer is accepted.
+request. Exactly one concurrent answer is accepted. Runtime creation accepts
+independent `permissionTimeoutMs` and `userInputTimeoutMs` values; each defaults
+to five minutes. `userInputTimeoutMs` must be positive;
+`permissionTimeoutMs` may also be `0` to disable its timer. Positive values
+must not exceed 2,147,483,647.
+The same non-negative bound applies to a per-request
+`runtime.permissions.request({ timeoutMs })` override. A supplied `expiresAt`
+must be a valid date no more than 2,147,483,647 ms in the future; past dates
+fail closed immediately.
+On AskUser expiry, the Runtime selects `default` only when it
+is valid for that request (or is the free-text input default); without a valid
+default it dismisses the request. For multi-question requests every question
+must have a valid default to produce an automatic answer.
 
 ```ts
 for (const request of await runtime.userInputs.listPending({ sessionId })) {

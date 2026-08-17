@@ -27,6 +27,7 @@ import {
   resolveActiveRootQueueRoute,
   Runner,
   SkillRegistry,
+  withKodaXFileLock,
 } from "@kodax-ai/agent";
 import type {
   AgentActorSaveAttempt,
@@ -53,7 +54,10 @@ import type {
   KodaXToolSandboxObservationUpdate,
   RunningSession,
 } from "@kodax-ai/coding";
-import { resolveProviderModelDescriptors } from "@kodax-ai/coding";
+import {
+  CANCELLED_TOOL_RESULT_MESSAGE,
+  resolveProviderModelDescriptors,
+} from "@kodax-ai/coding";
 import { FileSessionStorage, SessionReadError } from "@kodax-ai/repl";
 import type { AutoModeBootstrapDeps } from "@kodax-ai/repl";
 import type {
@@ -61,6 +65,7 @@ import type {
   RuntimeDaemonClientTransport,
   RuntimeEvent,
   RuntimeInput,
+  RuntimePermissionRequestInput,
   RuntimeRunInputDeliveredEventPayload,
   RuntimeStartRunInput,
 } from "./sdk-runtime.js";
@@ -1643,6 +1648,85 @@ describe("createKodaXRuntime", () => {
 
     await runtime.close();
   }, 60_000);
+
+  it("loads a Session after reclaiming a stale Session writer lock", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: tempRoot,
+    });
+    const session = await runtime.sessions.create({
+      sessionId: "runtime-stale-writer-lock",
+      title: "Stale writer lock",
+      projectPath: tempRoot,
+      surface: "sdk",
+      profileId: "coder",
+    });
+    const lockKey = createHash("sha256").update(session.id, "utf8").digest("hex");
+    const lockPath = path.join(tempRoot, ".write-locks", `${lockKey}.lock`);
+    await fs.mkdir(path.dirname(lockPath), { recursive: true });
+    await fs.writeFile(
+      lockPath,
+      "2147483647 11111111-1111-4111-8111-111111111111\n",
+      "utf8",
+    );
+    const staleTime = new Date(Date.now() - 60_000);
+    await fs.utimes(lockPath, staleTime, staleTime);
+
+    await expect(runtime.sessions.load(session.id)).resolves.toMatchObject({
+      id: session.id,
+      title: "Stale writer lock",
+    });
+    await expect(fs.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+
+    await runtime.close();
+  });
+
+  it("retries a Session load while a live Session writer finishes", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: tempRoot,
+    });
+    const session = await runtime.sessions.create({
+      sessionId: "runtime-live-writer-lock",
+      title: "Live writer lock",
+      projectPath: tempRoot,
+      surface: "sdk",
+      profileId: "coder",
+    });
+    const lockKey = createHash("sha256").update(session.id, "utf8").digest("hex");
+    const lockPath = path.join(tempRoot, ".write-locks", `${lockKey}.lock`);
+    let markHeld!: () => void;
+    const held = new Promise<void>((resolve) => {
+      markHeld = resolve;
+    });
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const holder = withKodaXFileLock(lockPath, async () => {
+      markHeld();
+      await released;
+    });
+    await held;
+
+    const loadResult = runtime.sessions.load(session.id).then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    await new Promise<void>((resolve) => setTimeout(resolve, 75));
+    release();
+    await holder;
+
+    await expect(loadResult).resolves.toMatchObject({
+      value: {
+        id: session.id,
+        title: "Live writer lock",
+      },
+    });
+    await runtime.close();
+  });
 
   it("isolates event listener failures from runtime operations and other subscribers", async () => {
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
@@ -15460,7 +15544,8 @@ describe("createKodaXRuntime", () => {
       expectSettles(decision, "expired permission decision"),
     ).resolves.toEqual({
       type: "reject",
-      reason: "permission request timed out",
+      reason:
+        "permission request timed out; choose a safer approach that does not require this approval",
       cause: "approval_timeout",
     });
     await expect(
@@ -15470,6 +15555,182 @@ describe("createKodaXRuntime", () => {
     ).resolves.toEqual([]);
 
     await runtime.close();
+  });
+
+  it("keeps zero as the explicit disabled permission deadline", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: tempRoot,
+      permissionTimeoutMs: 0,
+    });
+    const decision = runtime.permissions.request({
+      sessionId: "permission-no-expiry-session",
+      runId: "permission-no-expiry-run",
+      toolName: "bash",
+    });
+    const [pending] = await runtime.permissions.listPending({
+      runId: "permission-no-expiry-run",
+    });
+    expect(pending?.expiresAt).toBeUndefined();
+    if (!pending) throw new Error("expected a pending permission request");
+    await runtime.permissions.respond(pending.id, { type: "reject" });
+    await expect(decision).resolves.toEqual({ type: "reject" });
+    await runtime.close();
+  });
+
+  it("rejects unsafe per-request permission deadlines before scheduling", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: tempRoot,
+    });
+    const request = (deadline: Pick<RuntimePermissionRequestInput, "timeoutMs" | "expiresAt">) =>
+      runtime.permissions.request({
+        sessionId: "permission-invalid-deadline-session",
+        runId: "permission-invalid-deadline-run",
+        toolName: "bash",
+        ...deadline,
+      });
+    try {
+      expect(() => request({ timeoutMs: -1 })).toThrow(
+        "permission request timeoutMs must be a non-negative integer no greater than 2147483647.",
+      );
+      expect(() => request({ timeoutMs: 2_147_483_648 })).toThrow(
+        "permission request timeoutMs must be a non-negative integer no greater than 2147483647.",
+      );
+      expect(() => request({
+        expiresAt: new Date(Date.now() + 2_147_483_648).toISOString(),
+      })).toThrow(
+        "permission request expiresAt must be no more than 2147483647ms in the future.",
+      );
+      await expect(runtime.permissions.listPending({
+        runId: "permission-invalid-deadline-run",
+      })).resolves.toEqual([]);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("atomically rejects a late permission response before its timer runs", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: tempRoot,
+      permissionTimeoutMs: 60_000,
+    });
+    let now: ReturnType<typeof vi.spyOn> | undefined;
+    try {
+      const expiresAt = new Date(Date.now() + 60_000).toISOString();
+      const decision = runtime.permissions.request({
+        sessionId: "permission-late-session",
+        runId: "permission-late-run",
+        toolName: "bash",
+        toolInput: { command: "git status" },
+        executionCwd: tempRoot,
+        expiresAt,
+      });
+      const [pending] = await runtime.permissions.listPending({
+        runId: "permission-late-run",
+      });
+      if (!pending) throw new Error("expected pending permission");
+      const suggestion = pending.grantSuggestions?.find(
+        (candidate) => candidate.kind === "session",
+      );
+      if (!suggestion) throw new Error("expected session grant suggestion");
+
+      now = vi.spyOn(Date, "now").mockReturnValue(Date.parse(expiresAt) + 1);
+
+      await expect(runtime.permissions.respond(
+        pending.id,
+        { type: "allow_session", suggestionId: suggestion.id },
+        { runId: pending.runId },
+      )).resolves.toBe(false);
+      await expect(decision).resolves.toEqual({
+        type: "reject",
+        reason:
+          "permission request timed out; choose a safer approach that does not require this approval",
+        cause: "approval_timeout",
+      });
+      await expect(runtime.permissions.listGrants()).resolves.toMatchObject({
+        value: [],
+      });
+    } finally {
+      now?.mockRestore();
+      await runtime.close();
+    }
+  });
+
+  it("uses the validated AskUser default when a late answer beats timer dispatch", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: tempRoot,
+      defaultProvider: "mock-provider",
+      userInputTimeoutMs: 60_000,
+    });
+    let answerDone: Promise<unknown> | undefined;
+    codingMock.startKodaX.mockImplementation(
+      (options: KodaXOptions): RunningSession => {
+        queueMicrotask(() => {
+          answerDone = options.events?.askUser?.({
+            question: "Continue?",
+            options: [
+              { label: "Yes", value: "yes" },
+              { label: "No", value: "no" },
+            ],
+            default: "yes",
+          });
+        });
+        return fakeRunningSession(
+          options,
+          new Promise<KodaXResult>(() => undefined),
+        );
+      },
+    );
+    const session = await runtime.sessions.create({ title: "Late AskUser" });
+    const handle = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "ask after deadline",
+      options: {
+        events: {
+          askUser: async () => new Promise<never>(() => undefined),
+        },
+      },
+    });
+    let now: ReturnType<typeof vi.spyOn> | undefined;
+    try {
+      let pending: Awaited<ReturnType<typeof runtime.userInputs.listPending>>[number]
+        | undefined;
+      for (let attempt = 0; attempt < 10 && (!pending || !answerDone); attempt += 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        [pending] = await runtime.userInputs.listPending({ runId: handle.runId });
+      }
+      const answer = answerDone;
+      if (!answer) throw new Error("expected AskUser callback");
+      if (!pending) throw new Error("expected pending AskUser request");
+
+      now = vi.spyOn(Date, "now").mockReturnValue(
+        Date.parse(pending.expiresAt) + 1,
+      );
+
+      await expect(runtime.userInputs.respond(
+        pending.id,
+        "no",
+        { expectedRevision: pending.revision, runId: handle.runId },
+      )).resolves.toEqual({
+        requestId: pending.id,
+        accepted: false,
+        status: "already_resolved",
+      });
+      await expect(answer).resolves.toBe("yes");
+      await expect(runtime.userInputs.listPending({ runId: handle.runId }))
+        .resolves.toEqual([]);
+    } finally {
+      now?.mockRestore();
+      await runtime.runs.abort(handle.runId);
+      await runtime.close();
+    }
   });
 
   it("runs managed_task mode through runManagedTask and settles on abort", async () => {
@@ -19382,6 +19643,171 @@ describe("createKodaXRuntime", () => {
 
     expect(results.filter((result) => result.accepted)).toHaveLength(1);
     await expect(answerDone).resolves.toBe("yes");
+    await expect(
+      runtime.userInputs.listPending({ runId: handle.runId }),
+    ).resolves.toEqual([]);
+    await runtime.runs.abort(handle.runId);
+    await runtime.close();
+  });
+
+  it("keeps a Run waiting until every concurrent AskUser request settles", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: tempRoot,
+      defaultProvider: "mock-provider",
+      sharedDaemonHost: true,
+    });
+    const session = await runtime.sessions.create({ title: "Concurrent AskUser phase" });
+    let firstAnswer: Promise<unknown> | undefined;
+    let secondAnswer: Promise<unknown> | undefined;
+
+    codingMock.startKodaX.mockImplementation(
+      (options: KodaXOptions): RunningSession => {
+        queueMicrotask(() => {
+          firstAnswer = options.events?.askUser?.({
+            question: "First?",
+            options: [{ label: "Yes", value: "yes" }],
+          });
+          secondAnswer = options.events?.askUser?.({
+            question: "Second?",
+            options: [{ label: "Yes", value: "yes" }],
+          });
+        });
+        return fakeRunningSession(
+          options,
+          new Promise<KodaXResult>(() => undefined),
+        );
+      },
+    );
+
+    const handle = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "ask twice",
+    });
+    await flushMicrotasks();
+    const requests = await runtime.userInputs.listPending({ runId: handle.runId });
+    expect(requests).toHaveLength(2);
+    await expect(runtime.runs.get(handle.runId)).resolves.toMatchObject({
+      phase: "waiting_user_input",
+    });
+
+    await runtime.userInputs.respond(requests[0]!.id, "yes");
+    await expect(firstAnswer).resolves.toBe("yes");
+    await expect(runtime.runs.get(handle.runId)).resolves.toMatchObject({
+      phase: "waiting_user_input",
+    });
+
+    await runtime.userInputs.respond(requests[1]!.id, "yes");
+    await expect(secondAnswer).resolves.toBe("yes");
+    await expect(runtime.runs.get(handle.runId)).resolves.toMatchObject({
+      phase: "running",
+    });
+
+    await runtime.runs.abort(handle.runId);
+    await runtime.close();
+  });
+
+  it("uses validated AskUser defaults at the independent user-input deadline", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: tempRoot,
+      defaultProvider: "mock-provider",
+      permissionTimeoutMs: 60_000,
+      userInputTimeoutMs: 10,
+    });
+    const session = await runtime.sessions.create({ title: "AskUser Defaults" });
+    let answersDone: Promise<readonly unknown[]> | undefined;
+    const promptSignals: AbortSignal[] = [];
+
+    codingMock.startKodaX.mockImplementation(
+      (options: KodaXOptions): RunningSession => {
+        queueMicrotask(() => {
+          answersDone = Promise.all([
+            options.events?.askUser?.({
+              question: "Continue?",
+              options: [
+                { label: "Yes", value: "yes" },
+                { label: "No", value: "no" },
+              ],
+              default: "yes",
+            }),
+            options.events?.askUserInput?.({
+              question: "Branch name?",
+              default: "codex/safe-fix",
+            }),
+            options.events?.askUserMulti?.({
+              questions: [{
+                question: "Mode?",
+                options: [
+                  { label: "Safe", value: "safe" },
+                  { label: "Fast", value: "fast" },
+                ],
+                default: "safe",
+              }],
+            }),
+            options.events?.askUser?.({
+              question: "Invalid default?",
+              options: [{ label: "Only", value: "only" }],
+              default: "missing",
+            }),
+            options.events?.askUser?.({
+              question: "Insufficient multi-select default?",
+              options: [
+                { label: "One", value: "one" },
+                { label: "Two", value: "two" },
+              ],
+              multiSelect: true,
+              minSelections: 2,
+              default: "one",
+            }),
+          ]);
+        });
+        return fakeRunningSession(
+          options,
+          new Promise<KodaXResult>(() => undefined),
+        );
+      },
+    );
+
+    const handle = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "ask with defaults",
+      options: {
+        events: {
+          askUser: async (_options, _meta, context) => {
+            if (context) promptSignals.push(context.signal);
+            return new Promise<never>(() => undefined);
+          },
+          askUserInput: async (_options, _meta, context) => {
+            if (context) promptSignals.push(context.signal);
+            return new Promise<never>(() => undefined);
+          },
+          askUserMulti: async (_options, _meta, context) => {
+            if (context) promptSignals.push(context.signal);
+            return new Promise<never>(() => undefined);
+          },
+        },
+      },
+    });
+    await flushMicrotasks();
+    if (!answersDone) throw new Error("expected AskUser callbacks");
+    const outcome = await Promise.race([
+      answersDone,
+      new Promise<"not_settled">((resolve) =>
+        setTimeout(() => resolve("not_settled"), 200)),
+    ]);
+
+    expect(outcome).toEqual([
+      "yes",
+      "codex/safe-fix",
+      { "Mode?": "safe" },
+      CANCELLED_TOOL_RESULT_MESSAGE,
+      CANCELLED_TOOL_RESULT_MESSAGE,
+    ]);
+    expect(promptSignals).toHaveLength(5);
+    expect(promptSignals.every((signal) => signal.aborted)).toBe(true);
     await expect(
       runtime.userInputs.listPending({ runId: handle.runId }),
     ).resolves.toEqual([]);

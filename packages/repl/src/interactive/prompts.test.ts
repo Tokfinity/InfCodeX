@@ -114,4 +114,22 @@ describe('confirmToolExecution', () => {
     expect(rendered).toContain('Session');
     expect(rendered).not.toMatch(/\[a\]\s+Always/);
   });
+
+  it('rejects and settles when the Runtime aborts an active prompt', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const controller = new AbortController();
+    const rl = {
+      question: vi.fn(() => undefined),
+    } as unknown as readline.Interface;
+
+    const decision = confirmToolExecution(
+      rl,
+      'bash',
+      { command: 'git push' },
+      { signal: controller.signal },
+    );
+    controller.abort();
+
+    await expect(decision).resolves.toEqual({ confirmed: false });
+  });
 });

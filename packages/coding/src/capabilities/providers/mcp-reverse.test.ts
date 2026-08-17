@@ -2,7 +2,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   McpServerRuntime,
   setActiveUserInteraction,
@@ -21,6 +21,7 @@ const fileUri = (dir: string): string => pathToFileURL(path.resolve(dir)).href;
 const tempDirs: string[] = [];
 
 afterEach(async () => {
+  vi.useRealTimers();
   // Tests register a live interaction surface; never leak it across tests.
   setActiveUserInteraction(undefined);
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -262,6 +263,26 @@ describe('activeElicitHandler — resolves the live surface at call time', () =>
     const handler = activeElicitHandler(); // built before any surface is live
     setActiveUserInteraction({ askUser: async () => 'accept' });
     expect(await handler({ mode: 'form', message: 'ok?' })).toEqual({ action: 'accept', content: {} });
+  });
+
+  it('cancels and aborts a registered surface that never answers', async () => {
+    vi.useFakeTimers();
+    let promptSignal: AbortSignal | undefined;
+    setActiveUserInteraction({
+      askUser: async (_options, context) => {
+        promptSignal = context?.signal;
+        return new Promise<never>(() => undefined);
+      },
+    });
+
+    const handling = activeElicitHandler()({ mode: 'form', message: 'ok?' });
+    await Promise.resolve();
+    expect(promptSignal?.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1_000);
+
+    await expect(handling).resolves.toEqual({ action: 'cancel' });
+    expect(promptSignal?.aborted).toBe(true);
   });
 });
 

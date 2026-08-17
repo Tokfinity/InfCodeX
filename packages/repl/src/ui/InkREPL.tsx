@@ -158,6 +158,7 @@ import type {
   KodaXOutputSegmentStarted,
   KodaXSidecarMessageEvent,
   KodaXToolEventMeta,
+  KodaXUserInputPromptContext,
   KodaXWorkflowAgentDigestEvent,
   TodoItem,
   TodoList,
@@ -514,12 +515,22 @@ import {
   type TranscriptSelectionSpan,
 } from "./utils/transcript-selection-gestures.js";
 import { buildHostSessionPayload } from "./utils/session-payload.js";
+import { SessionReadError } from "../interactive/storage.js";
 import type {
   PreparedSessionAppendBaseline,
   PreparedSessionTailDelta,
 } from "../interactive/storage.js";
 
 const DOUBLE_INTERRUPT_ESCAPE_INTERVAL_MS = 500;
+
+function reportBackgroundSessionPersistenceError(error: unknown): void {
+  emitKodaXDiagnostic({
+    source: 'repl:session-persistence',
+    level: 'error',
+    message: 'Failed to persist interactive Session state in the background.',
+    detail: error,
+  });
+}
 
 function learningCenterActions(record: LearnedCapabilityRecord): SelectOption[] {
   const actions: SelectOption[] = [{ label: "Acknowledge notification", value: "acknowledge" }];
@@ -578,7 +589,17 @@ async function applyLearningCenterAction(
   else if (action === "trust") await binding.trust(slug);
 }
 
-type AppendSessionDeltaStorage = SessionStorage & {
+export interface HostSessionPersistenceStorage {
+  save(id: string, data: SessionData): Promise<void>;
+  appendSessionDelta?(id: string, data: SessionData): Promise<void>;
+  prepareSessionAppend?(id: string): Promise<PreparedSessionAppendBaseline | null>;
+  appendPreparedSessionTail?(
+    id: string,
+    delta: PreparedSessionTailDelta,
+  ): Promise<PreparedSessionAppendBaseline | null>;
+}
+
+type AppendSessionDeltaStorage = HostSessionPersistenceStorage & {
   appendSessionDelta(id: string, data: SessionData): Promise<void>;
 };
 
@@ -590,7 +611,9 @@ type PreparedAppendStorage = AppendSessionDeltaStorage & {
   ): Promise<PreparedSessionAppendBaseline | null>;
 };
 
-function hasAppendSessionDelta(storage: SessionStorage): storage is AppendSessionDeltaStorage {
+function hasAppendSessionDelta(
+  storage: HostSessionPersistenceStorage,
+): storage is AppendSessionDeltaStorage {
   const candidate: Partial<AppendSessionDeltaStorage> = storage;
   return typeof candidate.appendSessionDelta === "function";
 }
@@ -633,7 +656,9 @@ export interface InkTransientNotice {
   readonly tone: "success" | "warning";
 }
 
-function hasPreparedSessionAppend(storage: SessionStorage): storage is PreparedAppendStorage {
+function hasPreparedSessionAppend(
+  storage: HostSessionPersistenceStorage,
+): storage is PreparedAppendStorage {
   const candidate: Partial<PreparedAppendStorage> = storage;
   return typeof candidate.prepareSessionAppend === "function"
     && typeof candidate.appendPreparedSessionTail === "function"
@@ -675,6 +700,41 @@ export function createPreparedSessionTail(
     ...(data.uiHistory !== undefined ? { uiHistory: data.uiHistory } : {}),
     ...(data.scope !== undefined ? { scope: data.scope } : {}),
   };
+}
+
+export async function persistHostSessionPayload(
+  storage: HostSessionPersistenceStorage,
+  sessionId: string,
+  sessionPayload: SessionData,
+  sessionSnapshotDirty: boolean,
+): Promise<void> {
+  const baseline = hasPreparedSessionAppend(storage)
+    ? await storage.prepareSessionAppend(sessionId)
+    : null;
+  const preparedTail = baseline === null
+    ? undefined
+    : createPreparedSessionTail(
+        sessionPayload,
+        baseline,
+        sessionSnapshotDirty,
+      );
+  if (hasPreparedSessionAppend(storage) && preparedTail !== undefined) {
+    try {
+      await storage.appendPreparedSessionTail(sessionId, preparedTail);
+      return;
+    } catch (error: unknown) {
+      if (!(error instanceof SessionReadError) || error.code !== 'data_changed') {
+        throw error;
+      }
+      await storage.appendSessionDelta(sessionId, sessionPayload);
+      return;
+    }
+  }
+  if (hasAppendSessionDelta(storage)) {
+    await storage.appendSessionDelta(sessionId, sessionPayload);
+    return;
+  }
+  await storage.save(sessionId, sessionPayload);
 }
 
 export interface InkREPLOptions extends KodaXOptions {
@@ -6147,21 +6207,42 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     multiSelect?: boolean,
     // FEATURE_222 — optional multi-select count bounds. Only meaningful when
     // multiSelect is true; a caller that omits them gets the prior behaviour.
-    constraints?: { minSelections?: number; maxSelections?: number },
+    constraints?: {
+      minSelections?: number;
+      maxSelections?: number;
+      defaultValue?: string;
+    },
+    signal?: AbortSignal,
   ): Promise<string | string[] | undefined> => {
     if (options.length === 0) {
       return Promise.resolve(undefined);
     }
 
+    if (signal?.aborted) return Promise.resolve(undefined);
     return new Promise((resolve) => {
-      uiResolveRef.current = resolve;
+      const settle = (value: string | string[] | undefined): void => {
+        signal?.removeEventListener('abort', onAbort);
+        if (uiResolveRef.current === settle) uiResolveRef.current = null;
+        resolve(value);
+      };
+      const onAbort = (): void => {
+        if (uiResolveRef.current !== settle) return;
+        setUiRequest(null);
+        settle(undefined);
+      };
+      uiResolveRef.current = settle;
+      signal?.addEventListener('abort', onAbort, { once: true });
+      const defaultIndex = constraints?.defaultValue === undefined
+        ? -1
+        : options.findIndex((option) => option.value === constraints.defaultValue);
       setUiRequest({
         kind: "select",
         title,
         options,
         buffer: "",
-        focusedIndex: 0,
-        selectedIndices: [],
+        focusedIndex: Math.max(0, defaultIndex),
+        selectedIndices:
+          multiSelect === true && defaultIndex >= 0 ? [defaultIndex] : [],
         multiSelect,
         minSelections: constraints?.minSelections,
         maxSelections: constraints?.maxSelections,
@@ -6256,13 +6337,28 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     };
   }, [askUserForConstructionPolicy]);
 
-  const showInputDialog = useCallback((prompt: string, defaultValue?: string): Promise<string | undefined> => {
+  const showInputDialog = useCallback((
+    prompt: string,
+    defaultValue?: string,
+    signal?: AbortSignal,
+  ): Promise<string | undefined> => {
+    if (signal?.aborted) return Promise.resolve(undefined);
     return new Promise<string | undefined>((resolve) => {
       // uiResolveRef is shared with the (now array-capable, FEATURE_222) select
       // dialog, so it accepts string[]. Input mode never resolves an array;
       // narrow defensively so the string-only Promise contract holds.
-      uiResolveRef.current = (value) =>
+      const settle = (value: string | string[] | undefined): void => {
+        signal?.removeEventListener('abort', onAbort);
+        if (uiResolveRef.current === settle) uiResolveRef.current = null;
         resolve(Array.isArray(value) ? value[0] : value);
+      };
+      const onAbort = (): void => {
+        if (uiResolveRef.current !== settle) return;
+        setUiRequest(null);
+        settle(undefined);
+      };
+      uiResolveRef.current = settle;
+      signal?.addEventListener('abort', onAbort, { once: true });
       setUiRequest({
         kind: "input",
         prompt,
@@ -7504,7 +7600,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     },
     // Issue 069: Ask user a question interactively.
     // Issue 114: ESC returns undefined → must signal cancellation, not silently fallback.
-    askUser: async (options: import("@kodax-ai/coding").AskUserQuestionOptions): Promise<AskUserAnswer> => {
+    askUser: async (
+      options: import("@kodax-ai/coding").AskUserQuestionOptions,
+      _meta?: KodaXToolEventMeta,
+      interaction?: KodaXUserInputPromptContext,
+    ): Promise<AskUserAnswer> => {
       const selectOptions = appendCustomInputOption(
         options.options ? toSelectOptions(options.options) : [],
         options,
@@ -7514,7 +7614,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         selectOptions,
         options.multiSelect,
         // FEATURE_222 — forward multi-select count bounds for host enforcement.
-        { minSelections: options.minSelections, maxSelections: options.maxSelections },
+        {
+          minSelections: options.minSelections,
+          maxSelections: options.maxSelections,
+          defaultValue: options.default,
+        },
+        interaction?.signal,
       );
 
       // Issue 114: User pressed ESC → signal cancellation so the agent loop stops.
@@ -7526,6 +7631,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         const customValue = await showInputDialog(
           options.customInputPrompt ?? options.question,
           options.customInputDefault,
+          interaction?.signal,
         );
         if (customValue === undefined) return CANCELLED_TOOL_RESULT_MESSAGE;
         return { kind: "customInput", value: customValue };
@@ -7535,6 +7641,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         const customValue = await showInputDialog(
           options.customInputPrompt ?? options.question,
           options.customInputDefault,
+          interaction?.signal,
         );
         if (customValue === undefined) return CANCELLED_TOOL_RESULT_MESSAGE;
         return selectedValue.map((value): AskUserSelectionAnswer =>
@@ -7563,7 +7670,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       return false;
     },
     // Multi-question mode: present each question sequentially with back navigation.
-    askUserMulti: async (options: import("@kodax-ai/coding").AskUserMultiOptions): Promise<Record<string, AskUserAnswer> | undefined> => {
+    askUserMulti: async (
+      options: import("@kodax-ai/coding").AskUserMultiOptions,
+      _meta?: KodaXToolEventMeta,
+      interaction?: KodaXUserInputPromptContext,
+    ): Promise<Record<string, AskUserAnswer> | undefined> => {
       const questions = options.questions;
       const answers: Record<string, AskUserAnswer> = {};
       let i = 0;
@@ -7586,7 +7697,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           selectOptions,
           q.multiSelect,
           // FEATURE_222 — per-question multi-select bounds inherited from the item.
-          { minSelections: q.minSelections, maxSelections: q.maxSelections },
+          {
+            minSelections: q.minSelections,
+            maxSelections: q.maxSelections,
+            defaultValue: q.default,
+          },
+          interaction?.signal,
         );
 
         if (selected === undefined) {
@@ -7604,6 +7720,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           const customValue = await showInputDialog(
             q.customInputPrompt ?? q.question,
             q.customInputDefault,
+            interaction?.signal,
           );
           if (customValue === undefined) return undefined;
           answers[q.question] = { kind: "customInput", value: customValue };
@@ -7615,6 +7732,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           const customValue = await showInputDialog(
             q.customInputPrompt ?? q.question,
             q.customInputDefault,
+            interaction?.signal,
           );
           if (customValue === undefined) return undefined;
           answers[q.question] = selected.map((value): AskUserSelectionAnswer =>
@@ -7632,8 +7750,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
       return answers;
     },
-    askUserInput: async (options: { question: string; default?: string }): Promise<string | undefined> => {
-      return showInputDialog(options.question, options.default);
+    askUserInput: async (
+      options: { question: string; default?: string },
+      _meta?: KodaXToolEventMeta,
+      interaction?: KodaXUserInputPromptContext,
+    ): Promise<string | undefined> => {
+      return showInputDialog(options.question, options.default, interaction?.signal);
     },
     onCompactStart: () => {
       // Trigger the compacting UI indicator before actual compaction begins
@@ -7802,6 +7924,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     tool: string,
     input: Record<string, unknown>,
     runtimeGrantSuggestions?: readonly ReplRuntimePermissionGrantSuggestion[],
+    signal?: AbortSignal,
   ): Promise<ConfirmResult> => {
     const basePrompt = buildToolConfirmationPrompt(tool, input);
     const scopeLabels = runtimeGrantSuggestions?.map((suggestion) => suggestion.label) ?? [];
@@ -7816,12 +7939,26 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       : basePrompt;
 
     return confirmationDialogQueueRef.current(() => {
+      if (signal?.aborted) return Promise.resolve({ confirmed: false });
       // FEATURE_203 (v0.7.45): commit any pending streamed text before raising
       // the approval popup, so the popup never appears mid-sentence.
       flushForegroundTextBuffer();
 
       return new Promise<ConfirmResult>((resolve) => {
-        confirmResolveRef.current = resolve;
+        const settle = (result: ConfirmResult): void => {
+          signal?.removeEventListener('abort', onAbort);
+          if (confirmResolveRef.current === settle) {
+            confirmResolveRef.current = null;
+          }
+          resolve(result);
+        };
+        const onAbort = (): void => {
+          if (confirmResolveRef.current !== settle) return;
+          setConfirmRequest(null);
+          settle({ confirmed: false });
+        };
+        confirmResolveRef.current = settle;
+        signal?.addEventListener('abort', onAbort, { once: true });
         setConfirmRequest({
           tool,
           input,
@@ -7832,7 +7969,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     });
   };
 
-  const requestRuntimePermission: ReplRuntimePermissionPrompt = async (request) => {
+  const requestRuntimePermission: ReplRuntimePermissionPrompt = async (request, promptContext) => {
     const result = await showConfirmDialog(
       request.toolName,
       {
@@ -7842,6 +7979,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         ...(request.risk !== undefined ? { _runtimeRisk: request.risk } : {}),
       },
       request.grantSuggestions ?? [],
+      promptContext.signal,
     );
     return resolveReplRuntimePermissionDecision(request, result);
   };
@@ -7901,18 +8039,18 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   useEffect(() => {
     const resolve = (): ReturnType<typeof createStreamingEvents> => createStreamingEvents();
     setActiveUserInteraction({
-      askUser: (options) => {
+      askUser: (options, context) => {
         const fn = resolve().askUser;
         if (!fn) throw new Error("askUser surface unavailable");
-        return fn(options);
+        return fn(options, undefined, context);
       },
-      askUserMulti: async (options) => {
+      askUserMulti: async (options, context) => {
         const fn = resolve().askUserMulti;
-        return fn ? fn(options) : undefined;
+        return fn ? fn(options, undefined, context) : undefined;
       },
-      askUserInput: async (options) => {
+      askUserInput: async (options, context) => {
         const fn = resolve().askUserInput;
-        return fn ? fn(options) : undefined;
+        return fn ? fn(options, undefined, context) : undefined;
       },
     });
     return () => setActiveUserInteraction(undefined);
@@ -8077,23 +8215,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       artifactLedger: context.artifactLedger,
       ...extensionSessionPayload,
     });
-    const baseline = hasPreparedSessionAppend(storage)
-      ? await storage.prepareSessionAppend(context.sessionId)
-      : null;
-    const preparedTail = baseline === null
-      ? undefined
-      : createPreparedSessionTail(
-          sessionPayload,
-          baseline,
-          context.sessionSnapshotDirty === true,
-        );
-    if (hasPreparedSessionAppend(storage) && preparedTail !== undefined) {
-      await storage.appendPreparedSessionTail(context.sessionId, preparedTail);
-    } else if (hasAppendSessionDelta(storage)) {
-      await storage.appendSessionDelta(context.sessionId, sessionPayload);
-    } else {
-      await storage.save(context.sessionId, sessionPayload);
-    }
+    await persistHostSessionPayload(
+      storage,
+      context.sessionId,
+      sessionPayload,
+      context.sessionSnapshotDirty === true,
+    );
     context.extensionStateDirty = false;
     context.extensionRecordsDirty = false;
     context.sessionSnapshotDirty = false;
@@ -8127,7 +8254,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       } finally {
         persistContextStateRunnerRef.current = null;
         if (pendingPersistContextStateRef.current.requested) {
-          void flushPendingPersistContextState();
+          void flushPendingPersistContextState()
+            .catch(reportBackgroundSessionPersistenceError);
         }
       }
     })();
@@ -8164,8 +8292,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       setIsLoading(false);
 
       // Flush any pending persistence, then force a final save with the latest uiHistory.
-      await persistContextStateQueueRef.current.catch(() => {});
-      await persistContextStateRef.current?.().catch(() => {});
+      await persistContextStateQueueRef.current.catch(
+        reportBackgroundSessionPersistenceError,
+      );
+      await persistContextStateRef.current?.().catch(
+        reportBackgroundSessionPersistenceError,
+      );
       setIsRunning(false);
       if (isRawModeSupported && stdin?.isRaw) {
         setRawMode(false);
@@ -8209,7 +8341,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     }
     const nextUiHistory = appendPersistedUiHistorySnapshot(persistedUiHistoryRef.current, items);
     persistedUiHistoryRef.current = nextUiHistory;
-    void persistContextStateInBackground(nextUiHistory);
+    void persistContextStateInBackground(nextUiHistory)
+      .catch(reportBackgroundSessionPersistenceError);
   }, [persistContextStateInBackground]);
 
   const appendHistoryItemsWithPersistence = useCallback((items: readonly CreatableHistoryItem[]) => {
@@ -8376,7 +8509,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
     // Persist session state off the critical UI path so the spinner can stop
     // as soon as the final answer is on screen.
-    void persistContextStateInBackground(nextUiHistory).catch(() => {});
+    void persistContextStateInBackground(nextUiHistory)
+      .catch(reportBackgroundSessionPersistenceError);
   }, [
     addHistoryItems,
     clearIterationHistory,
@@ -9088,7 +9222,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
               content: text,
             });
             reconcileContextLineage(context.messages);
-            void persistContextStateInBackground();
+            void persistContextStateInBackground()
+              .catch(reportBackgroundSessionPersistenceError);
             if (streamingStateRef.current.pendingInputs.length > 0) {
               workflowIntentBoundaryQueueLockedRef.current = true;
             }
@@ -9144,7 +9279,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             content: text,
           });
           reconcileContextLineage(context.messages);
-          void persistContextStateInBackground();
+          void persistContextStateInBackground()
+            .catch(reportBackgroundSessionPersistenceError);
         };
         // Create command callbacks
         const callbacks: CommandCallbacks = {

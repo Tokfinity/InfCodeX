@@ -506,6 +506,11 @@ export interface KodaXPromptCacheDiagnosticEvent {
   readonly cachedWriteTokens?: number;
 }
 
+export interface KodaXUserInputPromptContext {
+  /** Aborted when the Runtime resolves, expires, or dismisses the interaction. */
+  readonly signal: AbortSignal;
+}
+
 export interface KodaXEvents {
   /** FEATURE_229: correlates child-agent SDK callbacks back to a workflow run/item. */
   workflowCorrelation?: WorkflowEventCorrelation;
@@ -799,16 +804,22 @@ export interface KodaXEvents {
   ) => Promise<boolean | string>;
   /** Ask user a question interactively - Issue 069. Select answers may be
    *  strings, arrays, or structured custom-input answers. */
-  askUser?: (options: AskUserQuestionOptions, meta?: KodaXToolEventMeta) => Promise<AskUserAnswer>;
+  askUser?: (
+    options: AskUserQuestionOptions,
+    meta?: KodaXToolEventMeta,
+    context?: KodaXUserInputPromptContext,
+  ) => Promise<AskUserAnswer>;
   /** Ask user multiple independent questions sequentially - 澶氶棶棰橀『搴忔彁闂?*/
   askUserMulti?: (
     options: AskUserMultiOptions,
     meta?: KodaXToolEventMeta,
+    context?: KodaXUserInputPromptContext,
   ) => Promise<Record<string, AskUserAnswer> | undefined>;
   /** Ask user for free-text input - 自由文本输入 (Issue 112) */
   askUserInput?: (
     options: { question: string; default?: string },
     meta?: KodaXToolEventMeta,
+    context?: KodaXUserInputPromptContext,
   ) => Promise<string | undefined>;
   /**
    * FEATURE_074: Exit plan mode with user approval. Called by the `exit_plan_mode` tool.

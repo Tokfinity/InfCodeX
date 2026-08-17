@@ -331,8 +331,23 @@ return `unsupported_capability`, while queued or terminal targets return
 rather than silently converting it to `after_turn`. External aborts and
 terminal errors also close the window. Non-terminal observer diagnostics do not
 close a still-consumable window. AskUser and permission
-registries expose pending lists and first-winner responses over transport;
-persistent permission grants have one daemon-owned revisioned store. A concrete
+registries expose pending lists and first-winner responses over transport.
+They have independent owner deadlines (five minutes by default). Permission
+expiry resolves as a typed `reject` with `cause: approval_timeout`; an SDK host
+uses `handleRuntimePermissionRequest()` so owner resolution aborts its UI
+prompt and a late answer cannot hold or revive the event chain. AskUser expiry
+accepts only a Runtime-validated `default` option value (or input default); a
+missing or invalid default dismisses the request. The same AbortSignal linkage
+is used for embedded host callbacks, so timeout behavior is not daemon-UI-only.
+Permission request timeout overrides are non-negative safe integers bounded by
+the Node timer maximum; explicit absolute deadlines must also fit that horizon.
+MCP reverse elicitation carries the agent-layer AbortSignal through the same UI
+surface and cancels after the five-minute interaction bound instead of leaving
+an untracked host Promise alive. SDK user-input timeout overrides must be
+positive integers no greater than 2,147,483,647; permission timeout overrides
+use the same upper bound and retain `0` as the existing timer-disable value.
+Invalid values are rejected before embedded, Worker, or daemon startup.
+Persistent permission grants have one daemon-owned revisioned store. A concrete
 permission request may expose opaque
 Runtime-issued Session and persistent grant suggestions. Clients can select a
 suggestion id but cannot submit or widen its hidden matcher. Command matchers
@@ -1182,7 +1197,12 @@ Headless core Runs write through their injected storage; Runtime overrides a
 client-carried `persistedByHost` flag because the Runtime is the canonical
 Session owner on both embedded and daemon paths. Runtime-backed Ink/classic
 hosts update only their live projection after acknowledgement and never become
-a second writer. A first-run compact seeds a missing Session from explicit Run
+a second canonical transcript writer. Ink's presentation-state tail may still
+race an owner-written Actor snapshot: a stale prepared append catches only
+`SessionReadError(data_changed)`, reloads through `appendSessionDelta()`, and
+merges the UI tail without replacing the newer Actor snapshot. Background
+persistence failures become diagnostics rather than unhandled promise
+rejections. A first-run compact seeds a missing Session from explicit Run
 metadata before persistence; a rejected async compact callback restores the
 tentative context revision as well as leaving the exact payload intact.
 

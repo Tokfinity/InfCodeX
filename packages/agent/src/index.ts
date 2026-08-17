@@ -444,6 +444,7 @@ export {
 // and the agent MCP elicitation reverse capability) + the live-surface registry.
 export type {
   UserInteraction,
+  UserInteractionPromptContext,
   AskUserAnswer,
   AskUserSelectionAnswer,
   AskUserCustomInputAnswer,
@@ -766,6 +767,7 @@ export {
 } from './learning/index.js';
 export {
   acquireLearningFileLock as acquireKodaXFileLock,
+  reclaimStaleLearningFileLock as reclaimStaleKodaXFileLock,
   withLearningFileLock as withKodaXFileLock,
 } from './learning/store-lock.js';
 

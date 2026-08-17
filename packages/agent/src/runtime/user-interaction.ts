@@ -37,6 +37,8 @@ export interface AskUserQuestionItem {
    * of parsing it out of natural-language question text.
    */
   maxSelections?: number;
+  /** Runtime-validated option value selected if the interaction expires. */
+  default?: string;
   /**
    * Choice surfaces are open-ended by default: hosts SHOULD offer a synthetic
    * custom-input option unless this is explicitly false.
@@ -67,6 +69,7 @@ export interface AskUserQuestionOptions {
   minSelections?: number;
   /** FEATURE_222 — see {@link AskUserQuestionItem.maxSelections}. */
   maxSelections?: number;
+  /** Input text or a Runtime-validated option value selected on expiry. */
   default?: string;
   /**
    * Choice surfaces are open-ended by default: hosts SHOULD offer a synthetic
@@ -121,6 +124,12 @@ export function asSingleSelection(answer: AskUserAnswer): string {
   return isAskUserCustomInputAnswer(first) ? first.value : first ?? '';
 }
 
+/** Lifecycle signal supplied by a bounded interaction owner. */
+export interface UserInteractionPromptContext {
+  /** Aborted when the interaction expires or its owner settles it elsewhere. */
+  readonly signal: AbortSignal;
+}
+
 /**
  * The host-provided user-interaction surface. Each method is optional — a
  * headless host omits them and callers degrade gracefully. This is the single
@@ -135,13 +144,22 @@ export interface UserInteraction {
    * return `{ kind: 'customInput', value }` in the single or array position.
    * Plain string/string[] hosts remain valid for backward compatibility.
    */
-  askUser?: (options: AskUserQuestionOptions) => Promise<AskUserAnswer>;
+  askUser?: (
+    options: AskUserQuestionOptions,
+    context?: UserInteractionPromptContext,
+  ) => Promise<AskUserAnswer>;
   /** Ask several independent questions sequentially. Resolves a per-question
    *  value map using the same `AskUserAnswer` shape as `askUser`, or undefined
    *  when the user cancels. */
-  askUserMulti?: (options: AskUserMultiOptions) => Promise<Record<string, AskUserAnswer> | undefined>;
+  askUserMulti?: (
+    options: AskUserMultiOptions,
+    context?: UserInteractionPromptContext,
+  ) => Promise<Record<string, AskUserAnswer> | undefined>;
   /** Ask for free-text input. Resolves the text, or undefined when cancelled. */
-  askUserInput?: (options: { question: string; default?: string }) => Promise<string | undefined>;
+  askUserInput?: (
+    options: { question: string; default?: string },
+    context?: UserInteractionPromptContext,
+  ) => Promise<string | undefined>;
 }
 
 /**

@@ -35,6 +35,7 @@ export interface AskUserQuestionItemInput {
   /** Only meaningful when multi_select is true; see tool schema. */
   min_selections?: number;
   max_selections?: number;
+  default?: string;
   allow_custom_input?: boolean;
   custom_input_label?: string;
   custom_input_prompt?: string;
@@ -234,6 +235,7 @@ export async function toolAskUserQuestion(
           addIfDefined(item, 'header', q.header);
           addIfDefined(item, 'minSelections', toSelectionBound(q.min_selections));
           addIfDefined(item, 'maxSelections', toSelectionBound(q.max_selections));
+          addIfDefined(item, 'default', optionalString(q.default));
           addIfDefined(item, 'customInputLabel', optionalString(q.custom_input_label ?? input.custom_input_label));
           addIfDefined(item, 'customInputPrompt', optionalString(q.custom_input_prompt ?? input.custom_input_prompt));
           addIfDefined(item, 'customInputDefault', optionalString(q.custom_input_default ?? input.custom_input_default));

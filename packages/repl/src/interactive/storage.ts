@@ -44,6 +44,7 @@ import {
   getSessionMessagesFromLineage,
   getActiveMemoryOutcomeReviewIds,
   rewindSessionLineage,
+  reclaimStaleKodaXFileLock,
   setSessionLineageActiveEntry,
   withPendingEpisodeReviewSessionFence,
   withKodaXFileLock,
@@ -791,6 +792,17 @@ function assertStableSessionReadBoundary(sessionsDir: string, id: string): void 
   }
 }
 
+async function prepareStableSessionReadBoundary(
+  sessionsDir: string,
+  id: string,
+): Promise<void> {
+  const writerPath = sessionWriteLockPath(sessionsDir, id);
+  if (fsSync.existsSync(writerPath)) {
+    await reclaimStaleKodaXFileLock(writerPath);
+  }
+  assertStableSessionReadBoundary(sessionsDir, id);
+}
+
 function assertSessionMigrationInactive(sessionsDir: string): void {
   const activePath = [
     path.join(sessionsDir, '.migration-lock'),
@@ -1351,7 +1363,7 @@ export async function readStableSessionBundleFiles(
 ): Promise<StableSessionBundleSnapshot> {
   const sessionsDir = path.resolve(sessionsDirInput);
   throwIfSessionReadAborted(signal);
-  assertStableSessionReadBoundary(sessionsDir, id);
+  await prepareStableSessionReadBoundary(sessionsDir, id);
   const candidates = await findStableSessionCandidates(sessionsDir, id);
   if (candidates.length !== 1) {
     const sourceRevisionState = createStableBundleSourceRevisionState(sessionsDir, []);
@@ -3298,7 +3310,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
     id: string,
     strict = false,
   ): Promise<string | null> {
-    if (strict) assertStableSessionReadBoundary(this.sessionsDir, id);
+    if (strict) await prepareStableSessionReadBoundary(this.sessionsDir, id);
     const cached = this.sessionLocations.get(id);
     if (
       cached?.kind === 'located'

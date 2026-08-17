@@ -20,6 +20,7 @@ export interface ConfirmOptions {
   default?: string;
   options?: ConfirmOption[];
   showDescription?: boolean;
+  signal?: AbortSignal;
 }
 
 const DEFAULT_YES_NO_OPTIONS: ConfirmOption[] = [
@@ -80,6 +81,7 @@ export async function confirmEnhanced(
     default: defaultKey,
     options: customOptions,
     showDescription = true,
+    signal,
   } = options;
 
   const promptOptions = customOptions ?? DEFAULT_YES_NO_OPTIONS;
@@ -101,9 +103,18 @@ export async function confirmEnhanced(
     console.log(chalk.dim(`  ${optionsText}`));
   }
 
+  if (signal?.aborted) return 'no';
   return new Promise((resolve) => {
     const defaultHint = defaultKey ? ` (${defaultKey})` : '';
-    rl.question(chalk.dim(`  Choose${defaultHint}: `), (answer) => {
+    let settled = false;
+    const finish = (value: string): void => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', onAbort);
+      resolve(value);
+    };
+    const onAbort = (): void => finish('no');
+    const onAnswer = (answer: string): void => {
       const input = answer.trim().toLowerCase() || defaultKey || '';
       const matched = promptOptions.find(
         (option) =>
@@ -113,13 +124,19 @@ export async function confirmEnhanced(
       );
 
       if (matched) {
-        resolve(matched.value);
+        finish(matched.value);
       } else if (input === '') {
-        resolve('no');
+        finish('no');
       } else {
-        resolve(input);
+        finish(input);
       }
-    });
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal) {
+      rl.question(chalk.dim(`  Choose${defaultHint}: `), { signal }, onAnswer);
+    } else {
+      rl.question(chalk.dim(`  Choose${defaultHint}: `), onAnswer);
+    }
   });
 }
 
@@ -147,6 +164,7 @@ export async function confirmToolExecution(
     isProtectedPath?: boolean;
     permissionMode?: PermissionMode;
     runtimeGrantSuggestions?: readonly ReplRuntimePermissionGrantSuggestion[];
+    signal?: AbortSignal;
   },
 ): Promise<ConfirmResult> {
   const {
@@ -154,6 +172,7 @@ export async function confirmToolExecution(
     isProtectedPath = false,
     permissionMode = 'accept-edits',
     runtimeGrantSuggestions,
+    signal,
   } = options ?? {};
   const symbols = getSymbols();
 
@@ -224,6 +243,7 @@ export async function confirmToolExecution(
     message,
     default: 'n',
     options: promptOptions,
+    signal,
   });
 
   if (result === 'always') {

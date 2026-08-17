@@ -37,6 +37,8 @@ interface LockTicket {
   readonly raw: string;
 }
 
+class LearningFileLockTimeoutError extends Error {}
+
 export async function withLearningFileLock<T>(
   lockPath: string,
   operation: () => Promise<T>,
@@ -66,6 +68,20 @@ export async function acquireLearningFileLock(
       await releaseLock(lockPath, lock.token);
     }
   };
+}
+
+/** Reclaim an abandoned lock through the same ticket queue used by writers. */
+export async function reclaimStaleLearningFileLock(lockPath: string): Promise<boolean> {
+  if (await observeStaleLock(lockPath) === undefined) return false;
+  let release: (() => Promise<void>) | undefined;
+  try {
+    release = await acquireLearningFileLock(lockPath, 0);
+  } catch (error: unknown) {
+    if (error instanceof LearningFileLockTimeoutError) return false;
+    throw error;
+  }
+  await release();
+  return true;
 }
 
 async function acquireLock(
@@ -478,7 +494,7 @@ async function removeFileWithTransientRetry(filePath: string): Promise<void> {
 }
 
 function lockTimeout(lockPath: string): Error {
-  return new Error(`learning store lock timed out: ${lockPath}`);
+  return new LearningFileLockTimeoutError(`learning store lock timed out: ${lockPath}`);
 }
 
 async function delay(milliseconds: number): Promise<void> {

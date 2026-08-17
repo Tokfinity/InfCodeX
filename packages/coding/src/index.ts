@@ -137,6 +137,7 @@ export type {
   KodaXSessionUiToolGroupHistoryItem,
   KodaXSessionWorkspaceKind,
   KodaXEvents,
+  KodaXUserInputPromptContext,
   KodaXPromptCacheDiagnosticEvent,
   KodaXSidecarMessageEvent,
   KodaXWorkflowAgentDigestEvent,

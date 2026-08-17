@@ -238,7 +238,7 @@ describe('toolAskUserQuestion - multi question', () => {
     const result = await toolAskUserQuestion(
       {
         questions: [
-          { question: 'env', options: [{ label: 'Prod', value: 'prod' }] },
+          { question: 'env', default: 'prod', options: [{ label: 'Prod', value: 'prod' }] },
           {
             question: 'regions',
             multi_select: true,
@@ -257,6 +257,7 @@ describe('toolAskUserQuestion - multi question', () => {
       answers: { env: 'prod', regions: ['us', 'eu'] },
     });
     const passed = askUserMulti.mock.calls[0]![0];
+    expect(passed.questions[0]!.default).toBe('prod');
     expect(passed.questions[1]!.minSelections).toBe(1);
   });
 

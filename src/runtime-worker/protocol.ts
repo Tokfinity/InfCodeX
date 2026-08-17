@@ -5,6 +5,7 @@ export interface RuntimeWorkerBootstrapOptions {
   readonly defaultProvider?: string;
   readonly defaultModel?: string;
   readonly permissionTimeoutMs?: number;
+  readonly userInputTimeoutMs?: number;
   /** Worker-owner bootstrap permission to load the configured outbound A2A integration. */
   readonly configuredA2A?: boolean;
 }

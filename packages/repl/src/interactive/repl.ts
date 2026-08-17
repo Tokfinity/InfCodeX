@@ -723,7 +723,7 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
     },
   });
 
-  const requestRuntimePermission: ReplRuntimePermissionPrompt = async (request) => {
+  const requestRuntimePermission: ReplRuntimePermissionPrompt = async (request, promptContext) => {
     const result = await confirmToolExecution(
       rl,
       request.toolName,
@@ -736,6 +736,7 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
       {
         permissionMode: currentPermissionMode,
         runtimeGrantSuggestions: request.grantSuggestions ?? [],
+        signal: promptContext.signal,
       },
     );
     return resolveReplRuntimePermissionDecision(request, result);

@@ -12,6 +12,7 @@ const fsMockState = vi.hoisted(() => ({
   replaced: false,
   removedSuccessor: false,
   lockRemovals: 0,
+  lockReads: 0,
   secondRemovalReached: undefined as (() => void) | undefined,
   waitForSecondRemoval: undefined as Promise<void> | undefined,
   operationStarted: undefined as Promise<void> | undefined,
@@ -46,6 +47,26 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       encoding: BufferEncoding,
     ): Promise<string> => {
       const value = await actual.readFile(target, encoding);
+      if (fsMockState.mode === 'replace-on-final-read-without-ticket'
+        && !fsMockState.replaced
+        && String(target) === fsMockState.lockPath) {
+        fsMockState.lockReads += 1;
+        if (fsMockState.lockReads === 2) {
+          const queueNames = await actual.readdir(`${fsMockState.lockPath}.queue`)
+            .catch(() => []);
+          const queued = queueNames.some((name) => (
+            name.startsWith('choosing-') || name.startsWith('ticket-')
+          ));
+          if (!queued) {
+            fsMockState.replaced = true;
+            await actual.writeFile(
+              fsMockState.lockPath,
+              fsMockState.successorOwner,
+              'utf8',
+            );
+          }
+        }
+      }
       if (fsMockState.mode === 'replace-on-read'
         && !fsMockState.replaced
         && String(target) === fsMockState.lockPath) {
@@ -117,6 +138,41 @@ afterEach(async () => {
 });
 
 describe('learning file lock stale recovery', () => {
+  it('does not create queue artifacts when no stale lock exists', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-store-lock-no-reclaim-'));
+    tempDirs.push(root);
+    const lockPath = path.join(root, 'owner.lock');
+    const { reclaimStaleLearningFileLock } = await import('./store-lock.js');
+
+    await expect(reclaimStaleLearningFileLock(lockPath)).resolves.toBe(false);
+    await expect(readdir(`${lockPath}.queue`)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('does not remove a successor while reclaiming a stale lock outside an operation', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-store-lock-direct-reclaim-'));
+    tempDirs.push(root);
+    const lockPath = path.join(root, 'owner.lock');
+    const staleOwner = '2147483647 11111111-1111-4111-8111-111111111111\n';
+    const successorOwner = `${process.pid} 22222222-2222-4222-8222-222222222222\n`;
+    await writeFile(lockPath, staleOwner, 'utf8');
+    const old = new Date(Date.now() - 60_000);
+    await utimes(lockPath, old, old);
+    Object.assign(fsMockState, {
+      mode: 'replace-on-final-read-without-ticket',
+      lockPath,
+      staleOwner,
+      successorOwner,
+      replaced: false,
+      removedSuccessor: false,
+      lockReads: 0,
+    });
+
+    const { reclaimStaleLearningFileLock } = await import('./store-lock.js');
+    await reclaimStaleLearningFileLock(lockPath);
+
+    expect(fsMockState.removedSuccessor).toBe(false);
+  });
+
   it('does not let a second stale reclaimer remove the successor lock acquired by the first', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-store-lock-reclaim-'));
     tempDirs.push(root);

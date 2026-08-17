@@ -1186,7 +1186,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
   },
   {
     name: 'ask_user_question',
-    description: 'Ask the user a question. Supports single-select (default), multi-select, free-text input, and custom input from select dialogs. Select questions are open-ended by default: KodaX adds an "Other..." custom input option automatically, so do NOT add your own Other/Custom option. Set allow_custom_input=false only for closed safety/protocol decisions. When you have multiple independent questions, use the "questions" array; each question is presented separately with its own options. Do NOT combine multiple questions into one string.',
+    description: 'Ask the user a question. Supports single-select (default), multi-select, free-text input, and custom input from select dialogs. Select questions are open-ended by default: KodaX adds an "Other..." custom input option automatically, so do NOT add your own Other/Custom option. Set allow_custom_input=false only for closed safety/protocol decisions. Set default to the recommended option value; the Runtime uses that validated value if the user does not answer before expiry. When you have multiple independent questions, use the "questions" array; each question is presented separately with its own options. Do NOT combine multiple questions into one string.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1223,6 +1223,10 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
               max_selections: {
                 type: 'integer',
                 description: 'Maximum number of options the user may select. Only applies when multi_select is true.',
+              },
+              default: {
+                type: 'string',
+                description: 'Recommended option value selected if this question expires. Must match one option value.',
               },
               allow_custom_input: {
                 type: 'boolean',
@@ -1296,7 +1300,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
           type: 'string',
           description: 'Optional default text for the custom input prompt.',
         },
-        default: { type: 'string', description: 'Optional default choice (for select) or default text (for input)' },
+        default: { type: 'string', description: 'Recommended option value (for select) or text (for input) used if the interaction expires.' },
       },
       required: ['question'],
     },

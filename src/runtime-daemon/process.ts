@@ -55,6 +55,7 @@ export interface RuntimeDaemonProcessLeaseOptions {
   readonly defaultModel?: string;
   readonly sessionsDir?: string;
   readonly permissionTimeoutMs?: number;
+  readonly userInputTimeoutMs?: number;
   /** Passed only to a newly spawned daemon; ignored when attaching an existing owner. */
   readonly orphanExitMs?: number;
   readonly connectTimeoutMs?: number;
@@ -294,6 +295,7 @@ export async function acquireRuntimeDaemonProcessLease(
     defaultModel: options.defaultModel,
     sessionsDir: options.sessionsDir,
     permissionTimeoutMs: options.permissionTimeoutMs,
+    userInputTimeoutMs: options.userInputTimeoutMs,
     orphanExitMs: options.orphanExitMs,
     startupTimeoutMs: options.startupTimeoutMs,
   });
@@ -591,6 +593,7 @@ export interface RuntimeDaemonServeProcessInput {
   readonly defaultModel?: string;
   readonly sessionsDir?: string;
   readonly permissionTimeoutMs?: number;
+  readonly userInputTimeoutMs?: number;
   readonly orphanExitMs?: number;
   readonly startupTimeoutMs?: number;
 }
@@ -622,6 +625,9 @@ export function buildRuntimeDaemonServeArgs(
     args.push("--sessions-dir", input.sessionsDir);
   if (input.permissionTimeoutMs !== undefined) {
     args.push("--permission-timeout-ms", String(input.permissionTimeoutMs));
+  }
+  if (input.userInputTimeoutMs !== undefined) {
+    args.push("--user-input-timeout-ms", String(input.userInputTimeoutMs));
   }
   if (input.orphanExitMs !== undefined) {
     args.push("--orphan-exit-ms", String(input.orphanExitMs));

@@ -22,6 +22,7 @@ import {
   breakerShouldFallback,
   analyzeAutoModeCall,
   bashSignalCollector,
+  CANCELLED_TOOL_RESULT_MESSAGE,
   checkAbsoluteDeny,
   createExternalActorTurnExecutor,
   createOutputSegmentProjection,
@@ -683,7 +684,10 @@ export interface CreateKodaXRuntimeOptions {
   readonly sessionsDir?: string;
   readonly defaultProvider?: string;
   readonly defaultModel?: string;
+  /** Fail-closed permission deadline in milliseconds; 0 disables it. Defaults to five minutes. */
   readonly permissionTimeoutMs?: number;
+  /** AskUser deadline in milliseconds. A validated default wins on expiry. Defaults to five minutes. */
+  readonly userInputTimeoutMs?: number;
   /** Internal daemon-host switch; keeps ordinary embedded runs non-interactive by default. */
   readonly sharedDaemonHost?: boolean;
   /** @internal Owner-fence identity assigned before a shared daemon Runtime is constructed. */
@@ -718,7 +722,10 @@ export interface ConnectKodaXRuntimeOptions {
   readonly sessionsDir?: string;
   readonly defaultProvider?: string;
   readonly defaultModel?: string;
+  /** Applied when this connection starts a new daemon owner; 0 disables it. Defaults to five minutes. */
   readonly permissionTimeoutMs?: number;
+  /** AskUser deadline for a newly started daemon. Defaults to five minutes. */
+  readonly userInputTimeoutMs?: number;
   readonly daemonStartupTimeoutMs?: number;
   readonly daemonConnectTimeoutMs?: number;
   /** Auto-started daemon idle-exit policy; see CreateKodaXRuntimeOptions. */
@@ -2480,6 +2487,264 @@ export type RuntimePermissionDecision =
       readonly cause?: "approval_timeout";
     };
 
+export interface RuntimePermissionPromptContext {
+  /** Aborted when the Runtime resolves, expires, or rejects the request first. */
+  readonly signal: AbortSignal;
+}
+
+export type RuntimePermissionPrompt = (
+  request: RuntimePermissionRequest,
+  context: RuntimePermissionPromptContext,
+) => Promise<RuntimePermissionDecision>;
+
+export interface RuntimePermissionPromptResolution {
+  readonly requestId: string;
+  readonly status: "responded" | "already_resolved";
+  readonly decision?: RuntimePermissionDecision;
+}
+
+function runtimePermissionTimeoutDecision(): RuntimePermissionDecision {
+  return {
+    type: "reject",
+    reason:
+      "permission request timed out; choose a safer approach that does not require this approval",
+    cause: "approval_timeout",
+  };
+}
+
+/**
+ * Run one host approval surface without making its Promise part of the Runtime
+ * lifecycle. The Runtime remains authoritative: a timeout, abort, or competing
+ * client resolution aborts the host prompt and wins over any late answer.
+ */
+export async function handleRuntimePermissionRequest(
+  runtime: KodaXRuntime,
+  request: RuntimePermissionRequest,
+  prompt: RuntimePermissionPrompt,
+): Promise<RuntimePermissionPromptResolution> {
+  const controller = new AbortController();
+  const timeoutDecision = runtimePermissionTimeoutDecision();
+  const observer = createRuntimePermissionPromptObserver(
+    runtime,
+    request,
+    timeoutDecision,
+  );
+  try {
+    const outcome = await waitForRuntimePermissionPromptOutcome(
+      runtime,
+      request,
+      prompt,
+      controller.signal,
+      observer.ready,
+      observer.outcome,
+      timeoutDecision,
+    );
+    return await commitRuntimePermissionPromptOutcome(
+      runtime,
+      request,
+      outcome,
+      timeoutDecision,
+      controller,
+      observer.observedDecision,
+    );
+  } finally {
+    observer.close();
+  }
+}
+
+type RuntimePermissionPromptOutcome =
+  | {
+      readonly source: "prompt" | "deadline";
+      readonly decision: RuntimePermissionDecision;
+    }
+  | {
+      readonly source: "runtime";
+      readonly decision?: RuntimePermissionDecision;
+    };
+
+type RuntimePermissionPromptGateOutcome =
+  | RuntimePermissionPromptOutcome
+  | { readonly source: "pending" };
+
+interface RuntimePermissionPromptObserver {
+  readonly ready?: Promise<void>;
+  readonly outcome: Promise<RuntimePermissionPromptOutcome>;
+  readonly observedDecision: () => RuntimePermissionDecision | undefined;
+  readonly close: () => void;
+}
+
+async function runtimePermissionPromptGate(
+  runtime: KodaXRuntime,
+  request: RuntimePermissionRequest,
+  runtimeOutcome: Promise<RuntimePermissionPromptOutcome>,
+): Promise<RuntimePermissionPromptGateOutcome> {
+  if (typeof runtime.permissions.listPending !== "function") {
+    return { source: "pending" };
+  }
+  const pendingCheck = Promise.resolve()
+    .then(() => runtime.permissions.listPending({ runId: request.runId }))
+    .then(
+      (pending): RuntimePermissionPromptGateOutcome => pending.some(
+        (item) => item.id === request.id,
+      )
+        ? { source: "pending" }
+        : { source: "runtime" },
+      (error: unknown): RuntimePermissionPromptGateOutcome => ({
+        source: "prompt",
+        decision: {
+          type: "reject",
+          reason: `Unable to verify the pending approval safely: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        },
+      }),
+    );
+  return Promise.race([pendingCheck, runtimeOutcome]);
+}
+
+function createRuntimePermissionPromptObserver(
+  runtime: KodaXRuntime,
+  request: RuntimePermissionRequest,
+  timeoutDecision: RuntimePermissionDecision,
+): RuntimePermissionPromptObserver {
+  let resolveRuntime: (outcome: RuntimePermissionPromptOutcome) => void = () => undefined;
+  let observedDecision: RuntimePermissionDecision | undefined;
+  const outcome = new Promise<RuntimePermissionPromptOutcome>((resolve) => {
+    resolveRuntime = resolve;
+  });
+  const subscription = runtime.events.subscribe(
+    { runId: request.runId, type: "permission.resolved" },
+    (event) => {
+      const payload = isRecord(event.payload) ? event.payload : undefined;
+      if (payload?.requestId !== request.id) return;
+      observedDecision = runtimePermissionDecisionFromPayload(payload.decision);
+      resolveRuntime({ source: "runtime", decision: observedDecision });
+    },
+  );
+  const expiresAtMs = request.expiresAt === undefined
+    ? undefined
+    : Date.parse(request.expiresAt);
+  const timeout = expiresAtMs !== undefined && Number.isFinite(expiresAtMs)
+    ? setTimeout(
+        () => resolveRuntime({ source: "deadline", decision: timeoutDecision }),
+        resolvePermissionTimeoutMs(request.expiresAt, 1),
+      )
+    : undefined;
+  timeout?.unref?.();
+  return {
+    ...(subscription.ready !== undefined ? { ready: subscription.ready } : {}),
+    outcome,
+    observedDecision: () => observedDecision,
+    close: () => {
+      if (timeout !== undefined) clearTimeout(timeout);
+      subscription.close();
+    },
+  };
+}
+
+function runRuntimePermissionPrompt(
+  request: RuntimePermissionRequest,
+  prompt: RuntimePermissionPrompt,
+  signal: AbortSignal,
+): Promise<RuntimePermissionPromptOutcome> {
+  return Promise.resolve()
+    .then(() => prompt(request, { signal }))
+    .then(
+      (decision): RuntimePermissionPromptOutcome => ({ source: "prompt", decision }),
+      (error: unknown): RuntimePermissionPromptOutcome => ({
+        source: "prompt",
+        decision: {
+          type: "reject",
+          reason: error instanceof Error ? error.message : String(error),
+        },
+      }),
+    );
+}
+
+async function waitForRuntimePermissionPromptOutcome(
+  runtime: KodaXRuntime,
+  request: RuntimePermissionRequest,
+  prompt: RuntimePermissionPrompt,
+  signal: AbortSignal,
+  subscriptionReady: Promise<void> | undefined,
+  runtimeOutcome: Promise<RuntimePermissionPromptOutcome>,
+  timeoutDecision: RuntimePermissionDecision,
+): Promise<RuntimePermissionPromptOutcome> {
+  const readiness = await Promise.race([
+    Promise.resolve(subscriptionReady).then(
+      () => ({ source: "ready" as const }),
+      (error: unknown): RuntimePermissionPromptOutcome => ({
+        source: "prompt",
+        decision: {
+          type: "reject",
+          reason: error instanceof Error ? error.message : String(error),
+        },
+      }),
+    ),
+    runtimeOutcome,
+  ]);
+  if (readiness.source !== "ready") return readiness;
+  if (runtimeDeadlineReached(request.expiresAt)) {
+    return { source: "deadline", decision: timeoutDecision };
+  }
+  const gate = await runtimePermissionPromptGate(runtime, request, runtimeOutcome);
+  if (gate.source !== "pending") return gate;
+  if (runtimeDeadlineReached(request.expiresAt)) {
+    return { source: "deadline", decision: timeoutDecision };
+  }
+  return Promise.race([
+    runRuntimePermissionPrompt(request, prompt, signal),
+    runtimeOutcome,
+  ]);
+}
+
+async function commitRuntimePermissionPromptOutcome(
+  runtime: KodaXRuntime,
+  request: RuntimePermissionRequest,
+  outcome: RuntimePermissionPromptOutcome,
+  timeoutDecision: RuntimePermissionDecision,
+  controller: AbortController,
+  observedDecision: () => RuntimePermissionDecision | undefined,
+): Promise<RuntimePermissionPromptResolution> {
+  if (outcome.source === "runtime") {
+    controller.abort();
+    return {
+      requestId: request.id,
+      status: "already_resolved",
+      ...(outcome.decision !== undefined ? { decision: outcome.decision } : {}),
+    };
+  }
+  const expired = runtimeDeadlineReached(request.expiresAt);
+  const decision = expired ? timeoutDecision : outcome.decision;
+  if (outcome.source === "deadline" || expired) controller.abort();
+  const accepted = await runtime.permissions.respond(
+    request.id,
+    decision,
+    { runId: request.runId },
+  );
+  if (accepted) return { requestId: request.id, status: "responded", decision };
+  controller.abort();
+  const authoritative = observedDecision();
+  return {
+    requestId: request.id,
+    status: "already_resolved",
+    ...(authoritative !== undefined ? { decision: authoritative } : {}),
+  };
+}
+
+function runtimePermissionDecisionFromPayload(
+  value: unknown,
+): RuntimePermissionDecision | undefined {
+  if (!isRecord(value) || typeof value.type !== "string") return undefined;
+  if (
+    value.type !== "allow_once" &&
+    value.type !== "allow_session" &&
+    value.type !== "allow_always" &&
+    value.type !== "reject"
+  ) return undefined;
+  return value as RuntimePermissionDecision;
+}
+
 export interface RuntimePermissionFilter {
   readonly sessionId?: string;
   readonly runId?: string;
@@ -3260,6 +3525,8 @@ class RuntimeStatusLockTimeoutError extends Error {
 }
 
 const DEFAULT_PERMISSION_TIMEOUT_MS = 5 * 60_000;
+const DEFAULT_USER_INPUT_TIMEOUT_MS = 5 * 60_000;
+const MAX_RUNTIME_TIMEOUT_MS = 2_147_483_647;
 const MAX_RUNTIME_MEMORY_EVENTS = 10_000;
 const MAX_RUNTIME_PENDING_EVENTS = 1_024;
 const MAX_RUNTIME_PENDING_EVENT_BYTES = 1024 * 1024;
@@ -3296,6 +3563,7 @@ const RUNTIME_ACTOR_FINALIZATION_MS = 30_000;
 const RUNTIME_ACTOR_REPAIR_INITIAL_RETRY_MS = 100;
 const RUNTIME_ACTOR_REPAIR_MAX_RETRY_MS = 30_000;
 const RUNTIME_SESSION_CAPTURE_RETRY_DELAYS_MS = [5, 15] as const;
+const RUNTIME_SESSION_LOAD_RETRY_DELAYS_MS = [10, 25, 50, 100, 200, 400] as const;
 const RUNTIME_LEGACY_LINEAGE_FALLBACK_TIMESTAMP = "1970-01-01T00:00:00.000Z";
 
 function createDeterministicRuntimeLegacyLineage(
@@ -3354,6 +3622,16 @@ export function createKodaXRuntime(
 export async function createKodaXRuntime(
   options: CreateKodaXRuntimeOptions = {},
 ): Promise<KodaXRuntime> {
+  assertRuntimeTimeout(
+    "permissionTimeoutMs",
+    options.permissionTimeoutMs,
+    0,
+  );
+  assertRuntimeTimeout(
+    "userInputTimeoutMs",
+    options.userInputTimeoutMs,
+    1,
+  );
   if (
     options.daemonHostRuntimeId !== undefined &&
     options.sharedDaemonHost !== true
@@ -3403,6 +3681,7 @@ export async function createKodaXRuntime(
       defaultProvider: options.defaultProvider,
       defaultModel: options.defaultModel,
       permissionTimeoutMs: options.permissionTimeoutMs,
+      userInputTimeoutMs: options.userInputTimeoutMs,
       daemonStartupTimeoutMs: options.daemonStartupTimeoutMs,
       daemonConnectTimeoutMs: options.daemonConnectTimeoutMs,
       ...(options.daemonOrphanExitMs !== undefined
@@ -3608,7 +3887,7 @@ export async function createKodaXRuntime(
   );
   const userInputs = createRuntimeUserInputRegistry(
     bus,
-    options.permissionTimeoutMs ?? DEFAULT_PERMISSION_TIMEOUT_MS,
+    options.userInputTimeoutMs ?? DEFAULT_USER_INPUT_TIMEOUT_MS,
   );
   const artifacts = createRuntimeArtifactStore();
   const workflows = createRuntimeWorkflowService();
@@ -4113,6 +4392,7 @@ async function createInProcessExternalAgentDaemon(
         defaultProvider: options.defaultProvider,
         defaultModel: options.defaultModel,
         permissionTimeoutMs: options.permissionTimeoutMs,
+        userInputTimeoutMs: options.userInputTimeoutMs,
         sharedDaemonHost: true,
         daemonHostRuntimeId: runtimeId,
         clientInfo: options.clientInfo,
@@ -4206,6 +4486,7 @@ async function createWorkerHostedKodaXRuntime(
       defaultProvider: options.defaultProvider,
       defaultModel: options.defaultModel,
       permissionTimeoutMs: options.permissionTimeoutMs,
+      userInputTimeoutMs: options.userInputTimeoutMs,
       configuredA2A: options.worker?.configuredA2A,
     },
     options.worker,
@@ -4808,17 +5089,30 @@ async function connectKodaXRuntimeInternal(
   allowCapabilityUpgrade: boolean,
   contract: "execution" | "prepared-exit-settlement" = "execution",
 ): Promise<KodaXDaemonRuntime> {
-  assertPositiveRuntimeTimeout(
+  assertRuntimeTimeout(
+    "permissionTimeoutMs",
+    options.permissionTimeoutMs,
+    0,
+  );
+  assertRuntimeTimeout(
+    "userInputTimeoutMs",
+    options.userInputTimeoutMs,
+    1,
+  );
+  assertRuntimeTimeout(
     "daemonStartupTimeoutMs",
     options.daemonStartupTimeoutMs,
+    1,
   );
-  assertPositiveRuntimeTimeout(
+  assertRuntimeTimeout(
     "daemonConnectTimeoutMs",
     options.daemonConnectTimeoutMs,
+    1,
   );
-  assertPositiveRuntimeTimeout(
+  assertRuntimeTimeout(
     "daemonOrphanExitMs",
     options.daemonOrphanExitMs,
+    1,
   );
   const explicitEndpoint =
     options.endpoint !== undefined
@@ -4836,6 +5130,7 @@ async function connectKodaXRuntimeInternal(
           defaultModel: options.defaultModel,
           sessionsDir: options.sessionsDir,
           permissionTimeoutMs: options.permissionTimeoutMs,
+          userInputTimeoutMs: options.userInputTimeoutMs,
           orphanExitMs: options.daemonOrphanExitMs,
           startupTimeoutMs: options.daemonStartupTimeoutMs,
           connectTimeoutMs: options.daemonConnectTimeoutMs,
@@ -4999,12 +5294,23 @@ async function connectKodaXRuntimeInternal(
   };
 }
 
-function assertPositiveRuntimeTimeout(
+function assertRuntimeTimeout(
   name: string,
   value: number | undefined,
+  minimum: 0 | 1,
 ): void {
-  if (value === undefined || (Number.isFinite(value) && value > 0)) return;
-  throw new Error(`${name} must be a positive finite number.`);
+  if (
+    value === undefined
+    || (
+      Number.isSafeInteger(value)
+      && value >= minimum
+      && value <= MAX_RUNTIME_TIMEOUT_MS
+    )
+  ) return;
+  const qualifier = minimum === 0 ? "non-negative" : "positive";
+  throw new Error(
+    `${name} must be a ${qualifier} integer no greater than ${MAX_RUNTIME_TIMEOUT_MS}.`,
+  );
 }
 
 function parseRuntimeGrantedScopes(
@@ -15567,7 +15873,29 @@ function resolvePermissionTimeoutMs(
   if (expiresAt === undefined) return fallbackMs;
   const expiresAtMs = Date.parse(expiresAt);
   if (!Number.isFinite(expiresAtMs)) return 1;
-  return Math.max(1, expiresAtMs - Date.now());
+  return Math.min(
+    MAX_RUNTIME_TIMEOUT_MS,
+    Math.max(1, expiresAtMs - Date.now()),
+  );
+}
+
+function assertRuntimePermissionExpiresAt(expiresAt: string | undefined): void {
+  if (expiresAt === undefined) return;
+  const expiresAtMs = Date.parse(expiresAt);
+  if (!Number.isFinite(expiresAtMs)) {
+    throw new Error("permission request expiresAt must be a valid date.");
+  }
+  if (expiresAtMs - Date.now() > MAX_RUNTIME_TIMEOUT_MS) {
+    throw new Error(
+      `permission request expiresAt must be no more than ${MAX_RUNTIME_TIMEOUT_MS}ms in the future.`,
+    );
+  }
+}
+
+function runtimeDeadlineReached(expiresAt: string | undefined): boolean {
+  if (expiresAt === undefined) return false;
+  const expiresAtMs = Date.parse(expiresAt);
+  return Number.isFinite(expiresAtMs) && expiresAtMs <= Date.now();
 }
 
 function createRuntimeUserInputRegistry(
@@ -15575,6 +15903,32 @@ function createRuntimeUserInputRegistry(
   defaultTimeoutMs: number,
 ) {
   const pending = new Map<string, PendingUserInput>();
+
+  const settlePending = (
+    item: PendingUserInput,
+    resolution: RuntimePendingUserInputResolution,
+    reason?: string,
+  ): void => {
+    pending.delete(item.request.id);
+    clearTimeout(item.timer);
+    item.resolve(resolution);
+    bus.emit(
+      "user_input.resolved",
+      {
+        requestId: item.request.id,
+        kind: item.request.kind,
+        status: resolution.status,
+        ...(reason !== undefined ? { reason } : {}),
+      },
+      {
+        sessionId: item.request.sessionId,
+        runId: item.request.runId,
+        ...(item.request.turnId !== undefined
+          ? { turnId: item.request.turnId }
+          : {}),
+      },
+    );
+  };
 
   const resolvePending = (
     requestId: string,
@@ -15591,28 +15945,21 @@ function createRuntimeUserInputRegistry(
     ) {
       return { requestId, accepted: false, status: "already_resolved" };
     }
+    if (reason !== "timeout" && runtimeDeadlineReached(item.request.expiresAt)) {
+      const defaultAnswer = resolveRuntimeUserInputDefault(item.request);
+      settlePending(
+        item,
+        defaultAnswer === undefined
+          ? { status: "dismissed" }
+          : { status: "answered", answer: defaultAnswer },
+        "timeout",
+      );
+      return { requestId, accepted: false, status: "already_resolved" };
+    }
     if (resolution.status === "answered") {
       assertRuntimeUserInputAnswer(item.request.kind, resolution.answer);
     }
-    pending.delete(requestId);
-    clearTimeout(item.timer);
-    item.resolve(resolution);
-    bus.emit(
-      "user_input.resolved",
-      {
-        requestId,
-        kind: item.request.kind,
-        status: resolution.status,
-        ...(reason !== undefined ? { reason } : {}),
-      },
-      {
-        sessionId: item.request.sessionId,
-        runId: item.request.runId,
-        ...(item.request.turnId !== undefined
-          ? { turnId: item.request.turnId }
-          : {}),
-      },
-    );
+    settlePending(item, resolution, reason);
     return { requestId, accepted: true, status: resolution.status };
   };
 
@@ -15652,7 +15999,15 @@ function createRuntimeUserInputRegistry(
     );
     const timer = setTimeout(
       () => {
-        resolvePending(id, { status: "dismissed" }, undefined, "timeout");
+        const defaultAnswer = resolveRuntimeUserInputDefault(request);
+        resolvePending(
+          id,
+          defaultAnswer === undefined
+            ? { status: "dismissed" }
+            : { status: "answered", answer: defaultAnswer },
+          undefined,
+          "timeout",
+        );
       },
       Math.max(1, timeoutMs),
     );
@@ -15753,6 +16108,59 @@ function isAskUserMultiAnswer(value: unknown): boolean {
   return isRecord(value) && Object.values(value).every(isAskUserAnswer);
 }
 
+function resolveRuntimeUserInputDefault(
+  request: RuntimeUserInputRequest,
+): unknown | undefined {
+  if (!isRecord(request.options)) return undefined;
+  if (request.kind === "askUserInput") {
+    return typeof request.options.default === "string"
+      ? request.options.default
+      : undefined;
+  }
+  if (request.kind === "askUser") {
+    return resolveRuntimeAskUserSelectionDefault(request.options);
+  }
+  const questions = request.options.questions;
+  if (!Array.isArray(questions) || questions.length === 0) return undefined;
+  const answers: Record<string, AskUserAnswer> = {};
+  for (const question of questions) {
+    if (!isRecord(question) || typeof question.question !== "string") {
+      return undefined;
+    }
+    const answer = resolveRuntimeAskUserSelectionDefault(question);
+    if (answer === undefined) return undefined;
+    answers[question.question] = answer;
+  }
+  return answers;
+}
+
+function resolveRuntimeAskUserSelectionDefault(
+  options: Readonly<Record<string, unknown>>,
+): AskUserAnswer | undefined {
+  const defaultValue = options.default;
+  if (typeof defaultValue !== "string") return undefined;
+  if (options.kind === "input") return defaultValue;
+  if (!Array.isArray(options.options)) return undefined;
+  const matchesOption = options.options.some((option) => {
+    if (!isRecord(option)) return false;
+    const value = typeof option.value === "string"
+      ? option.value
+      : typeof option.label === "string"
+        ? option.label
+        : undefined;
+    return value === defaultValue;
+  });
+  if (!matchesOption) return undefined;
+  if (options.multiSelect !== true) return defaultValue;
+  const minSelections = options.minSelections;
+  const maxSelections = options.maxSelections;
+  if (
+    (typeof minSelections === "number" && minSelections > 1) ||
+    (typeof maxSelections === "number" && maxSelections < 1)
+  ) return undefined;
+  return [defaultValue];
+}
+
 function createRuntimePermissionRegistry(
   bus: RuntimeEventBus,
   defaultTimeoutMs: number,
@@ -15761,6 +16169,26 @@ function createRuntimePermissionRegistry(
   const pending = new Map<string, PendingPermission>();
   const sessionGrants = new Map<string, RuntimePermissionGrant>();
   let grantRevision = 0;
+
+  const settlePending = (
+    item: PendingPermission,
+    decision: RuntimePermissionDecision,
+  ): void => {
+    pending.delete(item.request.id);
+    if (item.timer) clearTimeout(item.timer);
+    for (const resolve of item.waiters) resolve(decision);
+    bus.emit(
+      "permission.resolved",
+      { requestId: item.request.id, decision },
+      {
+        sessionId: item.request.sessionId,
+        runId: item.request.runId,
+        ...(item.request.turnId !== undefined
+          ? { turnId: item.request.turnId }
+          : {}),
+      },
+    );
+  };
 
   const trackAndWait = (
     request: Omit<RuntimePermissionRequest, "id" | "createdAt">,
@@ -15794,24 +16222,15 @@ function createRuntimePermissionRegistry(
     if (!item) return false;
     if (expectedRunId !== undefined && item.request.runId !== expectedRunId)
       return false;
+    if (runtimeDeadlineReached(item.request.expiresAt)) {
+      settlePending(item, runtimePermissionTimeoutDecision());
+      return false;
+    }
     if (decision.type === "allow_session" || decision.type === "allow_always") {
       const candidate = resolveRuntimePermissionGrantCandidate(item, decision);
       saveRuntimePermissionCandidate(candidate, item.request);
     }
-    pending.delete(requestId);
-    if (item.timer) clearTimeout(item.timer);
-    for (const resolve of item.waiters) resolve(decision);
-    bus.emit(
-      "permission.resolved",
-      { requestId, decision },
-      {
-        sessionId: item.request.sessionId,
-        runId: item.request.runId,
-        ...(item.request.turnId !== undefined
-          ? { turnId: item.request.turnId }
-          : {}),
-      },
-    );
+    settlePending(item, decision);
     return true;
   };
 
@@ -15886,6 +16305,11 @@ function createRuntimePermissionRegistry(
     input: RuntimePermissionRequestInput,
     ownerContext?: RuntimePermissionGrantContext,
   ): Promise<RuntimePermissionDecision> {
+    assertRuntimeTimeout(
+      "permission request timeoutMs",
+      input.timeoutMs,
+      0,
+    );
     const grantContext =
       ownerContext ??
       (input.toolInput !== undefined
@@ -16213,6 +16637,8 @@ function createRuntimePermissionRegistry(
     timeoutMs = defaultTimeoutMs,
     grantContext?: RuntimePermissionGrantContext,
   ): RuntimePermissionRequest {
+    assertRuntimeTimeout("permission request timeoutMs", timeoutMs, 0);
+    assertRuntimePermissionExpiresAt(request.expiresAt);
     const inputPreview =
       request.inputPreview === undefined
         ? undefined
@@ -16244,24 +16670,7 @@ function createRuntimePermissionRegistry(
         ? setTimeout(() => {
             const item = pending.get(created.id);
             if (!item) return;
-            pending.delete(created.id);
-            const decision: RuntimePermissionDecision = {
-              type: "reject",
-              reason: "permission request timed out",
-              cause: "approval_timeout",
-            };
-            for (const resolve of item.waiters) resolve(decision);
-            bus.emit(
-              "permission.resolved",
-              { requestId: created.id, decision },
-              {
-                sessionId: created.sessionId,
-                runId: created.runId,
-                ...(created.turnId !== undefined
-                  ? { turnId: created.turnId }
-                  : {}),
-              },
-            );
+            settlePending(item, runtimePermissionTimeoutDecision());
           }, timeoutMs)
         : undefined;
     timer?.unref?.();
@@ -16507,6 +16916,41 @@ function permissionScopesEqual(
   );
 }
 
+async function waitForRuntimeUserInput<T>(
+  userInputs: RuntimeUserInputRegistry,
+  pendingInput: ReturnType<RuntimeUserInputRegistry["trackAndWait"]>,
+  execute: ((signal: AbortSignal) => Promise<T>) | undefined,
+): Promise<RuntimePendingUserInputResolution> {
+  if (execute === undefined) return pendingInput.response;
+  const controller = new AbortController();
+  const outcome = await Promise.race([
+    pendingInput.response.then((resolution) => ({
+      source: "runtime" as const,
+      resolution,
+    })),
+    Promise.resolve()
+      .then(() => execute(controller.signal))
+      .then((answer): RuntimePendingUserInputResolution => ({
+        status: answer === undefined ? "dismissed" : "answered",
+        ...(answer !== undefined ? { answer } : {}),
+      }))
+      .then((resolution) => {
+        userInputs.resolve(pendingInput.request.id, resolution);
+        return { source: "hook" as const, resolution };
+      })
+      .catch((error: unknown) => ({ source: "hook_error" as const, error })),
+  ]);
+  if (outcome.source === "runtime") controller.abort();
+  if (outcome.source !== "hook_error") return outcome.resolution;
+  userInputs.resolve(
+    pendingInput.request.id,
+    { status: "dismissed" },
+    undefined,
+    "host_failed",
+  );
+  throw outcome.error;
+}
+
 function wrapKodaXEvents(input: {
   readonly bus: RuntimeEventBus;
   readonly original?: KodaXEvents;
@@ -16575,6 +17019,24 @@ function wrapKodaXEvents(input: {
       : undefined);
   const knownOutputSegments = new Set<string>();
   const implicitOutputSegments = new Map<string, string>();
+  let pendingUserInputPhases = 0;
+  let phaseBeforeUserInput: RuntimeRunPhase | undefined;
+  const enterUserInputPhase = (): void => {
+    if (pendingUserInputPhases === 0) {
+      phaseBeforeUserInput = record.phase;
+      if (record.phase === "running") onPhase("waiting_user_input");
+    }
+    pendingUserInputPhases += 1;
+  };
+  const leaveUserInputPhase = (): void => {
+    pendingUserInputPhases -= 1;
+    if (pendingUserInputPhases !== 0) return;
+    const restorePhase = phaseBeforeUserInput;
+    phaseBeforeUserInput = undefined;
+    if (record.phase === "waiting_user_input" && restorePhase !== undefined) {
+      onPhase(restorePhase);
+    }
+  };
   const ensureOutputSegment = (
     meta: KodaXActivityEventMeta | undefined,
   ): KodaXActivityEventMeta => {
@@ -16607,79 +17069,32 @@ function wrapKodaXEvents(input: {
     kind: RuntimeUserInputKind,
     options: unknown,
     meta: KodaXToolEventMeta | undefined,
-    execute: (() => Promise<T>) | undefined,
+    execute: ((signal: AbortSignal) => Promise<T>) | undefined,
     dismissed: T,
+    stopped: T = dismissed,
   ): Promise<T> => {
-    if (managedStopDecision() !== undefined) return dismissed;
-    const previousPhase = record.phase;
-    if (record.phase === "running") {
-      onPhase("waiting_user_input");
-    }
-    if (enableSharedInteractions) {
-      const pendingInput = userInputs.trackAndWait({
-        sessionId: meta?.sessionId ?? record.sessionId,
-        runId: record.runId,
-        ...((meta?.turnId ?? record.turnId)
-          ? { turnId: meta?.turnId ?? record.turnId }
-          : {}),
-        kind,
-        options,
-      });
-      try {
-        const resolution =
-          execute === undefined
-            ? await pendingInput.response
-            : await Promise.race([
-                pendingInput.response,
-                execute()
-                  .then((answer): RuntimePendingUserInputResolution => ({
-                    status: answer === undefined ? "dismissed" : "answered",
-                    ...(answer !== undefined ? { answer } : {}),
-                  }))
-                  .then((hookResolution) => {
-                    userInputs.resolve(pendingInput.request.id, hookResolution);
-                    return hookResolution;
-                  }),
-              ]);
-        return resolution.status === "answered"
-          ? (resolution.answer as T)
-          : dismissed;
-      } finally {
-        if (record.phase === "waiting_user_input") onPhase(previousPhase);
-      }
-    }
-
-    const requestId = `input_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
-    emit("user_input.requested", { requestId, kind, options }, meta);
+    if (managedStopDecision() !== undefined) return stopped;
+    const pendingInput = userInputs.trackAndWait({
+      sessionId: meta?.sessionId ?? record.sessionId,
+      runId: record.runId,
+      ...((meta?.turnId ?? record.turnId)
+        ? { turnId: meta?.turnId ?? record.turnId }
+        : {}),
+      kind,
+      options,
+    });
+    enterUserInputPhase();
     try {
-      if (execute === undefined) return dismissed;
-      const answer = await execute();
-      emit(
-        "user_input.resolved",
-        {
-          requestId,
-          kind,
-          status: answer === undefined ? "dismissed" : "answered",
-        },
-        meta,
+      const resolution = await waitForRuntimeUserInput(
+        userInputs,
+        pendingInput,
+        execute,
       );
-      return answer;
-    } catch (error: unknown) {
-      emit(
-        "user_input.resolved",
-        {
-          requestId,
-          kind,
-          status: "failed",
-          error: normalizeError(error).message,
-        },
-        meta,
-      );
-      throw error;
+      return resolution.status === "answered"
+        ? (resolution.answer as T)
+        : dismissed;
     } finally {
-      if (record.phase === "waiting_user_input") {
-        onPhase(previousPhase);
-      }
+      leaveUserInputPhase();
     }
   };
 
@@ -17221,8 +17636,9 @@ function wrapKodaXEvents(input: {
               options,
               meta,
               original?.askUser
-                ? () => original.askUser!(options, meta)
+                ? (signal) => original.askUser!(options, meta, { signal })
                 : undefined,
+              CANCELLED_TOOL_RESULT_MESSAGE,
               "",
             ),
         }
@@ -17238,7 +17654,7 @@ function wrapKodaXEvents(input: {
               options,
               meta,
               original?.askUserMulti
-                ? () => original.askUserMulti!(options, meta)
+                ? (signal) => original.askUserMulti!(options, meta, { signal })
                 : undefined,
               undefined,
             ),
@@ -17255,7 +17671,7 @@ function wrapKodaXEvents(input: {
               options,
               meta,
               original?.askUserInput
-                ? () => original.askUserInput!(options, meta)
+                ? (signal) => original.askUserInput!(options, meta, { signal })
                 : undefined,
               undefined,
             ),
@@ -17601,11 +18017,33 @@ async function loadRequiredSession(
   sessionId: string,
   options?: SessionReadOptions,
 ): Promise<KodaXSessionData> {
-  const data = await manager.storage.read(sessionId, options);
-  if (!data) {
-    throw new Error(`Session not found: ${sessionId}`);
+  const budget = createRuntimeReadBudget(options);
+  for (
+    let attempt = 0;
+    attempt <= RUNTIME_SESSION_LOAD_RETRY_DELAYS_MS.length;
+    attempt += 1
+  ) {
+    try {
+      const data = await manager.storage.read(
+        sessionId,
+        sessionReadOptionsFromBudget(budget),
+      );
+      if (!data) throw new Error(`Session not found: ${sessionId}`);
+      return data;
+    } catch (error: unknown) {
+      if (
+        !(error instanceof replApi.SessionReadError)
+        || error.code !== "data_changed"
+      ) throw error;
+      const delayMs = RUNTIME_SESSION_LOAD_RETRY_DELAYS_MS[attempt];
+      if (delayMs === undefined) throw error;
+      await awaitRuntimeReadOperation(
+        () => new Promise<void>((resolve) => setTimeout(resolve, delayMs)),
+        budget,
+      );
+    }
   }
-  return data;
+  throw new Error("unreachable Session load retry state");
 }
 
 function createRuntimeReadBudget(

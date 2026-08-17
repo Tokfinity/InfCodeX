@@ -418,34 +418,38 @@ describe('interactive daemon runtime bridge', () => {
       cachedReadTokens: 19_328,
     }));
     expect(legacyBeforeToolExecute).not.toHaveBeenCalled();
-    expect(requestPermission).toHaveBeenCalledWith(expect.objectContaining({
-      id: 'perm-1',
-      toolName: 'write',
-      toolCallId: 'tool-1',
-      input: { path: 'C:/workspace/a.ts' },
-      reason: 'Runtime classification requires confirmation.',
-      risk: 'medium',
-      executionCwd: 'C:/workspace',
-      grantSuggestions: [{
-        id: 'grant-persistent-1',
-        kind: 'persistent',
-        label: 'Always allow write for C:/workspace/a.ts',
-      }],
-    }));
+    expect(requestPermission).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'perm-1',
+        toolName: 'write',
+        toolCallId: 'tool-1',
+        input: { path: 'C:/workspace/a.ts' },
+        reason: 'Runtime classification requires confirmation.',
+        risk: 'medium',
+        executionCwd: 'C:/workspace',
+        grantSuggestions: [{
+          id: 'grant-persistent-1',
+          kind: 'persistent',
+          label: 'Always allow write for C:/workspace/a.ts',
+        }],
+      }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
     expect(respond).toHaveBeenCalledWith(
       'perm-1',
       { type: 'allow_always', suggestionId: 'grant-persistent-1' },
       { runId: 'run-1' },
     );
-    expect(closeSubscription).toHaveBeenCalledOnce();
+    expect(closeSubscription).toHaveBeenCalledTimes(2);
   });
 
-  it('does not report a run as finished while an earlier permission event is unresolved', async () => {
-    let eventListener: ((event: RuntimeEvent) => void) | undefined;
-    let resolvePermission: ((decision: { type: 'allow_once' }) => void) | undefined;
-    const requestPermission = vi.fn(() => new Promise<{ type: 'allow_once' }>((resolve) => {
-      resolvePermission = resolve;
-    }));
+  it('finishes after Runtime permission timeout even when the host prompt stays unresolved', async () => {
+    const eventListeners = new Set<(event: RuntimeEvent) => void>();
+    let promptSignal: AbortSignal | undefined;
+    const requestPermission = vi.fn((_request, context: { readonly signal: AbortSignal }) => {
+      promptSignal = context.signal;
+      return new Promise<{ type: 'allow_once' }>(() => undefined);
+    });
     const respond = vi.fn(async () => true);
     const runtime = {
       identity: {
@@ -461,12 +465,25 @@ describe('interactive daemon runtime bridge', () => {
       },
       runs: {
         start: vi.fn(async () => {
-          eventListener?.(runtimeEvent('permission.requested', {
+          for (const listener of eventListeners) listener(runtimeEvent('permission.requested', {
             id: 'permission-before-terminal',
             toolCallId: 'tool-1',
             toolName: 'bash',
             inputPreview: '{"command":"git log -1"}',
+            createdAt: '2026-08-17T00:00:00.000Z',
+            expiresAt: new Date(Date.now() + 60_000).toISOString(),
           }));
+          setTimeout(() => {
+            for (const listener of eventListeners) listener(runtimeEvent('permission.resolved', {
+              requestId: 'permission-before-terminal',
+              decision: {
+                type: 'reject',
+                reason:
+                  'permission request timed out; choose a safer approach that does not require this approval',
+                cause: 'approval_timeout',
+              },
+            }));
+          }, 0);
           return {
             runId: 'run-1',
             sessionId: 'session-1',
@@ -481,35 +498,23 @@ describe('interactive daemon runtime bridge', () => {
       },
       events: {
         subscribe: vi.fn((_filter, listener: (event: RuntimeEvent) => void) => {
-          eventListener = listener;
-          return { close: vi.fn() };
+          eventListeners.add(listener);
+          return { close: vi.fn(() => eventListeners.delete(listener)) };
         }),
       },
       permissions: { respond },
     } as unknown as KodaXRuntime;
-    let settled = false;
-
     const run = createInteractiveRuntimeRunner(runtime)({
       options: {} as KodaXOptions,
       prompt: 'review',
       sessionId: 'session-1',
       permissionMode: 'auto',
       requestPermission,
-    }).then((result) => {
-      settled = true;
-      return result;
     });
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-
-    expect(requestPermission).toHaveBeenCalledOnce();
-    expect(settled).toBe(false);
-    resolvePermission?.({ type: 'allow_once' });
     await expect(run).resolves.toMatchObject({ success: true });
-    expect(respond).toHaveBeenCalledWith(
-      'permission-before-terminal',
-      { type: 'allow_once' },
-      { runId: 'run-1' },
-    );
+    expect(requestPermission).toHaveBeenCalledOnce();
+    expect(promptSignal?.aborted).toBe(true);
+    expect(respond).not.toHaveBeenCalled();
   });
 
   it('keeps embedded Runtime as the sole Auto owner and still bridges permission prompts', async () => {
@@ -579,10 +584,13 @@ describe('interactive daemon runtime bridge', () => {
     expect(capturedStart?.options?.guardrails).toEqual([customGuardrail]);
     expect(capturedStart?.options?.events).not.toHaveProperty('beforeToolExecute');
     expect(legacyBeforeToolExecute).not.toHaveBeenCalled();
-    expect(requestPermission).toHaveBeenCalledWith(expect.objectContaining({
-      id: 'perm-embedded',
-      input: { path: 'README.md' },
-    }));
+    expect(requestPermission).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'perm-embedded',
+        input: { path: 'README.md' },
+      }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
     expect(respond).toHaveBeenCalledWith(
       'perm-embedded',
       { type: 'allow_once' },

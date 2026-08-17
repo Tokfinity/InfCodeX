@@ -44,10 +44,10 @@ import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import {
   createKodaXRuntime,
+  handleRuntimePermissionRequest,
   type KodaXRuntime,
   type RuntimeEvent,
   type RuntimeKodaXOptions,
-  type RuntimePermissionDecision,
 } from './sdk-runtime.js';
 import {
   isRuntimeDaemonPidAlive,
@@ -1378,35 +1378,33 @@ async function respondToRuntimePermission(
   const grantSuggestions = parseRuntimeGrantSuggestions(
     payload.grantSuggestions,
   );
-  let decision: RuntimePermissionDecision;
-  try {
-    decision = requestPermission
-      ? await requestPermission({
-          id: payload.id,
-          toolName: payload.toolName,
-          ...(toolCallId !== undefined ? { toolCallId } : {}),
-          input,
-          ...(typeof payload.reason === 'string'
-            ? { reason: payload.reason }
-            : {}),
-          ...(isRuntimePermissionRisk(payload.risk)
-            ? { risk: payload.risk }
-            : {}),
-          ...(typeof payload.executionCwd === 'string'
-            ? { executionCwd: payload.executionCwd }
-            : {}),
-          ...(grantSuggestions.length > 0 ? { grantSuggestions } : {}),
-        })
-      : {
+  const request = {
+    id: payload.id,
+    sessionId: event.sessionId,
+    runId: event.runId,
+    toolName: payload.toolName,
+    ...(toolCallId !== undefined ? { toolCallId } : {}),
+    input,
+    ...(typeof payload.reason === 'string' ? { reason: payload.reason } : {}),
+    ...(isRuntimePermissionRisk(payload.risk) ? { risk: payload.risk } : {}),
+    ...(typeof payload.executionCwd === 'string'
+      ? { executionCwd: payload.executionCwd }
+      : {}),
+    ...(grantSuggestions.length > 0 ? { grantSuggestions } : {}),
+    createdAt:
+      typeof payload.createdAt === 'string' ? payload.createdAt : event.time,
+    ...(typeof payload.expiresAt === 'string' ? { expiresAt: payload.expiresAt } : {}),
+  };
+  await handleRuntimePermissionRequest(
+    runtime,
+    request,
+    requestPermission
+      ? async (_runtimeRequest, context) => requestPermission(request, context)
+      : async () => ({
           type: 'reject',
           reason: 'Interactive permission handler unavailable.',
-        };
-  } catch (error: unknown) {
-    decision = { type: 'reject', reason: normalizeCliError(error).message };
-  }
-  await runtime.permissions.respond(payload.id, decision, {
-    runId: event.runId,
-  });
+        }),
+  );
 }
 
 function isRuntimePermissionRisk(
@@ -1603,6 +1601,7 @@ async function serveDaemonCommand(input: {
   readonly model?: string;
   readonly sessionsDir?: string;
   readonly permissionTimeoutMs?: number;
+  readonly userInputTimeoutMs?: number;
   readonly orphanExitMs?: number;
 }): Promise<void> {
   const daemonConfigHome = path.resolve(input.configHome);
@@ -1664,6 +1663,7 @@ async function serveDaemonCommand(input: {
           defaultProvider: input.provider,
           defaultModel: input.model,
           permissionTimeoutMs: input.permissionTimeoutMs,
+          userInputTimeoutMs: input.userInputTimeoutMs,
           sharedDaemonHost: true,
           daemonHostRuntimeId: runtimeId,
           externalAgents: a2aIntegration.runtimeOptions,
@@ -4399,6 +4399,11 @@ complete -c kodax -l version -d 'Show version'`);
       'Permission request timeout',
       parseOptionalNonNegativeInt,
     )
+    .option(
+      '--user-input-timeout-ms <n>',
+      'User-input request timeout',
+      parseOptionalNonNegativeInt,
+    )
     .addOption(
       new Option('--orphan-exit-ms <n>')
         .argParser(parseOptionalNonNegativeInt)
@@ -4414,6 +4419,7 @@ complete -c kodax -l version -d 'Show version'`);
           configHome?: string;
           sessionsDir?: string;
           permissionTimeoutMs?: number;
+          userInputTimeoutMs?: number;
           orphanExitMs?: number;
         },
         command: Command,
@@ -4426,6 +4432,7 @@ complete -c kodax -l version -d 'Show version'`);
           model: options.model,
           sessionsDir: options.sessionsDir,
           permissionTimeoutMs: options.permissionTimeoutMs,
+          userInputTimeoutMs: options.userInputTimeoutMs,
           orphanExitMs: options.orphanExitMs,
         });
       },

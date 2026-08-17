@@ -13,6 +13,12 @@ export interface ReplRuntimePermissionRequest {
   readonly risk?: 'low' | 'medium' | 'high';
   readonly executionCwd?: string;
   readonly grantSuggestions?: readonly ReplRuntimePermissionGrantSuggestion[];
+  readonly createdAt?: string;
+  readonly expiresAt?: string;
+}
+
+export interface ReplRuntimePermissionPromptContext {
+  readonly signal: AbortSignal;
 }
 
 export type ReplRuntimePermissionDecision =
@@ -23,6 +29,7 @@ export type ReplRuntimePermissionDecision =
 
 export type ReplRuntimePermissionPrompt = (
   request: ReplRuntimePermissionRequest,
+  context: ReplRuntimePermissionPromptContext,
 ) => Promise<ReplRuntimePermissionDecision>;
 
 export const RUNTIME_PERMISSION_PENDING_NOTICE =

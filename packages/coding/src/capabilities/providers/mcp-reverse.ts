@@ -18,7 +18,10 @@ import {
   type McpReverseCapabilities,
   type McpRoot,
   type UserInteraction,
+  type UserInteractionPromptContext,
 } from '@kodax-ai/agent';
+
+const DEFAULT_MCP_ELICITATION_TIMEOUT_MS = 5 * 60 * 1_000;
 
 export interface McpReverseWorkspace {
   /** The directory KodaX is operating in (the project root). */
@@ -71,7 +74,11 @@ function whoIsAsking(request: McpElicitRequest): string {
 }
 
 /** Map an MCP `form` elicitation's schema onto the host's ask-user surface. */
-async function elicitForm(ui: UserInteraction, request: McpElicitRequest): Promise<McpElicitResult> {
+async function elicitForm(
+  ui: UserInteraction,
+  request: McpElicitRequest,
+  context?: UserInteractionPromptContext,
+): Promise<McpElicitResult> {
   const who = whoIsAsking(request);
   const banner = `${who} is requesting information.`;
   const detail = request.message ? `\n\n${request.message}` : '';
@@ -85,7 +92,7 @@ async function elicitForm(ui: UserInteraction, request: McpElicitRequest): Promi
       kind: 'select',
       allowCustomInput: false,
       options: [{ label: 'Approve', value: 'accept' }, { label: 'Decline', value: 'decline' }],
-    }));
+    }, context));
     return answer === 'accept' ? { action: 'accept', content: {} } : { action: 'decline' };
   }
 
@@ -106,7 +113,7 @@ async function elicitForm(ui: UserInteraction, request: McpElicitRequest): Promi
         kind: 'select',
         allowCustomInput: false,
         options: choices,
-      }));
+      }, context));
       const selectedIndex = Number(answer);
       content[key] = Number.isInteger(selectedIndex) && selectedIndex >= 0 && selectedIndex < enumValues.length
         ? enumValues[selectedIndex]
@@ -117,10 +124,10 @@ async function elicitForm(ui: UserInteraction, request: McpElicitRequest): Promi
         kind: 'select',
         allowCustomInput: false,
         options: [{ label: 'Yes', value: 'true' }, { label: 'No', value: 'false' }],
-      }));
+      }, context));
       content[key] = answer === 'true';
     } else if (ui.askUserInput) {
-      const answer = await ui.askUserInput({ question });
+      const answer = await ui.askUserInput({ question }, context);
       if (answer === undefined) return { action: 'cancel' };
       content[key] = prop.type === 'number' || prop.type === 'integer' ? Number(answer) : answer;
     } else {
@@ -137,7 +144,7 @@ async function elicitForm(ui: UserInteraction, request: McpElicitRequest): Promi
       kind: 'select',
       allowCustomInput: false,
       options: [{ label: 'Send', value: 'send' }, { label: 'Cancel', value: 'cancel' }],
-    }));
+    }, context));
     if (confirm !== 'send') return { action: 'cancel' };
   }
   return { action: 'accept', content };
@@ -149,7 +156,11 @@ async function elicitForm(ui: UserInteraction, request: McpElicitRequest): Promi
  * the browser and never exposes the URL/contents to the model — the user
  * decides, then visits the shown URL themselves.
  */
-async function elicitUrl(ui: UserInteraction, request: McpElicitRequest): Promise<McpElicitResult> {
+async function elicitUrl(
+  ui: UserInteraction,
+  request: McpElicitRequest,
+  context?: UserInteractionPromptContext,
+): Promise<McpElicitResult> {
   const url = request.url;
   if (!url || !ui.askUser) return { action: 'decline' };
   let domain = url;
@@ -170,7 +181,7 @@ async function elicitUrl(ui: UserInteraction, request: McpElicitRequest): Promis
       { label: 'I trust this — open it myself and continue', value: 'accept' },
       { label: 'Decline', value: 'decline' },
     ],
-  }));
+  }, context));
   return answer === 'accept' ? { action: 'accept', content: {} } : { action: 'decline' };
 }
 
@@ -178,11 +189,37 @@ async function elicitUrl(ui: UserInteraction, request: McpElicitRequest): Promis
 export async function elicitViaUserInteraction(
   ui: UserInteraction,
   request: McpElicitRequest,
+  context?: UserInteractionPromptContext,
 ): Promise<McpElicitResult> {
   try {
-    return request.mode === 'url' ? await elicitUrl(ui, request) : await elicitForm(ui, request);
+    return request.mode === 'url'
+      ? await elicitUrl(ui, request, context)
+      : await elicitForm(ui, request, context);
   } catch {
     return { action: 'cancel' };
+  }
+}
+
+async function elicitWithDeadline(
+  ui: UserInteraction,
+  request: McpElicitRequest,
+): Promise<McpElicitResult> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<McpElicitResult>((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      resolve({ action: 'cancel' });
+    }, DEFAULT_MCP_ELICITATION_TIMEOUT_MS);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([
+      elicitViaUserInteraction(ui, request, { signal: controller.signal }),
+      deadline,
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 
@@ -195,7 +232,7 @@ export function activeElicitHandler(): (request: McpElicitRequest) => Promise<Mc
   return async (request) => {
     const ui = getActiveUserInteraction();
     if (!ui || (!ui.askUser && !ui.askUserInput)) return { action: 'decline' };
-    return elicitViaUserInteraction(ui, request);
+    return elicitWithDeadline(ui, request);
   };
 }
 
