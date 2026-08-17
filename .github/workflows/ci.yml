@@ -62,7 +62,7 @@ jobs:
 
       - name: System tests
         if: matrix.node == '20'
-        run: npm run test:system
+        run: npm run test:system -- --no-file-parallelism --maxWorkers=1
 
       - name: Runtime daemon Unix socket gate
         if: matrix.node == '22'
@@ -247,6 +247,8 @@ jobs:
           packages/coding/src/task-engine/deterministic-evaluator.test.ts
           packages/coding/src/tools/bash.test.ts
           src/runtime-permission-scope.test.ts
+          --no-file-parallelism
+          --maxWorkers=1
           --reporter=dot
 
       - name: Runtime Session shell contract gate
