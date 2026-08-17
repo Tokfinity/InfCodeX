@@ -473,7 +473,7 @@ export function assertRuntimeDaemonOwnerAllowed(paths: RuntimeDaemonPaths): void
 
 export function normalizeRuntimeDaemonProfile(profile: string): string {
   const trimmed = profile.trim() || 'default';
-  if (!/^[A-Za-z0-9_.-]+$/.test(trimmed)) {
+  if (trimmed === '.' || trimmed === '..' || !/^[A-Za-z0-9_.-]+$/.test(trimmed)) {
     throw new Error(`Invalid runtime daemon profile: ${profile}`);
   }
   return trimmed;

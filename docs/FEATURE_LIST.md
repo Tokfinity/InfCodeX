@@ -12,7 +12,7 @@
 | Item | Value |
 |---|---|
 | Current released version | `v0.7.90` (Git tag / GitHub Release) |
-| Current package version | `@kodax-ai/kodax@0.7.90` release (npm publication remains manual) |
+| Current package version | `@kodax-ai/kodax@0.7.91` development (npm publication remains manual) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `78` |
 | InProgress | `1` |
@@ -555,6 +555,24 @@ Agent lineage, Coding runtime, and REPL persistence system-code fixes; no
 fail-closed safety boundary is weakened.
 
 The release checklist is [docs/release.md](release.md#v0790-release-preparation).
+
+---
+
+## v0.7.91 Maintenance Record
+
+`v0.7.91` adds the local `runtimeExitSettlement:1` SDK contract and
+`settleKodaXRuntimeExit()` high-level transaction. Complete exits now persist
+exact-owner intent before stop, can resume before a host starts owner
+reconciliation, and can autonomously repair a verified empty Windows Job plus
+matching ACL residue. Replacement owners, PID reuse, foreign markers, and
+same-boot unverifiable macOS/Linux process trees remain fail-closed. After an
+OS reboot, a durable boot-identity change proves the retained POSIX tree cannot
+still be running and allows exact old owner/state/policy recovery. This
+maintenance capability does not add a new remote daemon handshake requirement.
+
+The design and acceptance contract are
+[v0.7.91](features/v0.7.91.md) and
+[Issue 295](test-guides/ISSUE_295_v0.7.91_REGRESSION_GUIDE.md).
 
 ---
 

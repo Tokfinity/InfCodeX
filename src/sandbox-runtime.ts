@@ -1030,16 +1030,16 @@ function windowsSandboxAclCoordinationDirectory(): string {
   return path.dirname(windowsSandboxAclPoisonDirectory());
 }
 
-function legacyWindowsSandboxAclPoisonDirectory(): string {
-  return path.join(path.resolve(getAgentConfigHome()), 'sandbox-runtime', 'acl-poison');
+function legacyWindowsSandboxAclPoisonDirectory(configHome = getAgentConfigHome()): string {
+  return path.join(path.resolve(configHome), 'sandbox-runtime', 'acl-poison');
 }
 
 function windowsSandboxAclPoisonStagingDirectory(): string {
   return path.join(windowsSandboxAclCoordinationDirectory(), 'acl-poison-staging');
 }
 
-function legacyWindowsSandboxAclPoisonStagingDirectory(): string {
-  return path.join(path.resolve(getAgentConfigHome()), 'sandbox-runtime', 'acl-poison-staging');
+function legacyWindowsSandboxAclPoisonStagingDirectory(configHome = getAgentConfigHome()): string {
+  return path.join(path.resolve(configHome), 'sandbox-runtime', 'acl-poison-staging');
 }
 
 function windowsSandboxAclRecoveryLockFile(): string {
@@ -1101,13 +1101,13 @@ function parseWindowsSandboxAclPoisonOwner(text: string): WindowsSandboxAclPoiso
   };
 }
 
-function readWindowsSandboxAclPoisonOwners(): Array<{
+function readWindowsSandboxAclPoisonOwners(configHome = getAgentConfigHome()): Array<{
   readonly file: string;
   readonly owner: WindowsSandboxAclPoisonOwner;
 }> {
   const directories = [...new Set([
     windowsSandboxAclPoisonDirectory(),
-    legacyWindowsSandboxAclPoisonDirectory(),
+    legacyWindowsSandboxAclPoisonDirectory(configHome),
   ])];
   return directories.flatMap((directory) => {
     let names: string[];
@@ -1120,6 +1120,10 @@ function readWindowsSandboxAclPoisonOwners(): Array<{
     return names.filter((name) => name.endsWith('.json')).map((name) => {
     const file = path.join(directory, name);
     try {
+      const markerStat = lstatSync(file);
+      if (!markerStat.isFile() || markerStat.isSymbolicLink()) {
+        throw new Error('Windows sandbox ACL poison marker is not a regular file.');
+      }
       const owner = parseWindowsSandboxAclPoisonOwner(readFileSync(file, 'utf8'));
       return {
         file,
@@ -1166,6 +1170,11 @@ $boot = (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime
   const identity = /^\d+$/.test(ticks) ? `windows-boot-${ticks}` : undefined;
   cachedWindowsBootIdentity = identity ?? null;
   return identity;
+}
+
+/** @internal Runtime lifecycle proof; not a general sandbox recovery surface. */
+export function readWindowsSandboxBootIdentity(): string | undefined {
+  return readWindowsBootIdentity();
 }
 
 function windowsSandboxAclManualRecoveryInstruction(): string {
@@ -1471,7 +1480,7 @@ function unconfirmedSandboxProcessTreeMessage(subject: string): string {
   return `${subject} process-tree termination was not confirmed; stop the retained process tree before retrying.`;
 }
 
-function recoverWindowsSandboxAcls(): void {
+function recoverWindowsSandboxAcls(timeoutMs = 30_000): void {
   const runner = requirePreparedWindowsRunner();
   const result = spawnSync(
     runner.srtWin.exe,
@@ -1479,7 +1488,7 @@ function recoverWindowsSandboxAcls(): void {
     {
       cwd: runner.directory,
       encoding: 'utf8',
-      timeout: 30_000,
+      timeout: Math.max(1, Math.min(30_000, timeoutMs)),
       windowsHide: true,
     },
   );
@@ -1518,6 +1527,108 @@ function recoverWindowsSandboxAcls(): void {
     );
   }
   windowsSandboxAclStartupRecovered = true;
+}
+
+/**
+ * Recover Windows ACL residue only for one daemon whose Job containment has
+ * already proved empty. This remains an internal lifecycle authority: callers
+ * cannot request force recovery or delete arbitrary marker paths.
+ */
+export async function recoverWindowsSandboxAclsForRuntimeOwner(
+  configHome: string,
+  owner: {
+    readonly pid: number;
+    readonly processStartIdentity?: string;
+  },
+  windowsBootIdentity: string,
+  timeoutMs = 70_000,
+): Promise<number> {
+  if (process.platform !== 'win32') return 0;
+  if (owner.processStartIdentity === undefined) {
+    throw new Error('Windows sandbox ACL recovery requires an exact daemon process identity.');
+  }
+  const deadline = Date.now() + timeoutMs;
+  return withKodaXFileLock(
+    windowsSandboxAclRecoveryLockFile(),
+    async () => {
+      const markers = readWindowsSandboxAclPoisonOwners(configHome);
+      const matching = markers.filter(({ owner: markerOwner }) => (
+        markerOwner.holderPid === owner.pid
+        && markerOwner.holderProcessStartIdentity === owner.processStartIdentity
+        && markerOwner.windowsBootIdentity === windowsBootIdentity
+      ));
+      if (matching.length !== markers.length) {
+        throw new WindowsSandboxAclAdmissionError(
+          'Windows sandbox ACL recovery found a foreign or unverifiable owner marker.',
+        );
+      }
+      if (matching.length === 0) return 0;
+      await waitForWindowsSandboxRunnerPreparation(
+        prepareWindowsSandboxRunner(),
+        Math.max(1, deadline - Date.now()),
+      );
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        throw new Error('Windows sandbox ACL recovery deadline expired before mutation.');
+      }
+      recoverWindowsSandboxAcls(remainingMs);
+      return matching.length;
+    },
+    Math.max(1, Math.min(WINDOWS_SANDBOX_ACL_RECOVERY_LOCK_TIMEOUT_MS, timeoutMs)),
+  );
+}
+
+async function waitForWindowsSandboxRunnerPreparation(
+  preparation: Promise<PreparedWindowsSandboxRunner>,
+  timeoutMs: number,
+): Promise<PreparedWindowsSandboxRunner> {
+  let timer: NodeJS.Timeout | undefined;
+  const timedOut = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new Error('Windows sandbox runner preparation timed out.')),
+      timeoutMs,
+    );
+  });
+  try {
+    return await Promise.race([preparation, timedOut]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+/** @internal Clear only markers whose ACL recovery was durably recorded. */
+export async function clearWindowsSandboxAclMarkersForRuntimeOwner(
+  configHome: string,
+  owner: {
+    readonly pid: number;
+    readonly processStartIdentity?: string;
+  },
+  windowsBootIdentity: string,
+  timeoutMs = 40_000,
+): Promise<number> {
+  if (process.platform !== 'win32') return 0;
+  if (owner.processStartIdentity === undefined) {
+    throw new Error('Windows sandbox marker cleanup requires an exact daemon process identity.');
+  }
+  return withKodaXFileLock(
+    windowsSandboxAclRecoveryLockFile(),
+    async () => {
+      const markers = readWindowsSandboxAclPoisonOwners(configHome);
+      const matching = markers.filter(({ owner: markerOwner }) => (
+        markerOwner.holderPid === owner.pid
+        && markerOwner.holderProcessStartIdentity === owner.processStartIdentity
+        && markerOwner.windowsBootIdentity === windowsBootIdentity
+      ));
+      if (matching.length !== markers.length) {
+        throw new WindowsSandboxAclAdmissionError(
+          'Windows sandbox marker cleanup found a foreign or unverifiable owner marker.',
+        );
+      }
+      for (const marker of matching) rmSync(marker.file, { force: true });
+      return matching.length;
+    },
+    Math.max(1, Math.min(WINDOWS_SANDBOX_ACL_RECOVERY_LOCK_TIMEOUT_MS, timeoutMs)),
+  );
 }
 
 function isWindowsSandboxAclRecoveryLockTimeout(error: unknown): boolean {

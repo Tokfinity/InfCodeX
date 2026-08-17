@@ -23,6 +23,7 @@ by the focused sandbox, lineage, REPL, and coding-runtime tests.
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 295 | High | Resolved | Complete Runtime exit could strand a same-boot Windows ACL owner and could not resume safely after host relaunch | v0.7.79 managed Runtime shutdown | v0.7.91 development | 2026-08-17 | 2026-08-17 |
 | 293 | High | Resolved | Managed compaction context replacement makes ordinary history ambiguous and duplicates paged conversations | v0.7.80 managed-run-context stripping | v0.7.89 release | 2026-08-16 | 2026-08-16 |
 | 292 | High | Resolved | Actor settlement deadline conflates storage eligibility, canonical commit, and post-commit maintenance | v0.7.85 Actor settlement convergence | v0.7.88 release | 2026-08-15 | 2026-08-15 |
 | 291 | High | Resolved | Crashed inline Runtime owner leaves daemon startup permanently fenced | v0.7.69 owner-policy fencing | v0.7.86 release | 2026-08-11 | 2026-08-11 |
@@ -205,6 +206,53 @@ by the focused sandbox, lineage, REPL, and coding-runtime tests.
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 295: Complete Runtime exit could strand a same-boot Windows ACL owner and could not resume safely after host relaunch
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.79 managed Runtime shutdown
+- **Fixed**: v0.7.91 development
+- **Created**: 2026-08-17
+- **Resolved**: 2026-08-17
+
+#### Root Cause
+
+The host could request `stopForInline()` and later prove only that the daemon
+shutdown outcome failed. Its SDK close path then discarded the live Runtime
+projection, while the Windows ACL poison marker, owner fence, and Job
+containment protocol remained private to the SDK. A relaunch carried no durable
+exact-owner settlement intent and could start owner reconciliation before
+repair. The immediate workspace-session timeout trigger was corrected in
+v0.7.90, but that did not make an already accepted exit autonomously resumable.
+The daemon also advertised a 15-second memory-review drain and a 130-second
+workspace reset while its outer final-cleanup deadline was only 10 seconds and
+its generic phase cap truncated memory review to two seconds. Legitimate hidden
+cleanup could therefore be recorded as failed even when no user task remained.
+
+#### Resolution
+
+v0.7.91 exports one SDK-owned `settleKodaXRuntimeExit()` transaction and local
+`runtimeExitSettlement:1` capability. The SDK persists the exact owner before
+stop, fences replacement through the existing inline transition, proves
+Windows process and Job exit, repairs only exact-owner ACL residue under the
+machine-global lock, and resumes idempotently after relaunch. PID reuse,
+foreign residue, active work, and corrupt evidence remain fail-closed. POSIX
+stuck processes are never signaled from a cached PID/PGID; the ticket remains
+blocked until an OS reboot changes the durable boot identity, after which exact
+owner/state/policy cleanup resumes autonomously. The original failed shutdown
+outcome is retained as audit evidence.
+The orderly daemon budget is now 160 seconds, with the memory-review durability
+window kept independent of the generic phase cap. The public settlement owns a
+fixed 480-second transaction deadline, bounds management/stop/transport phases,
+allows 170 seconds for orderly daemon exit, and reserves bounded Windows
+process-tree, Job-drain, ACL-recovery, and marker-clear tails. Caller-controlled
+short timeouts are not exposed.
+
+#### Verification
+
+See
+[`ISSUE_295_v0.7.91_REGRESSION_GUIDE.md`](test-guides/ISSUE_295_v0.7.91_REGRESSION_GUIDE.md).
 
 ### 293: Managed compaction context replacement makes ordinary history ambiguous and duplicates paged conversations
 

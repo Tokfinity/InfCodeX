@@ -62,7 +62,7 @@ describe('F269 shared Runtime contracts', () => {
       ownerStatus: 'owned',
       owner: { kind: 'inline' },
     });
-    expect(abandoned.owner).not.toHaveProperty('processStartIdentity');
+    expect(abandoned.owner?.processStartIdentity).toMatch(/^\d+$/);
 
     expect(enableKodaXDaemonOwner({ homeDir, profile })).toMatchObject({
       mode: 'daemon',

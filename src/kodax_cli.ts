@@ -1835,9 +1835,12 @@ function combineDaemonShutdownErrors(
   );
 }
 
-const DEFAULT_DAEMON_FINAL_CLEANUP_TIMEOUT_MS = 10_000;
+// A daemon may legitimately spend up to 130 seconds draining the shared ASRT
+// workspace queue, followed by the 15-second memory review durability window.
+const DEFAULT_DAEMON_FINAL_CLEANUP_TIMEOUT_MS = 160_000;
 const DEFAULT_INTERACTIVE_FINAL_CLEANUP_TIMEOUT_MS = 5_000;
-const INTERACTIVE_MEMORY_REVIEW_DRAIN_TIMEOUT_MS = 15_000;
+const MEMORY_REVIEW_DRAIN_TIMEOUT_MS = 15_000;
+const MEMORY_REVIEW_CLEANUP_GUARD_TIMEOUT_MS = MEMORY_REVIEW_DRAIN_TIMEOUT_MS + 1_000;
 
 function daemonFinalCleanupTimeoutMs(): number {
   const configured = Number.parseInt(
@@ -1868,7 +1871,7 @@ async function cleanupInteractiveProcessResources(input: {
   const errors: Error[] = [];
   // FEATURE_289: preserve the independent durability window before closing
   // any Runtime/provider resource the active reviewer may still need.
-  await awaitLatestCodingMemoryReviewDrain(INTERACTIVE_MEMORY_REVIEW_DRAIN_TIMEOUT_MS);
+  await awaitLatestCodingMemoryReviewDrain(MEMORY_REVIEW_DRAIN_TIMEOUT_MS);
   const totalTimeoutMs = interactiveFinalCleanupTimeoutMs();
   const deadline = Date.now() + totalTimeoutMs;
   const phaseTimeoutMs = Math.max(1, Math.min(1_000, Math.floor(totalTimeoutMs / 5)));
@@ -1970,7 +1973,13 @@ async function cleanupDaemonServeProcessResources(input: {
   await attempt('A2A', input.closeA2A);
   await attempt('integration hot-reload', input.closeHotReload);
   await attempt('extension Runtime', input.disposeExtensions);
-  await attempt('memory review drain', () => awaitLatestCodingMemoryReviewDrain(15_000));
+  await attempt(
+    'memory review drain',
+    () => awaitLatestCodingMemoryReviewDrain(MEMORY_REVIEW_DRAIN_TIMEOUT_MS),
+    // The drain installs its own 15-second timer after this outer guard timer.
+    // Leave headroom so the bounded drain wins the race at its documented limit.
+    MEMORY_REVIEW_CLEANUP_GUARD_TIMEOUT_MS,
+  );
   await attempt('LSP', shutdownDefaultLspService);
   await attempt('managed child process', async () => {
     await cleanupRegisteredManagedChildren({

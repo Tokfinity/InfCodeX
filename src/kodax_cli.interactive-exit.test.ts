@@ -510,6 +510,34 @@ describe('CLI interactive exit lifecycle', () => {
     ]);
   });
 
+  it('preserves the memory review drain budget beyond the generic daemon phase cap', async () => {
+    const daemonHome = await mkdtemp(join(tmpdir(), 'kodax-daemon-cleanup-'));
+    daemonTempHomes.push(daemonHome);
+    process.env.VITEST = 'true';
+    process.env.KODAX_INTERNAL_DAEMON_FINAL_CLEANUP_TIMEOUT_MS = '400';
+    process.argv = [
+      'node',
+      'kodax',
+      'daemon',
+      'serve',
+      '--home',
+      daemonHome,
+      '--profile',
+      'daemon-memory-review-drain',
+    ];
+    const { main, harness } = await importMainWithMocks({
+      mockDaemonLease: true,
+      memoryReviewDrain: () => new Promise<void>((resolve) => setTimeout(resolve, 150)),
+    });
+
+    await expect(main()).resolves.toBeUndefined();
+    expect(harness.awaitLatestCodingMemoryReviewDrain).toHaveBeenCalledWith(15_000);
+    expect(harness.calls).toEqual(expect.arrayContaining([
+      'cleanup-children-final',
+      'shutdown-tracing',
+    ]));
+  });
+
   it('reports daemon process cleanup failure after attempting later resources', async () => {
     const daemonHome = await mkdtemp(join(tmpdir(), 'kodax-daemon-cleanup-'));
     daemonTempHomes.push(daemonHome);

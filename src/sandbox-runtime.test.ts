@@ -654,11 +654,13 @@ vi.mock('@anthropic-ai/sandbox-runtime', async (importOriginal) => {
 
 import {
   KODAX_ASRT_VERSION,
+  clearWindowsSandboxAclMarkersForRuntimeOwner,
   createAsrtShellSandbox,
   createAsrtSkillScriptRunner,
   doctorSandboxRuntime,
   overrideWorkspaceSessionRpcTimeoutsForTest,
   prepareSandboxRuntimeForSetup,
+  recoverWindowsSandboxAclsForRuntimeOwner,
   runKodaXSandboxed,
   runAsrtBrokerProcess,
   resetAsrtWorkspaceSessionsForTest,
@@ -807,6 +809,126 @@ async function markSandboxRuntimeUnavailable(): Promise<void> {
 }
 
 describe('ASRT workspace shell adapter', () => {
+  it.runIf(process.platform === 'win32')(
+    'recovers only exact daemon-owned primary and legacy ACL markers without force',
+    async () => {
+      const configHome = path.resolve(process.env.KODAX_HOME!);
+      const primaryDirectory = path.join(
+        path.resolve(process.env.ProgramData!),
+        'KodaX',
+        'sandbox-runtime',
+        'acl-poison',
+      );
+      const legacyDirectory = path.join(configHome, 'sandbox-runtime', 'acl-poison');
+      const basename = 'unconfirmed-owner-exact-runtime.json';
+      const payload = JSON.stringify({
+        version: 1,
+        state: 'unconfirmed',
+        holderPid: 4101,
+        holderProcessStartIdentity: 'process-start-4101',
+        windowsBootIdentity: processIdentityMock.windowsBootIdentity,
+      });
+      await mkdir(primaryDirectory, { recursive: true });
+      await mkdir(legacyDirectory, { recursive: true });
+      await writeFile(path.join(primaryDirectory, basename), payload, 'utf8');
+      await writeFile(path.join(legacyDirectory, basename), payload, 'utf8');
+
+      const recovered = await recoverWindowsSandboxAclsForRuntimeOwner(configHome, {
+        pid: 4101,
+        processStartIdentity: 'process-start-4101',
+      }, processIdentityMock.windowsBootIdentity!);
+
+      expect(recovered).toBe(2);
+      await expect(readdir(primaryDirectory)).resolves.toEqual([basename]);
+      await expect(readdir(legacyDirectory)).resolves.toEqual([basename]);
+      const cleared = await clearWindowsSandboxAclMarkersForRuntimeOwner(configHome, {
+        pid: 4101,
+        processStartIdentity: 'process-start-4101',
+      }, processIdentityMock.windowsBootIdentity!);
+      expect(cleared).toBe(2);
+      await expect(readdir(primaryDirectory)).resolves.toEqual([]);
+      await expect(readdir(legacyDirectory)).resolves.toEqual([]);
+      const calls = capturedSyncSpawns.filter(({ args }) => (
+        args.includes('acl') && args.includes('recover')
+      ));
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.args).not.toContain('--force');
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'keeps every marker when exact daemon ACL recovery finds a foreign owner',
+    async () => {
+      const configHome = path.resolve(process.env.KODAX_HOME!);
+      const primaryDirectory = path.join(
+        path.resolve(process.env.ProgramData!),
+        'KodaX',
+        'sandbox-runtime',
+        'acl-poison',
+      );
+      await mkdir(primaryDirectory, { recursive: true });
+      const exact = path.join(primaryDirectory, 'unconfirmed-owner-exact.json');
+      const foreign = path.join(primaryDirectory, 'unconfirmed-owner-foreign.json');
+      await writeFile(exact, JSON.stringify({
+        version: 1,
+        state: 'unconfirmed',
+        holderPid: 4101,
+        holderProcessStartIdentity: 'process-start-4101',
+        windowsBootIdentity: processIdentityMock.windowsBootIdentity,
+      }), 'utf8');
+      await writeFile(foreign, JSON.stringify({
+        version: 1,
+        state: 'unconfirmed',
+        holderPid: 5101,
+        holderProcessStartIdentity: 'process-start-5101',
+        windowsBootIdentity: processIdentityMock.windowsBootIdentity,
+      }), 'utf8');
+
+      await expect(recoverWindowsSandboxAclsForRuntimeOwner(configHome, {
+        pid: 4101,
+        processStartIdentity: 'process-start-4101',
+      }, processIdentityMock.windowsBootIdentity!)).rejects.toThrow(/foreign or unverifiable owner marker/i);
+
+      await expect(stat(exact)).resolves.toBeDefined();
+      await expect(stat(foreign)).resolves.toBeDefined();
+      expect(capturedSyncSpawns.filter(({ args }) => (
+        args.includes('acl') && args.includes('recover')
+      ))).toHaveLength(0);
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'rejects an exact PID identity marker from a different Windows boot',
+    async () => {
+      const configHome = path.resolve(process.env.KODAX_HOME!);
+      const primaryDirectory = path.join(
+        path.resolve(process.env.ProgramData!),
+        'KodaX',
+        'sandbox-runtime',
+        'acl-poison',
+      );
+      await mkdir(primaryDirectory, { recursive: true });
+      const marker = path.join(primaryDirectory, 'unconfirmed-owner-other-boot.json');
+      await writeFile(marker, JSON.stringify({
+        version: 1,
+        state: 'unconfirmed',
+        holderPid: 4101,
+        holderProcessStartIdentity: 'process-start-4101',
+        windowsBootIdentity: 'windows-boot-100',
+      }), 'utf8');
+
+      await expect(recoverWindowsSandboxAclsForRuntimeOwner(configHome, {
+        pid: 4101,
+        processStartIdentity: 'process-start-4101',
+      }, 'windows-boot-200')).rejects.toThrow(/foreign or unverifiable owner marker/i);
+
+      await expect(stat(marker)).resolves.toBeDefined();
+      expect(capturedSyncSpawns.filter(({ args }) => (
+        args.includes('acl') && args.includes('recover')
+      ))).toHaveLength(0);
+    },
+  );
+
   it('avoids an eager Windows ACL owner and starts POSIX warm-up with a fresh KODAX_HOME', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-shell-warm-'));
     tempRoots.push(root);

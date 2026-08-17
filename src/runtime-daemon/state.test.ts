@@ -170,6 +170,8 @@ describe('runtime daemon state paths', () => {
 
   it('rejects path-like profile names', () => {
     expect(() => normalizeRuntimeDaemonProfile('../escape')).toThrow(/Invalid runtime daemon profile/);
+    expect(() => normalizeRuntimeDaemonProfile('..')).toThrow(/Invalid runtime daemon profile/);
+    expect(() => normalizeRuntimeDaemonProfile('.')).toThrow(/Invalid runtime daemon profile/);
     expect(() => normalizeRuntimeDaemonProfile('space profile')).toThrow(/Invalid runtime daemon profile/);
   });
 

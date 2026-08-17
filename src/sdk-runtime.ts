@@ -247,6 +247,12 @@ export type {
   RuntimeDaemonShutdownVerificationInput,
   RuntimeDaemonShutdownVerificationOwner,
 } from "./runtime-daemon/shutdown-verifier.js";
+export { settleRuntimeDaemonExit as settleKodaXRuntimeExit } from "./runtime-daemon/exit-settlement.js";
+export type {
+  RuntimeExitSettlement,
+  RuntimeExitSettlementBlockReason,
+  RuntimeExitSettlementInput,
+} from "./runtime-daemon/exit-settlement.js";
 import { createRuntimeWorkerTransport } from "./runtime-worker/transport.js";
 import type { RuntimeWorkerOptions } from "./runtime-worker/protocol.js";
 import {
@@ -500,6 +506,9 @@ export function getKodaXRuntimeOwnerState(
           pid: owner.pid,
           createdAt: owner.createdAt,
           ...(owner.kind === undefined ? {} : { kind: owner.kind }),
+          ...(owner.processStartIdentity === undefined
+            ? {}
+            : { processStartIdentity: owner.processStartIdentity }),
           ...(owner.processContainment === undefined
             ? {}
             : { processContainment: owner.processContainment }),
@@ -715,6 +724,7 @@ export const KODAX_RUNTIME_SDK_CAPABILITIES = Object.freeze({
   daemonOrphanExit: 1,
   daemonShutdownVerification: 1,
   managedRunDurability: 1,
+  runtimeExitSettlement: 1,
   sandboxRuntime: 3,
   sessionEventJournal: 1,
   runtimeEventCoalescing: 1,

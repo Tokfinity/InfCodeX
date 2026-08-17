@@ -464,6 +464,7 @@ describe('Runtime daemon capability upgrade', () => {
       daemonOrphanExit: 1,
       daemonShutdownVerification: 1,
       managedRunDurability: 1,
+      runtimeExitSettlement: 1,
       sandboxRuntime: 3,
       runtimeEventCoalescing: 1,
       sessionEventJournal: 1,
