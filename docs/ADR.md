@@ -1,6 +1,6 @@
 # KodaX Architecture Decision Records
 
-> Last updated: 2026-08-16
+> Last updated: 2026-08-17
 >
 > **v0.7.89 release addendum:** ordinary conversation topology treats
 > replaceable managed-run/runtime-context envelopes as transparent while the
@@ -21,6 +21,15 @@
 > markers to the retained topology. Run-scoped tool schemas normalize to the
 > provider object-schema contract at materialization. These are system-code
 > fixes with no new shell permission or sandbox policy weakening.
+
+> **v0.7.91 release addendum:** complete Runtime exit is now an SDK-owned,
+> crash-resumable transaction. The SDK persists exact owner/process-start and
+> boot identities before stop, and repairs only verified Windows process/Job/ACL
+> residue; same-boot POSIX uncertainty remains blocked. Provider output
+> replacement is projected by logical response and physical request identity,
+> while raw journals retain all attempts. Standalone binaries bundle lazy
+> provider SDK dependency graphs. These changes preserve fail-closed ownership,
+> shell, and sandbox boundaries.
 >
 > **v0.7.88 release addendum:** Actor snapshot persistence has
 > explicit boundaries for Actor mutation order, process-local storage dequeue,
@@ -5112,3 +5121,30 @@ hydration. Old polluted UI caches remain an explicit historical limitation.
 replacement, provider-recovery checkpoint replay in each host, content-based
 deduplication, daemon protocol downgrade, or stopping an incompatible daemon
 without proving both ownership and quiescence.
+
+---
+
+## ADR-063: Complete Runtime Exit Is an SDK-Owned Durable Transaction
+
+**Status**: Accepted (2026-08-17)
+
+**Driver**: a host crash can occur after Runtime stop acceptance but before
+containment and owner cleanup are durably understood
+
+**Decision**: `settleKodaXRuntimeExit()` writes an exact-owner settlement ticket
+before stop, binds it to daemon/process-start and platform boot identities, and
+uses the existing owner-policy fence for the cooperative stop. A `clean` result
+requires verified orderly shutdown; a `recovered` result may repair only
+identity-scoped Windows process/Job/ACL residue or, after a boot change, exact
+POSIX owner/state/policy residue. Missing, foreign, corrupt, active, reused, or
+same-boot unverifiable evidence returns `blocked` with a bounded next action.
+
+**Consequences**: host applications no longer duplicate Runtime lifecycle and
+sandbox recovery protocols. Settlement is resumable and idempotent, but it is
+not a general process-kill, ACL-delete, or forced recovery API. Existing
+shutdown outcomes remain immutable audit facts and npm consumers can opt into
+the local `runtimeExitSettlement:1` capability.
+
+**Rejected alternatives**: caching a PID/PGID, deleting markers by path,
+force-stopping a replacement owner, treating daemon exit alone as containment
+proof, or letting each host invent a timeout/replay policy.

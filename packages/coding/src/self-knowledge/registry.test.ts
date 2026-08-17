@@ -82,6 +82,24 @@ describe('FEATURE_218 manual registry', () => {
     expect(content).toContain('none/minimal/light/low');
   });
 
+  it('documents the v0.7.91 Runtime settlement and output projection contracts', () => {
+    const sdk = resolveKodaXManual({ topic: 'sdk' }).content;
+    const tools = resolveKodaXManual({ topic: 'tools' }).content;
+    const sandbox = resolveKodaXManual({ topic: 'sandbox' }).content;
+
+    expect(sdk).toContain('runtimeExitSettlement:1');
+    expect(sdk).toContain('settleKodaXRuntimeExit');
+    expect(sdk).toContain('clean');
+    expect(sdk).toContain('recovered');
+    expect(sdk).toContain('blocked');
+    expect(tools).toContain('output-segment projection');
+    expect(tools).toContain('responseId');
+    expect(tools).toContain('providerRequestId');
+    expect(tools).toContain('liveOutputSegments:1');
+    expect(sandbox).toContain('exact owner before stop');
+    expect(sandbox).toContain('Same-boot POSIX ambiguity');
+  });
+
   it('documents the v0.7.79 provider, A2A, Session, and Runtime contracts', () => {
     const providers = resolveKodaXManual({ topic: 'providers' }).content;
     const customProviders = resolveKodaXManual({ topic: 'custom-providers' }).content;

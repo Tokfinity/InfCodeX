@@ -4362,6 +4362,46 @@ observation join or reconnect. Do not append a provider's cumulative response
 again during recovery, and do not infer replacement from attempt numbers or
 text equality.
 
+### v0.7.91 crash-resumable Runtime exit settlement
+
+Hosts that own a complete Runtime exit can use the SDK transaction instead of
+duplicating stop, process-tree, Job, ACL, and owner-policy recovery logic:
+
+```ts
+import { settleKodaXRuntimeExit } from '@kodax-ai/kodax/runtime';
+
+const outcome = await settleKodaXRuntimeExit({
+  configHome: coderConfigHome,
+  profile: 'coder',
+  runtime, // optional; omit only when resuming a prepared ticket after relaunch
+});
+
+if (outcome.status === 'blocked') {
+  // Keep the host open, relaunch the product, restart the OS, or request
+  // explicit manual recovery according to outcome.nextAction.
+  reportRuntimeExitBlock(outcome.reason, outcome.nextAction);
+} else {
+  reportRuntimeExit(outcome.status, outcome.repairs);
+}
+```
+
+`runtimeExitSettlement:1` is a local SDK capability and does not add a daemon
+handshake requirement. The SDK writes an exact owner/process-start and platform
+boot identity before cooperative stop, then returns `clean` only after the
+durable shutdown outcome and required exits are verified. `recovered` may repair
+only identity-scoped Windows process/Job/ACL residue, or exact POSIX owner/state
+residue after a boot-identity change. Same-boot POSIX uncertainty, active work,
+PID reuse, foreign markers, corrupt tickets, and replacement owners return
+`blocked`; the SDK never exposes a bare-PID kill, raw marker deletion, or forced
+ACL-recovery primitive. The transaction has a fixed bounded deadline and does
+not accept caller-supplied short timeouts.
+
+When the host is about to close, pass the connected Runtime so the SDK can
+record the exact owner and management revision. After a crash, call the same
+function with only `configHome` and `profile` to resume a still-exact prepared
+ticket. Do not delete `exit-settlement.json`, clear ACL markers, or start a
+replacement owner while a settlement is `prepared` or `stop_accepted`.
+
 Observation boundaries such as `events.subscribe()`, `events.replay()`, and
 Session status projection flush pending events before answering, so they can
 surface a durable-persistence failure instead of returning a stale waterline.

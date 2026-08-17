@@ -709,6 +709,18 @@ Coding runtime, and REPL persistence system-code fixes; the fail-closed safety
 boundaries remain unchanged. See the
 [v0.7.90 release checklist](docs/release.md#v0790-release-preparation).
 
+**v0.7.91 release:** this maintenance release adds the SDK-owned
+`runtimeExitSettlement:1` capability and `settleKodaXRuntimeExit()` transaction.
+Hosts can persist exact Runtime ownership before a complete exit, resume after a
+crash, and repair only verified Windows process/Job/ACL residue; same-boot POSIX
+recovery remains fail-closed. Provider retries, fallback, and continuation now
+share a logical output-segment projection (`responseId` plus
+`providerRequestId`), and standalone Bun binaries bundle lazy Anthropic/OpenAI
+SDK dependency graphs. These are intentional Runtime, LLM, Coding runtime, and
+SDK system-code changes; shell and sandbox fail-closed boundaries remain
+unchanged. See the [v0.7.91 release checklist](docs/release.md#v0791-release-preparation)
+and [SDK Embedder Guide](public_docs/sdk/embedder-guide.md).
+
 **v0.7.87 GLM provider release:** `zhipu-coding` defaults to `glm-5.3` and
 retains `glm-5.2` as an explicit rollback route. `zai-coding` retained both
 models but defaulted to `glm-5.2` until the overseas Coding Plan rollout

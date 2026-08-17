@@ -151,6 +151,17 @@ before either daemon or embedded dispatch. It also carries the Agent lineage
 archive-topology and Runtime workspace-session orderly-retirement fixes; these
 are intentional system-code changes with no weaker sandbox fallback.
 
+The v0.7.91 maintenance release adds the SDK-owned Runtime exit settlement
+contract and the effective provider output-segment projection. A host can call
+`settleKodaXRuntimeExit({ configHome, profile, runtime? })` and receive a
+bounded `clean`, `recovered`, or `blocked` result without implementing its own
+process/ACL recovery. Live provider output is keyed by logical `responseId`
+and physical `providerRequestId`: replacement removes only the active failed
+segment, continuation appends, and raw Runtime journals remain the audit
+authority. Standalone Bun packaging now embeds lazy provider SDK dependency
+graphs. See the [SDK Embedder Guide](../../public_docs/sdk/embedder-guide.md)
+for host integration rules.
+
 ## 安装 / 导入
 
 ```bash

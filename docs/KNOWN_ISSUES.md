@@ -7,6 +7,17 @@ _Last Updated: 2026-08-17_
 > **Archive Notice**: Historical issue records are maintained in `docs/ISSUES_ARCHIVED.md`.
 > This file tracks the active issue backlog plus recently resolved issue records that have not yet been archived.
 
+## v0.7.91 Release Corrections
+
+The v0.7.91 maintenance release closes Issue 295 with a durable SDK-owned
+Runtime exit settlement transaction. Complete exits persist exact ownership
+before stop, resume through a crash-safe ticket, and repair only verified
+process/Job/ACL residue. Provider output replacement is also projected by
+logical response and physical request identity, while raw journals retain every
+attempt. Ambiguous ownership and same-boot POSIX recovery remain fail-closed.
+
+---
+
 ## v0.7.90 Release Corrections
 
 The v0.7.90 patch closes follow-up correctness gaps without weakening the
@@ -23,7 +34,7 @@ by the focused sandbox, lineage, REPL, and coding-runtime tests.
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
-| 295 | High | Resolved | Complete Runtime exit could strand a same-boot Windows ACL owner and could not resume safely after host relaunch | v0.7.79 managed Runtime shutdown | v0.7.91 development | 2026-08-17 | 2026-08-17 |
+| 295 | High | Resolved | Complete Runtime exit could strand a same-boot Windows ACL owner and could not resume safely after host relaunch | v0.7.79 managed Runtime shutdown | v0.7.91 release | 2026-08-17 | 2026-08-17 |
 | 293 | High | Resolved | Managed compaction context replacement makes ordinary history ambiguous and duplicates paged conversations | v0.7.80 managed-run-context stripping | v0.7.89 release | 2026-08-16 | 2026-08-16 |
 | 292 | High | Resolved | Actor settlement deadline conflates storage eligibility, canonical commit, and post-commit maintenance | v0.7.85 Actor settlement convergence | v0.7.88 release | 2026-08-15 | 2026-08-15 |
 | 291 | High | Resolved | Crashed inline Runtime owner leaves daemon startup permanently fenced | v0.7.69 owner-policy fencing | v0.7.86 release | 2026-08-11 | 2026-08-11 |
@@ -212,7 +223,7 @@ by the focused sandbox, lineage, REPL, and coding-runtime tests.
 - **Priority**: High
 - **Status**: Resolved
 - **Introduced**: v0.7.79 managed Runtime shutdown
-- **Fixed**: v0.7.91 development
+- **Fixed**: v0.7.91 release
 - **Created**: 2026-08-17
 - **Resolved**: 2026-08-17
 

@@ -6,6 +6,22 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+---
+
+## [0.7.91] - 2026-08-17
+
+### Added
+
+- The Runtime SDK now exports `settleKodaXRuntimeExit()` and the local
+  `runtimeExitSettlement:1` capability. A complete host exit persists the
+  exact owner before stop, resumes through a durable settlement ticket, and
+  repairs only verified Windows process/Job/ACL residue. Same-boot POSIX
+  recovery remains fail-closed until a durable boot-identity change proves the
+  retained tree cannot still be running.
+- Standalone Bun binaries now bundle the lazy Anthropic and OpenAI SDK
+  dependency graphs, including transitive packages that were previously
+  resolved from filesystem `node_modules`.
+
 ### Fixed
 
 - Provider retries, fallback, output-budget escalation, and max-token
@@ -30,6 +46,20 @@ All notable changes to this project will be documented in this file.
   use `await getClient()`. Synchronous `buildClient()` overrides remain
   supported, but the base Anthropic/OpenAI loaders are asynchronous so Bun can
   discover and embed their literal dynamic imports.
+- Runtime live output is projected by logical `responseId` and physical
+  `providerRequestId`. Replacement removes only the active failed segment,
+  continuation appends, and stale provider deltas are ignored; raw journals
+  still retain the complete audit trail.
+
+### Documentation
+
+- Synchronized package metadata, product/architecture/design documents,
+  public SDK embedder guidance, `kodax_manual`, release checklist, feature
+  design index, known-issue record, and regression guide for v0.7.91.
+
+> v0.7.91 intentionally includes Runtime/daemon, Coding runtime, LLM binary
+> packaging, and REPL-facing SDK contract changes. npm publication remains a
+> separate manual operator step.
 
 ## [0.7.90] - 2026-08-17
 

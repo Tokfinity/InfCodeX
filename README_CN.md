@@ -253,6 +253,16 @@ v0.7.93。详见 [v0.7.83 发布清单](docs/release.md#v0783-release-preparatio
 
 **v0.7.90 发布**：本稳定性版本保留 v0.7.89 的契约，并修复 workspace session RPC 超时后的有序退役与 daemon Error/AggregateError/cause 诊断、链式 compaction 的 direct physical predecessor 与 archive marker 拓扑，以及 run-scoped tool 在 provider 边界的 object schema 规范化。它包含明确的 Runtime/sandbox、Agent lineage、Coding runtime 与 REPL 持久化系统代码修复，但没有放宽 fail-closed 安全边界。详见 [v0.7.90 发布清单](docs/release.md#v0790-release-preparation)。
 
+**v0.7.91 发布**：本维护版本新增 SDK 自有的 `runtimeExitSettlement:1` 能力和
+`settleKodaXRuntimeExit()` 事务。宿主可以在完整退出前持久化精确 Runtime owner，
+崩溃后安全恢复，并且只修复已验证的 Windows process/Job/ACL 残留；POSIX 同一启动周期
+仍保持 fail-closed。Provider retry、fallback、continuation 统一使用由
+`responseId` 与 `providerRequestId` 标识的 output segment 投影；独立 Bun 二进制会打包
+Anthropic/OpenAI 的 lazy SDK 依赖图。它包含明确的 Runtime、LLM、Coding runtime 与
+SDK 系统代码契约更新，但没有放宽 shell/sandbox 的 fail-closed 边界。详见
+[v0.7.91 发布清单](docs/release.md#v0791-release-preparation) 与
+[SDK Embedder Guide](public_docs/sdk/embedder-guide.md)。
+
 **v0.7.87 GLM Provider 发布**：`zhipu-coding` 默认使用 `glm-5.3`，并保留 `glm-5.2` 作为显式回退路由。`zai-coding` 当时保留两个模型但默认使用 `glm-5.2`，直到 v0.7.88 的海外 Coding Plan 路由切换。Coding Plan model ID 原样发送，不附加 context 后缀。GLM-5.3 的思考不可关闭，因此 `off` / `none` 会降级为 `low`，不会发送上游不支持的 disabled-thinking 请求。Issue 256 剩余的 Worker owner lease 边界在 v0.7.87 后仍保持 Open，且本版本不指定新的替代目标。详见 [v0.7.87 发布清单](docs/release.md#v0787-release-preparation)。
 
 Windows workspace Shell 还会保留大小写不敏感的 `PATH`/`Path` 与 `PATHEXT` 约定，

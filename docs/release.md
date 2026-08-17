@@ -127,6 +127,56 @@ Before tagging, all of the following must be true:
 
 Only after these gates pass may the exact commit be tagged `v0.7.90`.
 
+## v0.7.91 release preparation
+
+Release state: the root package, all four workspace packages, and every
+`package-lock.json` workspace entry must be version `0.7.91`. This maintenance
+release is prepared for the `v0.7.91` tag and GitHub Release; npm publication
+remains a separate manual operator step. It includes every commit after
+`v0.7.90`:
+
+- the SDK-owned `runtimeExitSettlement:1` capability and
+  `settleKodaXRuntimeExit()` transaction, including exact owner/process-start
+  and boot identity persistence, crash-resumable settlement, verified Windows
+  process/Job/ACL repair, and fail-closed POSIX same-boot ambiguity;
+- the SDK-owned live output-segment projection for provider retry, fallback,
+  non-stream fallback, max-token continuation, and recovery, with logical
+  `responseId`, physical `providerRequestId`, append/replace mode, and raw
+  journal retention;
+- standalone Bun packaging of the lazy Anthropic/OpenAI SDK dependency graphs,
+  including transitive provider packages previously resolved from filesystem
+  `node_modules`;
+- synchronized product, architecture, detailed-design, public SDK, release,
+  feature-index, known-issue, regression-guide, and `kodax_manual` content.
+
+The release intentionally contains Runtime/daemon, LLM packaging, Coding
+runtime, and SDK system-code changes. It does not weaken fail-closed ownership,
+permission, shell, or sandbox contracts. No system implementation is silently
+changed by the release-documentation pass.
+
+Before tagging, all of the following must be true:
+
+1. all package versions, `CHANGELOG.md`, README/README_CN, PRD/HLD/DD/ADR,
+   feature tracker, known-issue record, public SDK guide, this checklist,
+   `docs/features`, and `kodax_manual` agree on v0.7.91;
+2. focused tests cover crash-resumable exit settlement, exact owner and ACL
+   recovery, output-segment replacement/continuation, lazy provider loading,
+   and the existing v0.7.90 regression contracts;
+3. TypeScript, config-template checks, bundled SDK/Worker/sidecar builds, fast,
+   unit, contract, and system suites pass, with any host-only Windows sandbox
+   limitation documented rather than silently changing system code;
+4. the packed `kodax-ai-kodax-0.7.91.tgz` is inspected and smoke-installed into
+   an empty consumer for the root package and all 12 SDK subpaths;
+5. root and `docs/features` are clean, with the submodule commit reachable from
+   its remote; `.codex*` local artifacts and alternate pnpm metadata are ignored
+   and not tracked;
+6. GitHub CI is green for the exact commit on Node 20/22, Unix Runtime,
+   Windows Shell, and packaged Electron gates; the tag-triggered Release job
+   produces all platform archives, sidecars, and `SHA256SUMS`. npm publication is
+   left to the maintainer.
+
+Only after these gates pass may the exact commit be tagged `v0.7.91`.
+
 ## v0.7.89 release preparation
 
 Release state: the root package, all four workspace packages, and every

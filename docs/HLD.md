@@ -2,8 +2,8 @@
 
 > Last updated: 2026-08-17
 >
-> Current published baseline: `v0.7.90`
-> (`@kodax-ai/kodax@0.7.90`; npm publication remains manual)
+> Current published baseline: `v0.7.91`
+> (`@kodax-ai/kodax@0.7.91`; npm publication remains manual)
 >
 > This HLD is intentionally current-state only. The old pre-v0.7.43
 > chain/harness model has been removed from this active design document because
@@ -45,6 +45,15 @@ orderly before replacement; cleanup receives the reset-grace budget, and daemon
 diagnostics preserve Error causes. Lineage/archive maintenance retains direct
 clone predecessors, while the coding materializer supplies provider-valid object
 schemas for run-scoped tools.
+
+The v0.7.91 Runtime adds a durable exit-settlement transaction at the SDK
+boundary. It records the exact daemon owner and boot identity before stop,
+reuses the existing owner-policy fence, and only repairs identity-scoped
+process/Job/ACL residue after containment and shutdown evidence pass. A
+same-boot POSIX ambiguity is retained as a blocked ticket rather than guessed
+or force-signalled. The live output projection similarly separates logical
+responses from physical provider requests, so Runtime snapshots and raw
+journals serve different, explicit authorities.
 
 For a Windows daemon Runtime, startup is a three-part process boundary:
 PowerShell creates the daemon suspended, assigns it to a kill-on-close Job

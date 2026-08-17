@@ -2,8 +2,8 @@
 
 > Last updated: 2026-08-17
 >
-> Current implementation baseline: `v0.7.90` release
-> (`@kodax-ai/kodax@0.7.90` workspace package; npm publication remains manual)
+> Current implementation baseline: `v0.7.91` release
+> (`@kodax-ai/kodax@0.7.91` workspace package; npm publication remains manual)
 >
 > This document describes the current product. Historical pre-v0.7.43
 > chain/harness designs have been removed from this current PRD because they no
@@ -81,6 +81,14 @@ correct archive markers; and run-scoped tool schemas normalize at the shared
 model-materialization boundary. These are intentional Runtime/sandbox, Agent
 lineage, Coding runtime, and REPL persistence system-code fixes, not a new
 feature slot.
+
+The v0.7.91 maintenance release adds a public SDK-owned Runtime exit
+settlement transaction. Hosts persist exact ownership before a complete exit,
+resume a crash-resumable ticket, and repair only verified process-containment or
+Windows ACL residue; ambiguous ownership and same-boot POSIX recovery remain
+fail-closed. Provider retries and continuations also expose one effective live
+output projection while retaining raw audit events, and standalone binaries
+bundle their lazy provider SDK dependency graphs.
 
 ## 2. Target Users
 

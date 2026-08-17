@@ -2,8 +2,8 @@
 
 > Last updated: 2026-08-17
 >
-> Current published baseline: `v0.7.90`
-> (`@kodax-ai/kodax@0.7.90`; npm publication remains manual)
+> Current published baseline: `v0.7.91`
+> (`@kodax-ai/kodax@0.7.91`; npm publication remains manual)
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -269,6 +269,14 @@ logical response, resets on a new `responseId`, and ignores stale deltas whose
 audit journal; `RuntimeSessionLiveProjection.outputSegmentsByRun` is the
 effective reconnect/snapshot authority. New clients require
 `liveOutputSegments:1`, so hosts do not need a checkpoint replay state machine.
+
+Complete Runtime exit is similarly a durable SDK transaction rather than a
+host-side sequence of stop, close, and cleanup guesses. The settlement ticket
+records exact owner/process-start and boot identities before stop; Windows may
+repair only verified empty Job/ACL residue, while same-boot POSIX uncertainty
+returns `blocked` and retains the ticket. The public API exposes bounded
+`clean`, `recovered`, and `blocked` outcomes without exposing raw kill or ACL
+mutation primitives.
 
 #### 3.1.1 Shared Coder daemon consistency (FEATURE_269)
 
