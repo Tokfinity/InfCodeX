@@ -260,6 +260,16 @@ and ignored by live replay. Inline, Worker, and daemon owners share this code,
 while `sessionEventJournal:1` prevents a new client from attaching to an old
 daemon with different ordering semantics.
 
+Live provider output is not reconstructed from Run-wide cumulative text.
+`output.segment.started` records `{ responseId, providerRequestId, mode }`
+before the corresponding text or reasoning deltas. The shared reducer keeps
+completed append segments, replaces only the active segment of the same
+logical response, resets on a new `responseId`, and ignores stale deltas whose
+`providerRequestId` is no longer active. Runtime replay remains an unfiltered
+audit journal; `RuntimeSessionLiveProjection.outputSegmentsByRun` is the
+effective reconnect/snapshot authority. New clients require
+`liveOutputSegments:1`, so hosts do not need a checkpoint replay state machine.
+
 #### 3.1.1 Shared Coder daemon consistency (FEATURE_269)
 
 `sessions.observe(sessionId, listener)` installs a server subscription first,

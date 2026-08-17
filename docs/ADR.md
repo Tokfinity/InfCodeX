@@ -5055,3 +5055,60 @@ lock, allocating process-sized global ranges, treating Run as the journal
 authority, or accepting numeric cursors during a compatibility window. Each
 either preserves the wrong coupling or loses Session-wide recovery/epoch
 validation.
+
+---
+
+## ADR-062: Provider Output Replacement Is an SDK-Owned Segment Projection
+
+**Status**: Accepted (2026-08-17)
+
+**Driver**: streamed provider fallback, max-token continuation, and shared
+Runtime consumers that must render the same effective assistant response
+
+**Context**: a provider call can stream a partial response and then be replaced
+by a retry, fallback, or output-budget escalation. A continuation, however,
+must append. Accumulating every delta by Run preserves audit facts but mixes an
+abandoned physical request into the live response. Re-appending a provider's
+cumulative `getFullResponse()` at recovery boundaries also duplicates text that
+the stream already delivered. Attempt numbers cannot distinguish all cases
+because a fallback or escalation may reuse an attempt number.
+
+**Decision**:
+
+1. Every physical provider request starts one output segment with a logical
+   `responseId`, unique `providerRequestId`, and `mode: append | replace`.
+2. `responseId` is the logical reply boundary. A new value starts a fresh live
+   projection. `providerRequestId` attributes deltas to exactly one physical
+   request and rejects late deltas from an abandoned request. `mode` preserves
+   prior segments for a continuation or removes only the current failed segment
+   for replacement.
+3. SA and managed-Agent execution emit the same contract for initial calls,
+   retries, provider fallback, non-stream fallback, max-token escalation, and
+   continuation. The CLI and every SDK host consume the projection instead of
+   inventing recovery text.
+4. Runtime journals retain all segment-start and delta facts in Session order.
+   `sessions.observe()` exposes the effective per-Run segment projection in its
+   live snapshot. Canonical conversation history remains the terminal durable
+   authority.
+5. Daemons advertise `liveOutputSegments:1`. Auto-starting SDK clients use the
+   authenticated health probe to gate capabilities before attaching the real
+   embedder identity. An incompatible owner is contacted only with an ephemeral
+   upgrade identity, then may be replaced through the durable exit-settlement
+   ticket and its owner/process-start identity, management revision, idle-work,
+   client-count, process-exit, shutdown-outcome, and cleanup fences. A daemon
+   used by another client or carrying governed work is never stopped.
+   Attach-only clients fail closed.
+6. Updated hosts do not retain a checkpoint/text-replay execution fallback or
+   protocol downgrade. Historical data may be migrated, but legacy `uiHistory`
+   without stable source/request identity cannot be losslessly deduplicated by
+   text equality.
+
+**Consequences**: raw audit truth and effective live truth are both preserved;
+fallback and continuation no longer require UI heuristics. KodaX CLI, Runtime,
+and Space converge on one projection after streaming, reconnect, or snapshot
+hydration. Old polluted UI caches remain an explicit historical limitation.
+
+**Rejected alternatives**: cumulative text per Run, attempt-number-only
+replacement, provider-recovery checkpoint replay in each host, content-based
+deduplication, daemon protocol downgrade, or stopping an incompatible daemon
+without proving both ownership and quiescence.

@@ -69,6 +69,8 @@ export interface RuntimeDaemonProcessLease {
   readonly endpoint: RuntimeDaemonEndpoint;
   readonly paths: RuntimeDaemonPaths;
   readonly ownsHost: boolean;
+  /** Result of the read-only health probe performed before this lease attached. */
+  readonly probeInitialization?: unknown;
   close(): Promise<void>;
   shutdown(): Promise<void>;
 }
@@ -275,6 +277,7 @@ export async function acquireRuntimeDaemonProcessLease(
       runtimeDaemonEndpointFromState(observation.state),
       false,
       options,
+      observation.initialization,
     );
   }
   if (initialHealth === "unhealthy" || initialHealth === "mismatch") {
@@ -301,6 +304,7 @@ export async function acquireRuntimeDaemonProcessLease(
     endpoint,
     observation.state.pid === child.pid,
     options,
+    observation.initialization,
   );
 }
 
@@ -309,6 +313,7 @@ async function connectProcessLease(
   endpoint: RuntimeDaemonEndpoint,
   ownsHost: boolean,
   options: RuntimeDaemonProcessLeaseOptions,
+  probeInitialization?: unknown,
 ): Promise<RuntimeDaemonProcessLease> {
   const transport = await createRuntimeDaemonSocketClientTransport(endpoint, {
     connectTimeoutMs: options.connectTimeoutMs,
@@ -335,6 +340,7 @@ async function connectProcessLease(
     endpoint,
     paths,
     ownsHost,
+    ...(probeInitialization === undefined ? {} : { probeInitialization }),
     close: closeTransport,
     shutdown() {
       if (shutdownAttempt) return shutdownAttempt;

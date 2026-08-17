@@ -57,6 +57,7 @@ class Feature045RecoveryProvider extends KodaXBaseProvider {
     _signal?: AbortSignal,
   ): Promise<KodaXStreamResult> {
     Feature045RecoveryProvider.streamCalls += 1;
+    _streamOptions?.onTextDelta?.(`abandoned ${Feature045RecoveryProvider.streamCalls}`);
     throw new KodaXNetworkError('Stream stalled or delayed response (60s idle)', true);
   }
 
@@ -112,6 +113,12 @@ describe('runKodaX provider recovery integration', () => {
     const onRetry = vi.fn();
     const cacheDiagnostics: KodaXPromptCacheDiagnosticEvent[] = [];
     const onContextBudgetSnapshot = vi.fn();
+    const segments: Array<{
+      readonly responseId: string;
+      readonly providerRequestId: string;
+      readonly mode: 'replace' | 'append';
+    }> = [];
+    const deltas: Array<{ readonly text: string; readonly providerRequestId?: string }> = [];
 
     const result = await runKodaX(
       {
@@ -122,6 +129,9 @@ describe('runKodaX provider recovery integration', () => {
           onProviderRecovery,
           onRetry,
           onContextBudgetSnapshot,
+          onOutputSegmentStart: (segment) => segments.push(segment),
+          onTextDelta: (text, meta) =>
+            deltas.push({ text, providerRequestId: meta?.providerRequestId }),
           onPromptCacheDiagnostics: (event) => cacheDiagnostics.push(event),
         },
       },
@@ -142,5 +152,16 @@ describe('runKodaX provider recovery integration', () => {
       transport: 'complete',
       cachedReadTokens: 80,
     });
+    expect(segments.map((segment) => segment.mode)).toEqual(['append', 'replace', 'replace']);
+    expect(new Set(segments.map((segment) => segment.responseId)).size).toBe(1);
+    expect(new Set(segments.map((segment) => segment.providerRequestId)).size).toBe(3);
+    expect(deltas.map((delta) => delta.text)).toEqual([
+      'abandoned 1',
+      'abandoned 2',
+      'fallback recovery',
+    ]);
+    expect(deltas.map((delta) => delta.providerRequestId)).toEqual(
+      segments.map((segment) => segment.providerRequestId),
+    );
   }, 30_000);
 });

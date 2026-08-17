@@ -65,9 +65,11 @@ export class BoundaryTrackerSession {
     messages: readonly KodaXMessage[],
     attempt: number,
     fallback: boolean,
-  ): void {
+  ): string {
     this.tracker.beginRequest(providerName, model, messages as KodaXMessage[], attempt, fallback);
-    telemetryBoundary(this.tracker.snapshot());
+    const snapshot = this.tracker.snapshot();
+    telemetryBoundary(snapshot);
+    return snapshot.requestId;
   }
 
   /** Delegate: mark a text-delta event. */

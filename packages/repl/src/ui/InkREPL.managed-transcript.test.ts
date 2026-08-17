@@ -1,13 +1,20 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { KodaXMessage } from "@kodax-ai/agent";
-import { setLocale } from "../common/i18n.js";
-import { ToolCallStatus } from "./types.js";
 import {
+  createOutputSegmentProjection,
+  reduceOutputSegmentProjection,
+} from "@kodax-ai/coding";
+import { setLocale } from "../common/i18n.js";
+import { ToolCallStatus, type HistoryItem } from "./types.js";
+import {
+  applyDistinctOutputSegmentStart,
+  applyProviderRecoveryTransientReset,
   appendPersistedUiHistorySnapshot,
   buildAmaWorkStripFromStatus,
   buildManagedForegroundTurnHistoryItems,
   buildManagedTaskTranscriptItems,
   buildRoundHistoryItems,
+  discardReplacedOutputSegmentItems,
   hasSubstantiveManagedAssistantText,
   restoreHistoryItemsFromSession,
   shouldAppendManagedAssistantTextDelta,
@@ -1064,6 +1071,102 @@ describe("buildManagedForegroundTurnHistoryItems", () => {
 });
 
 describe("managed foreground assistant text guards", () => {
+  it("preserves terminal partial provider output until a replacement segment starts", () => {
+    let response = "partial answer";
+    let thinkingContent = "partial reasoning";
+    let thinkingActive = true;
+    let toolInput = "partial tool input";
+    let currentTool: string | undefined = "Read";
+    let liveToolCalls = 1;
+    let liveActivityLabel: string | undefined = "Reading";
+
+    applyProviderRecoveryTransientReset({
+      clearResponse: () => {
+        response = "";
+      },
+      clearThinkingContent: () => {
+        thinkingContent = "";
+      },
+      stopThinking: () => {
+        thinkingActive = false;
+      },
+      clearToolInputContent: () => {
+        toolInput = "";
+      },
+      clearCurrentTool: () => {
+        currentTool = undefined;
+      },
+      resetLiveToolCalls: () => {
+        liveToolCalls = 0;
+      },
+      clearLiveActivityLabel: () => {
+        liveActivityLabel = undefined;
+      },
+    });
+
+    expect({ response, thinkingContent }).toEqual({
+      response: "partial answer",
+      thinkingContent: "partial reasoning",
+    });
+    expect({ thinkingActive, toolInput, currentTool, liveToolCalls, liveActivityLabel }).toEqual({
+      thinkingActive: false,
+      toolInput: "",
+      currentTool: undefined,
+      liveToolCalls: 0,
+      liveActivityLabel: undefined,
+    });
+  });
+
+  it("does not repeat managed UI side effects for a duplicate segment start", () => {
+    const started = {
+      responseId: "response-1",
+      providerRequestId: "request-1",
+      mode: "replace" as const,
+    };
+    let projection = createOutputSegmentProjection();
+    projection = reduceOutputSegmentProjection(projection, {
+      type: "segment.started",
+      ...started,
+    }).state;
+    const applyUiStart = vi.fn();
+    const replacement = {
+      responseId: started.responseId,
+      providerRequestId: "request-2",
+      mode: "replace" as const,
+    };
+    projection = applyDistinctOutputSegmentStart(projection, replacement, applyUiStart);
+    projection = reduceOutputSegmentProjection(projection, {
+      type: "assistant.delta",
+      providerRequestId: replacement.providerRequestId,
+      text: "visible partial",
+    }).state;
+
+    const duplicate = applyDistinctOutputSegmentStart(projection, replacement, applyUiStart);
+
+    expect(duplicate).toBe(projection);
+    expect(applyUiStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops only the abandoned provider segment on replacement", () => {
+    const items = [
+      { id: "stable", type: "assistant", text: "stable " },
+      { id: "recovery", type: "info", text: "retrying" },
+      { id: "abandoned-thinking", type: "thinking", text: "old thought" },
+      { id: "abandoned-answer", type: "assistant", text: "abandoned" },
+    ] as HistoryItem[];
+
+    expect(discardReplacedOutputSegmentItems(
+      items,
+      ["abandoned-thinking", "abandoned-answer"],
+      "replace",
+    )).toEqual([items[0], items[1]]);
+    expect(discardReplacedOutputSegmentItems(
+      items,
+      ["abandoned-thinking", "abandoned-answer"],
+      "append",
+    )).toEqual(items);
+  });
+
   it("does not treat the worker prefix alone as substantive assistant text", () => {
     expect(hasSubstantiveManagedAssistantText("[Worker] ", "Worker")).toBe(false);
     expect(hasSubstantiveManagedAssistantText("[Worker] hello", "Worker")).toBe(true);

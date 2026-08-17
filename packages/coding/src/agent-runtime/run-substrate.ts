@@ -514,6 +514,18 @@ function withCompletionEventOnce(events: KodaXEvents): KodaXEvents {
  */
 const MAX_INTERRUPT_CONTINUATION_ITERATIONS = 8;
 
+function attributeProviderRequest(events: KodaXEvents, providerRequestId: string): KodaXEvents {
+  return {
+    ...events,
+    onTextDelta: (text, meta) =>
+      events.onTextDelta?.(text, { ...meta, providerRequestId }),
+    onThinkingDelta: (text, meta) =>
+      events.onThinkingDelta?.(text, { ...meta, providerRequestId }),
+    onThinkingEnd: (thinking, meta) =>
+      events.onThinkingEnd?.(thinking, { ...meta, providerRequestId }),
+  };
+}
+
 export async function runSubstrate(
   options: KodaXOptions,
   prompt: string,
@@ -1682,6 +1694,9 @@ export async function runSubstrate(
         }
       };
 
+      const responseId = liveTurnScopeRef.current.turnId;
+      let nextOutputSegmentMode: 'append' | 'replace' = 'append';
+      let activeProviderRequestId: string | undefined;
       while (true) {
         attempt += 1;
         // Recovery may replace providerMessages between attempts. Rebase the
@@ -1690,13 +1705,20 @@ export async function runSubstrate(
           providerMessages,
           estimatedRequestTokenSnapshot,
         );
-        boundarySession.beginAttempt(
+        const providerRequestId = boundarySession.beginAttempt(
           turnState.currentProviderName,
           turnState.currentModelOverride ?? streamProvider.getModel(),
           providerMessages,
           attempt,
           false,
         );
+        activeProviderRequestId = providerRequestId;
+        events.onOutputSegmentStart?.({
+          responseId,
+          providerRequestId,
+          mode: nextOutputSegmentMode,
+        });
+        nextOutputSegmentMode = 'replace';
 
         // CAP-066: stream-timer lifecycle (hard / max-duration / idle +
         // merged retrySignal). All three timers fire into a single
@@ -1729,7 +1751,7 @@ export async function runSubstrate(
           // streamTimers.resetIdleTimer() + boundaryTracker + extension
           // events + consumer events in load-bearing order.
           const streamCallbacks = buildStreamHandlers({
-            events,
+            events: attributeProviderRequest(events, providerRequestId),
             boundaryTracker,
             streamTimers,
             emitActiveExtensionEvent,
@@ -1850,10 +1872,12 @@ export async function runSubstrate(
               emitActiveExtensionEvent,
               providerName: turnState.currentProviderName,
               attempt,
+              responseId,
               clearStreamTimers: streamTimers.clearAll,
             });
             if (fallbackOutcome.ok) {
               result = fallbackOutcome.result;
+              activeProviderRequestId = fallbackOutcome.providerRequestId;
               emitPromptCacheDiagnosticResponse(
                 events,
                 fallbackCacheDiagnostic,
@@ -2118,7 +2142,9 @@ export async function runSubstrate(
         messages,
         maxTokensRetryCount: turnState.maxTokensRetryCount,
         completedTurnTokenSnapshot,
-        events,
+        events: activeProviderRequestId
+          ? attributeProviderRequest(events, activeProviderRequestId)
+          : events,
       });
       turnState.maxTokensRetryCount = maxTokensOutcome.nextMaxTokensRetryCount;
       if (maxTokensOutcome.outcome === 'continue') {
@@ -2170,7 +2196,10 @@ export async function runSubstrate(
 
       const stopClass = classifyStopReason(result.stopReason);
       if (stopClass === 'refused') {
-        events.onTextDelta?.('\n\n[model declined to answer]\n\n');
+        events.onTextDelta?.(
+          '\n\n[model declined to answer]\n\n',
+          activeProviderRequestId ? { providerRequestId: activeProviderRequestId } : undefined,
+        );
       } else if (stopClass === 'unknown' && typeof result.stopReason === 'string') {
         emitKodaXDiagnostic({
           source: 'coding:stop-reason',

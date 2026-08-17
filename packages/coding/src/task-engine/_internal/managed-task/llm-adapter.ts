@@ -18,6 +18,8 @@
  * previous in-file declarations.
  */
 
+import { randomUUID } from 'node:crypto';
+
 import type {
   KodaXContentBlock,
   KodaXEphemeralSuffix,
@@ -94,6 +96,7 @@ import type {
   KodaXReasoningMode,
   KodaXWireReasoningEffort,
 } from '../../../types.js';
+import type { KodaXOutputSegmentMode } from '../../../output-segments.js';
 import {
   emitProviderRateLimit,
   emitStreamEnd,
@@ -702,6 +705,11 @@ export function buildRunnerLlmAdapter(
       // Independent budget (separate from the resilience error budget and
       // the max_tokens escalation) for re-streaming a fully-empty turn.
       let emptyCompletionRetries = 0;
+      const responseId = [...providerMessages]
+        .reverse()
+        .find((message) => message.turnId !== undefined)
+        ?.turnId ?? `response_${randomUUID().replace(/-/g, '')}`;
+      let nextRequestMode: KodaXOutputSegmentMode = 'append';
       while (true) {
         throwIfManagedProviderAborted(options.abortSignal, providerMessages);
         attempt += 1;
@@ -713,7 +721,13 @@ export function buildRunnerLlmAdapter(
           attempt,
           false,
         );
-        telemetryBoundary(boundaryTracker.snapshot());
+        const request = boundaryTracker.snapshot();
+        telemetryBoundary(request);
+        const requestMeta = { providerRequestId: request.requestId } as const;
+        options.events?.onOutputSegmentStart?.(
+          { responseId, providerRequestId: request.requestId, mode: nextRequestMode },
+          requestMeta,
+        );
 
         const retryTimeoutController = new AbortController();
         let hardTimer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
@@ -778,15 +792,15 @@ export function buildRunnerLlmAdapter(
               || MANAGED_CONTROL_PLANE_MARKERS.some((marker) => text.includes(marker));
             const outText = hasMarker ? sanitizeManagedStreamingText(text) : text;
             if (outText.length === 0) return;
-            options.events?.onTextDelta?.(outText);
+            options.events?.onTextDelta?.(outText, requestMeta);
           },
           onThinkingDelta: (text: string) => {
             boundaryTracker.markThinkingDelta(text);
             resetIdleTimer();
-            options.events?.onThinkingDelta?.(text);
+            options.events?.onThinkingDelta?.(text, requestMeta);
           },
           onThinkingEnd: (thinking: string) => {
-            options.events?.onThinkingEnd?.(thinking);
+            options.events?.onThinkingEnd?.(thinking, requestMeta);
           },
           onToolInputDelta: options.events?.onToolInputDelta,
           onRateLimit: (rateAttempt: number, maxRetries: number, delayMs: number) => {
@@ -849,6 +863,7 @@ export function buildRunnerLlmAdapter(
             // next iteration's attempt will be the same as this one, and subsequent real
             // errors still get the full retry budget.
             attempt -= 1;
+            nextRequestMode = 'replace';
             continue;
           }
           // Empty-completion retry: a finish_reason-complete turn with no
@@ -880,6 +895,7 @@ export function buildRunnerLlmAdapter(
             hardTimer = undefined;
             idleTimer = undefined;
             attempt -= 1;
+            nextRequestMode = 'replace';
             await waitForManagedProviderRetry(
               KODAX_EMPTY_COMPLETION_RETRY_BASE_DELAY_MS * emptyCompletionRetries,
               options.abortSignal,
@@ -963,7 +979,15 @@ export function buildRunnerLlmAdapter(
                 attempt,
                 true,
               );
-              telemetryBoundary(boundaryTracker.snapshot());
+              const fallbackRequest = boundaryTracker.snapshot();
+              telemetryBoundary(fallbackRequest);
+              const fallbackMeta = {
+                providerRequestId: fallbackRequest.requestId,
+              } as const;
+              options.events?.onOutputSegmentStart?.(
+                { responseId, providerRequestId: fallbackRequest.requestId, mode: 'replace' },
+                fallbackMeta,
+              );
               emitContextBudgetSnapshot(providerMessages);
               const fallbackCacheDiagnostic = beginPromptCacheDiagnostic(
                 providerMessages,
@@ -981,14 +1005,14 @@ export function buildRunnerLlmAdapter(
                   ephemeralSuffix: nativeEphemeralSuffix,
                   onTextDelta: (text: string) => {
                     boundaryTracker.markTextDelta(text);
-                    options.events?.onTextDelta?.(text);
+                    options.events?.onTextDelta?.(text, fallbackMeta);
                   },
                   onThinkingDelta: (text: string) => {
                     boundaryTracker.markThinkingDelta(text);
-                    options.events?.onThinkingDelta?.(text);
+                    options.events?.onThinkingDelta?.(text, fallbackMeta);
                   },
                   onThinkingEnd: (thinking: string) => {
-                    options.events?.onThinkingEnd?.(thinking);
+                    options.events?.onThinkingEnd?.(thinking, fallbackMeta);
                   },
                   signal: fallbackSignal,
                 },
@@ -1025,6 +1049,7 @@ export function buildRunnerLlmAdapter(
             // Don't bill an attempt slot for the sanitize step — same
             // rationale as the L1 escalation reversal at line ~2546.
             attempt -= 1;
+            nextRequestMode = 'replace';
             await waitForManagedProviderRetry(
               decision.delayMs,
               options.abortSignal,
@@ -1046,6 +1071,7 @@ export function buildRunnerLlmAdapter(
           const recovery = recoveryCoordinator.executeRecovery(providerMessages, decision);
           telemetryRecovery(decision.action, recovery);
           providerMessages = recovery.messages;
+          nextRequestMode = 'replace';
 
           if (hardTimer) clearTimeout(hardTimer);
           if (idleTimer) clearTimeout(idleTimer);
@@ -1098,7 +1124,6 @@ export function buildRunnerLlmAdapter(
       ) {
         throwIfManagedProviderAborted(options.abortSignal, providerMessages);
         l5Retries += 1;
-        options.events?.onTextDelta?.('\n\n[max_tokens reached, continuing...]\n\n');
         // Push the partial assistant turn + synthetic user continuation
         // onto the outgoing transcript. The provider will see the full
         // mid-thought state and pick up seamlessly.
@@ -1136,8 +1161,25 @@ export function buildRunnerLlmAdapter(
           KODAX_MAX_MAXTOKENS_RETRIES,
         );
         const l5Signal = options.abortSignal ?? undefined;
+        let continuationText = '';
         try {
           const wireContinuationMessages = lowerProviderMessages(providerMessages);
+          boundaryTracker.beginRequest(
+            providerName,
+            activeModel ?? provider.getModel?.() ?? 'unknown',
+            wireContinuationMessages,
+            attempt + l5Retries,
+            false,
+          );
+          const continuationRequest = boundaryTracker.snapshot();
+          telemetryBoundary(continuationRequest);
+          const continuationMeta = {
+            providerRequestId: continuationRequest.requestId,
+          } as const;
+          options.events?.onOutputSegmentStart?.(
+            { responseId, providerRequestId: continuationRequest.requestId, mode: 'append' },
+            continuationMeta,
+          );
           emitContextBudgetSnapshot(providerMessages);
           const cacheDiagnostic = beginPromptCacheDiagnostic(
             providerMessages,
@@ -1157,13 +1199,16 @@ export function buildRunnerLlmAdapter(
                   || MANAGED_CONTROL_PLANE_MARKERS.some((marker) => text.includes(marker));
                 const outText = hasMarker ? sanitizeManagedStreamingText(text) : text;
                 if (outText.length === 0) return;
-                options.events?.onTextDelta?.(outText);
+                continuationText += outText;
+                boundaryTracker.markTextDelta(text);
+                options.events?.onTextDelta?.(outText, continuationMeta);
               },
               onThinkingDelta: (text: string) => {
-                options.events?.onThinkingDelta?.(text);
+                boundaryTracker.markThinkingDelta(text);
+                options.events?.onThinkingDelta?.(text, continuationMeta);
               },
               onThinkingEnd: (thinking: string) => {
-                options.events?.onThinkingEnd?.(thinking);
+                options.events?.onThinkingEnd?.(thinking, continuationMeta);
               },
               onToolInputDelta: options.events?.onToolInputDelta,
               onRateLimit: (rateAttempt: number, maxRetries: number, delayMs: number) => {
@@ -1192,6 +1237,7 @@ export function buildRunnerLlmAdapter(
           );
           // L5 retries are best-effort — any failure here falls back to
           // the partial result we already have.
+          accumulatedText += continuationText;
           break;
         }
         const nextText = (raw.textBlocks ?? []).map((b) => b.text).join('');

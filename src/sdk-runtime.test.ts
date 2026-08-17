@@ -92,6 +92,7 @@ const mutableNodeFs = createRequire(import.meta.url)("node:fs") as {
 
 const SESSION_EVENT_JOURNAL_CAPABILITY = {
   sessionEventJournal: { version: 1 },
+  liveOutputSegments: { version: 1 },
 } as const;
 
 const replMock = vi.hoisted(() => ({
@@ -3941,10 +3942,24 @@ describe("createKodaXRuntime", () => {
             deliveryKind: "initial",
             timestamp: "2026-07-08T00:00:00.000Z",
           });
+          options.events?.onOutputSegmentStart?.(
+            {
+              responseId: "response-turn-1",
+              providerRequestId: "request-turn-1",
+              mode: "append",
+            },
+            {
+              sessionId,
+              turnId: "turn-1",
+              providerRequestId: "request-turn-1",
+              timestamp: "2026-07-08T00:00:00.001Z",
+            },
+          );
           options.events?.onTextDelta?.("hi", {
             sessionId,
             seq: 2,
             turnId: "turn-1",
+            providerRequestId: "request-turn-1",
             timestamp: "2026-07-08T00:00:00.001Z",
           });
           options.events?.onToolUseStart?.(
@@ -4019,6 +4034,7 @@ describe("createKodaXRuntime", () => {
       "run.started",
       "config.effective",
       "turn.started",
+      "output.segment.started",
       "assistant.delta",
       "tool.started",
       "tool.sandbox",
@@ -4037,7 +4053,9 @@ describe("createKodaXRuntime", () => {
     expect(
       replay.every((event) => event.id && event.time && event.seq > 0),
     ).toBe(true);
-    expect(replay.map((event) => event.seq)).toEqual([2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(replay.map((event) => event.seq)).toEqual([
+      2, 3, 4, 5, 6, 7, 8, 9, 10,
+    ]);
     expect(
       replay.find((event) => event.type === "tool.sandbox")?.payload,
     ).toMatchObject({
@@ -4796,20 +4814,40 @@ describe("createKodaXRuntime", () => {
           contextKind: "root",
           contextRevision: 0,
         } as const;
-        options.events?.onTextDelta?.("root answer", rootMeta);
-        options.events?.onTextDelta?.(" root live-only update", {
-          liveOnly: true,
-        });
-        options.events?.onTextDelta?.("child answer", {
+        startTestOutputSegment(options.events, "request-root", rootMeta);
+        emitTestTextDelta(
+          options.events,
+          "request-root",
+          "root answer",
+          rootMeta,
+        );
+        emitTestTextDelta(
+          options.events,
+          "request-root",
+          " root live-only update",
+          { liveOnly: true },
+        );
+        const childMeta = {
           sessionId: session.id,
           turnId: "turn-child",
           contextId: "child-context",
           contextKind: "child",
           contextRevision: 0,
+        } as const;
+        startTestOutputSegment(options.events, "request-child", childMeta);
+        emitTestTextDelta(
+          options.events,
+          "request-child",
+          "child answer",
+          childMeta,
+        );
+        options.events?.onThinkingDelta?.("root reasoning", {
+          ...rootMeta,
+          providerRequestId: "request-root",
         });
-        options.events?.onThinkingDelta?.("root reasoning", rootMeta);
         options.events?.onThinkingDelta?.("child reasoning", {
           childAgentId: "child-agent",
+          providerRequestId: "request-child",
         });
         options.events?.onToolUseStart?.(
           { id: "root-tool", name: "bash" },
@@ -7381,10 +7419,15 @@ describe("createKodaXRuntime", () => {
       sessionId: session.id,
       prompt: "disconnect a shared client",
     });
+    startTestOutputSegment(activeEvents, "request-disconnect-shared");
     firstEvents.length = 0;
     secondEvents.length = 0;
 
-    activeEvents?.onTextDelta?.("persist without notifying dead connection");
+    emitTestTextDelta(
+      activeEvents,
+      "request-disconnect-shared",
+      "persist without notifying dead connection",
+    );
     first.close();
     second.close();
     await flushMicrotasks();
@@ -7705,6 +7748,7 @@ describe("createKodaXRuntime", () => {
     });
     const firstFragment = "a".repeat(7 * 1024);
     const rejectedFragment = "b".repeat(7 * 1024);
+    startTestOutputSegment(activeEvents, "request-coalescing-boundary");
     const eventFile = runtimeEventLogPath(tempRoot, run.runId);
     const appendFileSync = mutableNodeFs.appendFileSync;
     mutableNodeFs.appendFileSync = ((file, data, options) => {
@@ -7716,8 +7760,16 @@ describe("createKodaXRuntime", () => {
     syncBuiltinESMExports();
 
     try {
-      expect(() => activeEvents?.onTextDelta?.(firstFragment)).not.toThrow();
-      expect(() => activeEvents?.onTextDelta?.(rejectedFragment))
+      expect(() => emitTestTextDelta(
+        activeEvents,
+        "request-coalescing-boundary",
+        firstFragment,
+      )).not.toThrow();
+      expect(() => emitTestTextDelta(
+        activeEvents,
+        "request-coalescing-boundary",
+        rejectedFragment,
+      ))
         .toThrow("coalescing boundary persistence failure");
     } finally {
       mutableNodeFs.appendFileSync = appendFileSync;
@@ -7749,6 +7801,7 @@ describe("createKodaXRuntime", () => {
       sessionId: session.id,
       prompt: "oversized provider fragment",
     });
+    startTestOutputSegment(activeEvents, "request-oversized");
 
     const eventFile = runtimeEventLogPath(tempRoot, run.runId);
     const appendFileSync = mutableNodeFs.appendFileSync;
@@ -7761,14 +7814,22 @@ describe("createKodaXRuntime", () => {
     syncBuiltinESMExports();
 
     try {
-      expect(() => activeEvents?.onTextDelta?.("x".repeat(1024 * 1024)))
+      expect(() => emitTestTextDelta(
+        activeEvents,
+        "request-oversized",
+        "x".repeat(1024 * 1024),
+      ))
         .toThrow("oversized persistence failure");
     } finally {
       mutableNodeFs.appendFileSync = appendFileSync;
       syncBuiltinESMExports();
     }
 
-    expect(() => activeEvents?.onTextDelta?.("recovered")).not.toThrow();
+    expect(() => emitTestTextDelta(
+      activeEvents,
+      "request-oversized",
+      "recovered",
+    )).not.toThrow();
     await expect(runtime.events.replay({
       runId: run.runId,
       type: "assistant.delta",
@@ -8169,6 +8230,8 @@ describe("createKodaXRuntime", () => {
       sessionId: secondSession.id,
       prompt: "second run",
     });
+    startTestOutputSegment(firstEvents, "request-retry-first-run");
+    startTestOutputSegment(secondEvents, "request-retry-second-run");
     const secondEventFile = runtimeEventLogPath(tempRoot, secondRun.runId);
     const appendFileSync = mutableNodeFs.appendFileSync;
     let failed = false;
@@ -8182,8 +8245,16 @@ describe("createKodaXRuntime", () => {
     syncBuiltinESMExports();
 
     try {
-      firstEvents?.onTextDelta?.("first durable delta");
-      secondEvents?.onTextDelta?.("second durable delta");
+      emitTestTextDelta(
+        firstEvents,
+        "request-retry-first-run",
+        "first durable delta",
+      );
+      emitTestTextDelta(
+        secondEvents,
+        "request-retry-second-run",
+        "second durable delta",
+      );
       firstEvents?.onToolUseStart?.({ id: "first-boundary", name: "read" });
       expect(() => secondEvents?.onToolUseStart?.({
         id: "second-boundary",
@@ -8257,6 +8328,8 @@ describe("createKodaXRuntime", () => {
       sessionId: secondSession.id,
       prompt: "second shared Runtime",
     });
+    startTestOutputSegment(firstEvents, "request-shared-first");
+    startTestOutputSegment(secondEvents, "request-shared-second");
     const firstEventFile = runtimeEventLogPath(tempRoot, firstRun.runId);
     const appendFileSync = mutableNodeFs.appendFileSync;
     let failed = false;
@@ -8272,9 +8345,17 @@ describe("createKodaXRuntime", () => {
     const firstReplay = await firstRuntime.events.replay({ runId: firstRun.runId });
     const firstCursor = firstReplay.at(-1)!.cursor;
     try {
-      firstEvents?.onTextDelta?.("retry above watermark");
+      emitTestTextDelta(
+        firstEvents,
+        "request-shared-first",
+        "retry above watermark",
+      );
       firstEvents?.onToolUseStart?.({ id: "first-shared-boundary", name: "read" });
-      secondEvents?.onTextDelta?.("committed between attempts");
+      emitTestTextDelta(
+        secondEvents,
+        "request-shared-second",
+        "committed between attempts",
+      );
       secondEvents?.onToolUseStart?.({
         id: "second-shared-boundary",
         name: "read",
@@ -8334,6 +8415,7 @@ describe("createKodaXRuntime", () => {
       sessionId: session.id,
       prompt: "partial append",
     });
+    startTestOutputSegment(activeEvents, "request-partial-append");
     const eventFile = runtimeEventLogPath(tempRoot, run.runId);
     const appendFileSync = mutableNodeFs.appendFileSync;
     let failed = false;
@@ -8353,7 +8435,11 @@ describe("createKodaXRuntime", () => {
     syncBuiltinESMExports();
 
     try {
-      activeEvents?.onTextDelta?.("exactly once after partial append");
+      emitTestTextDelta(
+        activeEvents,
+        "request-partial-append",
+        "exactly once after partial append",
+      );
       activeEvents?.onToolUseStart?.({
         id: "partial-append-boundary",
         name: "read",
@@ -8373,7 +8459,11 @@ describe("createKodaXRuntime", () => {
       .split(/\r?\n/);
     expect(() => records.map((record) => JSON.parse(record))).not.toThrow();
     await fs.appendFile(eventFile, '{"id":"crash-interrupted-tail"');
-    activeEvents?.onTextDelta?.(" and after reconnect repair");
+    emitTestTextDelta(
+      activeEvents,
+      "request-partial-append",
+      " and after reconnect repair",
+    );
     activeEvents?.onToolUseStart?.({
       id: "reconnect-repair-boundary",
       name: "read",
@@ -8425,6 +8515,7 @@ describe("createKodaXRuntime", () => {
       sessionId: session.id,
       prompt: "append and rollback both fail",
     });
+    startTestOutputSegment(activeEvents, "request-indeterminate-commit");
     const eventFile = runtimeEventLogPath(tempRoot, run.runId);
     const cleanupLockFile = cleanupTarget === "event"
       ? `${eventFile}.lock`
@@ -8459,7 +8550,11 @@ describe("createKodaXRuntime", () => {
     syncBuiltinESMExports();
 
     try {
-      activeEvents?.onTextDelta?.("must not be retried");
+      emitTestTextDelta(
+        activeEvents,
+        "request-indeterminate-commit",
+        "must not be retried",
+      );
       activeEvents?.onToolUseStart?.({
         id: "indeterminate-commit-boundary",
         name: "read",
@@ -8477,7 +8572,11 @@ describe("createKodaXRuntime", () => {
     await expect(runtime.events.replay({ runId: run.runId })).rejects.toThrow(
       "indeterminate",
     );
-    expect(() => activeEvents?.onTextDelta?.("must be rejected after poison"))
+    expect(() => emitTestTextDelta(
+      activeEvents,
+      "request-indeterminate-commit",
+      "must be rejected after poison",
+    ))
       .toThrow("indeterminate");
     expect(await fs.readFile(eventFile, "utf-8")).toBe(partialContent);
     await expect(runtime.close()).rejects.toThrow("indeterminate");
@@ -8511,6 +8610,7 @@ describe("createKodaXRuntime", () => {
         sessionId: session.id,
         prompt: "commit before lock cleanup failure",
       });
+      startTestOutputSegment(activeEvents, "request-cleanup-failure");
       const eventFile = runtimeEventLogPath(tempRoot, run.runId);
       const cleanupLockFile = cleanupTarget === "event"
         ? `${eventFile}.lock`
@@ -8533,7 +8633,11 @@ describe("createKodaXRuntime", () => {
       syncBuiltinESMExports();
 
       try {
-        activeEvents?.onTextDelta?.("persisted once after cleanup failure");
+        emitTestTextDelta(
+          activeEvents,
+          "request-cleanup-failure",
+          "persisted once after cleanup failure",
+        );
         activeEvents?.onToolUseStart?.({
           id: "committed-cleanup-boundary",
           name: "read",
@@ -8582,6 +8686,7 @@ describe("createKodaXRuntime", () => {
       sessionId: session.id,
       prompt: "persistence watermark",
     });
+    startTestOutputSegment(activeEvents, "request-watermark");
     const seen: RuntimeEvent[] = [];
     runtime.events.subscribe({ sessionId: session.id }, (event) => {
       seen.push(event);
@@ -8600,7 +8705,11 @@ describe("createKodaXRuntime", () => {
     syncBuiltinESMExports();
 
     try {
-      activeEvents?.onTextDelta?.("durable before visible");
+      emitTestTextDelta(
+        activeEvents,
+        "request-watermark",
+        "durable before visible",
+      );
       activeEvents?.onToolUseStart?.({ id: "watermark-boundary", name: "read" });
       expect(seen).toHaveLength(0);
       await expect(runtime.events.replay({ runId: run.runId })).rejects.toThrow(
@@ -8609,7 +8718,11 @@ describe("createKodaXRuntime", () => {
       const attemptsAfterExplicitFlush = appendAttempts;
       await new Promise<void>((resolve) => setTimeout(resolve, 100));
       expect(appendAttempts).toBe(attemptsAfterExplicitFlush);
-      expect(() => activeEvents?.onTextDelta?.("must not enter the failed queue"))
+      expect(() => emitTestTextDelta(
+        activeEvents,
+        "request-watermark",
+        "must not enter the failed queue",
+      ))
         .toThrow("persistent event append failure");
       expect(appendAttempts).toBe(attemptsAfterExplicitFlush);
     } finally {
@@ -8662,6 +8775,7 @@ describe("createKodaXRuntime", () => {
       sessionId: session.id,
       prompt: "trim failure",
     });
+    startTestOutputSegment(activeEvents, "request-trim-failure");
     const eventFile = runtimeEventLogPath(tempRoot, run.runId);
     const readFileSync = mutableNodeFs.readFileSync;
     const statSync = mutableNodeFs.statSync;
@@ -8682,7 +8796,11 @@ describe("createKodaXRuntime", () => {
     syncBuiltinESMExports();
 
     try {
-      activeEvents?.onTextDelta?.("persisted once");
+      emitTestTextDelta(
+        activeEvents,
+        "request-trim-failure",
+        "persisted once",
+      );
       activeEvents?.onToolUseStart?.({ id: "trim-boundary", name: "read" });
     } finally {
       mutableNodeFs.readFileSync = readFileSync;
@@ -8738,6 +8856,7 @@ describe("createKodaXRuntime", () => {
       sessionId: session.id,
       prompt: "warning failure after commit",
     });
+    startTestOutputSegment(activeEvents, "request-warning-failure");
     const eventFile = runtimeEventLogPath(tempRoot, run.runId);
     const linkSync = mutableNodeFs.linkSync;
     const readFileSync = mutableNodeFs.readFileSync;
@@ -8767,7 +8886,11 @@ describe("createKodaXRuntime", () => {
     syncBuiltinESMExports();
 
     try {
-      activeEvents?.onTextDelta?.("committed exactly once");
+      emitTestTextDelta(
+        activeEvents,
+        "request-warning-failure",
+        "committed exactly once",
+      );
       activeEvents?.onToolUseStart?.({
         id: "post-commit-warning-boundary",
         name: "read",
@@ -8940,6 +9063,83 @@ describe("createKodaXRuntime", () => {
     expect(replay.map(runtimeTextPayload).join("")).toBe(
       "before snapshot after",
     );
+
+    observation.close();
+    await runtime.runs.abort(run.runId);
+    await runtime.close();
+  });
+
+  it("projects replacement output segments without losing the raw journal", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "sessions"),
+      defaultProvider: "mock-provider",
+    });
+    const session = await runtime.sessions.create({
+      title: "Replacement Output Projection",
+    });
+    let activeEvents: KodaXOptions["events"];
+    codingMock.startKodaX.mockImplementation(
+      (options: KodaXOptions): RunningSession => {
+        activeEvents = options.events;
+        return fakeRunningSession(
+          options,
+          new Promise<KodaXResult>(() => undefined),
+        );
+      },
+    );
+    const run = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "replace a failed provider request",
+    });
+    const meta = { sessionId: session.id, turnId: "turn-segments" };
+
+    activeEvents?.onOutputSegmentStart?.({
+      responseId: "turn-segments",
+      providerRequestId: "request-stable",
+      mode: "append",
+    }, meta);
+    activeEvents?.onTextDelta?.("stable ", {
+      ...meta,
+      providerRequestId: "request-stable",
+    });
+    activeEvents?.onOutputSegmentStart?.({
+      responseId: "turn-segments",
+      providerRequestId: "request-abandoned",
+      mode: "append",
+    }, meta);
+    activeEvents?.onTextDelta?.("abandoned", {
+      ...meta,
+      providerRequestId: "request-abandoned",
+    });
+    activeEvents?.onOutputSegmentStart?.({
+      responseId: "turn-segments",
+      providerRequestId: "request-replacement",
+      mode: "replace",
+    }, meta);
+    activeEvents?.onTextDelta?.("replacement", {
+      ...meta,
+      providerRequestId: "request-replacement",
+    });
+
+    const observation = await runtime.sessions.observe(session.id, () => undefined);
+    expect(observation.snapshot.live.assistantTextByRun[run.runId]).toBe(
+      "stable replacement",
+    );
+    expect(
+      observation.snapshot.live.outputSegmentsByRun[run.runId]?.active
+        ?.providerRequestId,
+    ).toBe("request-replacement");
+
+    const replay = await runtime.events.replay({ runId: run.runId });
+    expect(
+      replay.filter((event) => event.type === "assistant.delta")
+        .map(runtimeTextPayload).join(""),
+    ).toBe("stable abandonedreplacement");
+    expect(
+      replay.filter((event) => event.type === "output.segment.started"),
+    ).toHaveLength(3);
 
     observation.close();
     await runtime.runs.abort(run.runId);
@@ -13965,9 +14165,13 @@ describe("createKodaXRuntime", () => {
       (options: KodaXOptions): RunningSession => {
         const sessionId = options.session?.id ?? session.id;
         queueMicrotask(() => {
+          startTestOutputSegment(options.events, "request-persist", {
+            sessionId,
+          });
           options.events?.onTextDelta?.("persist me", {
             sessionId,
             seq: 1,
+            providerRequestId: "request-persist",
             timestamp: new Date().toISOString(),
           });
         });
@@ -14008,6 +14212,7 @@ describe("createKodaXRuntime", () => {
     expect(replay.map((event) => event.type)).toEqual([
       "run.started",
       "config.effective",
+      "output.segment.started",
       "assistant.delta",
       "run.completed",
     ]);
@@ -19733,6 +19938,34 @@ function runtimeEventLogPath(root: string, runId: string): string {
     encodeURIComponent(runId),
     "events.jsonl",
   );
+}
+
+type TestTextDeltaMeta = Parameters<
+  NonNullable<NonNullable<KodaXOptions["events"]>["onTextDelta"]>
+>[1];
+
+function startTestOutputSegment(
+  events: KodaXOptions["events"],
+  providerRequestId: string,
+  meta?: TestTextDeltaMeta,
+): void {
+  events?.onOutputSegmentStart?.(
+    {
+      responseId: `response-${providerRequestId}`,
+      providerRequestId,
+      mode: "append",
+    },
+    meta,
+  );
+}
+
+function emitTestTextDelta(
+  events: KodaXOptions["events"],
+  providerRequestId: string,
+  text: string,
+  meta?: TestTextDeltaMeta,
+): void {
+  events?.onTextDelta?.(text, { ...meta, providerRequestId });
 }
 
 function runtimeSessionEventDir(root: string, sessionId: string): string {

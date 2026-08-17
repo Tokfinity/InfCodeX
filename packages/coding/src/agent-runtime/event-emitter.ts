@@ -214,6 +214,9 @@ export function withLiveTurnAttribution(
     onSessionStart: (info) => {
       baseEvents.onSessionStart?.(withLiveMeta(scope, info));
     },
+    onOutputSegmentStart: (segment, meta) => {
+      baseEvents.onOutputSegmentStart?.(segment, withActivityMeta(scope, meta));
+    },
     onTextDelta: (text, meta) => {
       baseEvents.onTextDelta?.(text, withActivityMeta(scope, meta));
     },

@@ -2323,6 +2323,12 @@ export function buildChildEvents(
 
   return {
     ...(workflowCorrelation ? { workflowCorrelation } : {}),
+    onOutputSegmentStart: (segment, meta) => {
+      parentEvents?.onOutputSegmentStart?.(
+        segment,
+        activityEventMeta(meta, { liveOnly: true }),
+      );
+    },
     onTextDelta: (text, meta) => {
       parentEvents?.onTextDelta?.(text, activityEventMeta(meta, { liveOnly: true }));
     },

@@ -2231,6 +2231,92 @@ describe('buildRunnerLlmAdapter — max_tokens escalation (FEATURE_085 Scout par
     expect(result.text).toContain('half');
   }, 15_000);
 
+  it('declares replace for escalation and append for L5 continuation', async () => {
+    const observedBudgets: number[] = [];
+    const segments: Array<{
+      responseId: string;
+      providerRequestId: string;
+      mode: 'replace' | 'append';
+    }> = [];
+    registerScriptedProvider(
+      [
+        { textBlocks: [], stopReason: 'max_tokens' },
+        { textBlocks: [{ type: 'text', text: 'half' }], stopReason: 'max_tokens' },
+        { textBlocks: [{ type: 'text', text: ' second' }], stopReason: 'end_turn' },
+      ],
+      observedBudgets,
+    );
+
+    const adapter = buildRunnerLlmAdapter({
+      ...makeAdapterOptions(),
+      events: {
+        onOutputSegmentStart: (segment) => segments.push(segment),
+      },
+    });
+    await adapter(
+      [{ role: 'system', content: 'sys' }, { role: 'user', content: 'Big task.' }],
+      { name: 'scout', instructions: '' },
+    );
+
+    expect(segments.map((segment) => segment.mode)).toEqual(['append', 'replace', 'append']);
+    expect(new Set(segments.map((segment) => segment.responseId)).size).toBe(1);
+    expect(new Set(segments.map((segment) => segment.providerRequestId)).size).toBe(3);
+  }, 15_000);
+
+  it('keeps streamed L5 partial text when the continuation request fails', async () => {
+    let streamCalls = 0;
+    const textDeltas: string[] = [];
+    class Scripted extends KodaXBaseProviderRef {
+      readonly name = ESCALATION_PROVIDER_NAME;
+      readonly supportsThinking = false;
+      protected readonly config = {
+        apiKeyEnv: ESCALATION_PROVIDER_API_KEY_ENV,
+        model: 'scripted',
+        supportsThinking: false,
+        reasoningCapability: 'prompt-only' as const,
+        maxOutputTokens: KODAX_CAPPED,
+      };
+
+      async stream(
+        _messages: KodaXMessage[],
+        _tools: KodaXToolDefinition[],
+        _system: string,
+        _reasoning?: boolean | KodaXReasoningRequest,
+        streamOptions?: KodaXProviderStreamOptions,
+      ): Promise<KodaXStreamResult> {
+        streamCalls += 1;
+        this.setMaxOutputTokensOverride(undefined);
+        if (streamCalls === 1) {
+          return { textBlocks: [], toolBlocks: [], stopReason: 'max_tokens' };
+        }
+        if (streamCalls === 2) {
+          return {
+            textBlocks: [{ type: 'text', text: 'half' }],
+            toolBlocks: [],
+            stopReason: 'max_tokens',
+          };
+        }
+        streamOptions?.onTextDelta?.(' streamed tail');
+        throw new Error('continuation transport failed');
+      }
+    }
+    process.env[ESCALATION_PROVIDER_API_KEY_ENV] = 'test-key';
+    registerModelProviderFn(ESCALATION_PROVIDER_NAME, () => new Scripted());
+
+    const adapter = buildRunnerLlmAdapter({
+      ...makeAdapterOptions(),
+      events: { onTextDelta: (text) => textDeltas.push(text) },
+    });
+    const result = await adapter(
+      [{ role: 'system', content: 'sys' }, { role: 'user', content: 'Big task.' }],
+      { name: 'scout', instructions: '' },
+    );
+
+    expect(streamCalls).toBe(3);
+    expect(textDeltas).toEqual([' streamed tail']);
+    expect(result.text).toBe('half streamed tail');
+  }, 15_000);
+
   it('honors KODAX_MAX_OUTPUT_TOKENS env override and skips escalation', async () => {
     process.env.KODAX_MAX_OUTPUT_TOKENS = '32000';
     const observedBudgets: number[] = [];

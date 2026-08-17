@@ -24,6 +24,8 @@ import {
   bashSignalCollector,
   checkAbsoluteDeny,
   createExternalActorTurnExecutor,
+  createOutputSegmentProjection,
+  effectiveOutputSegmentText,
   generateSessionId,
   listCodingDispatchableAgents,
   listRunScopedTools,
@@ -31,6 +33,7 @@ import {
   registerCustomProviders,
   resolveProviderModelDescriptors,
   resolveToolBridgeTarget,
+  reduceOutputSegmentProjection,
   runManagedTask,
   runScopedToolMap,
   normalizeShellExecutionContract,
@@ -56,6 +59,8 @@ import type {
   KodaXContextIdentity,
   KodaXContextOptions,
   KodaXActivityEventMeta,
+  KodaXOutputSegmentProjection,
+  KodaXOutputSegmentStarted,
   KodaXLiveEventMeta,
   KodaXEvents,
   KodaXFileInputArtifact,
@@ -241,13 +246,18 @@ import {
   type RuntimeDaemonProcessLease,
 } from "./runtime-daemon/process.js";
 export { waitForRuntimeDaemonShutdown } from "./runtime-daemon/shutdown-verifier.js";
-import { waitForRuntimeDaemonShutdown as verifyRuntimeDaemonShutdown } from "./runtime-daemon/shutdown-verifier.js";
 export type {
   RuntimeDaemonShutdownVerification,
   RuntimeDaemonShutdownVerificationInput,
   RuntimeDaemonShutdownVerificationOwner,
 } from "./runtime-daemon/shutdown-verifier.js";
-export { settleRuntimeDaemonExit as settleKodaXRuntimeExit } from "./runtime-daemon/exit-settlement.js";
+import {
+  readRuntimeExitSettlementIntent,
+  settleRuntimeDaemonExit,
+  type RuntimeExitSettlement,
+  type RuntimeExitSettlementInput,
+  type RuntimeExitSettlementIntent,
+} from "./runtime-daemon/exit-settlement.js";
 export type {
   RuntimeExitSettlement,
   RuntimeExitSettlementBlockReason,
@@ -264,6 +274,7 @@ import {
   acquireRuntimeInlineOwner,
   enableRuntimeDaemonOwner,
   readRuntimeDaemonLockOwner,
+  readRuntimeDaemonState,
   readRuntimeOwnerProcessStartIdentity,
   readRuntimeOwnerPolicy,
   readRuntimeDaemonToken,
@@ -728,6 +739,7 @@ export const KODAX_RUNTIME_SDK_CAPABILITIES = Object.freeze({
   sandboxRuntime: 3,
   sessionEventJournal: 1,
   runtimeEventCoalescing: 1,
+  liveOutputSegments: 1,
 } as const);
 
 export interface RuntimeCapabilityRequirements {
@@ -781,6 +793,8 @@ export interface RuntimeCapabilityRequirements {
   readonly daemonShutdownVerification?: 1;
   /** Require source-level bounded coalescing before sequence allocation and persistence. */
   readonly runtimeEventCoalescing?: 1;
+  /** Require provider-request-owned live output with explicit replacement semantics. */
+  readonly liveOutputSegments?: 1;
   /** Optional integration failures are isolated, observable, and hot-recoverable. */
   readonly integrationConfigResilience?: 1;
   readonly actorControlPlane?: 1;
@@ -1462,6 +1476,9 @@ export interface RuntimeManagedTaskProjection {
 export interface RuntimeSessionLiveProjection {
   readonly assistantTextByRun: Readonly<Record<string, string>>;
   readonly thinkingTextByRun: Readonly<Record<string, string>>;
+  readonly outputSegmentsByRun: Readonly<
+    Record<string, KodaXOutputSegmentProjection>
+  >;
   readonly activeTools: readonly RuntimeActiveToolProjection[];
   readonly todo?: unknown;
   readonly pendingUserInputs: readonly RuntimePendingUserInputProjection[];
@@ -2010,6 +2027,7 @@ export type RuntimeEventType =
   | "turn.started"
   | "turn.completed"
   | "turn.failed"
+  | "output.segment.started"
   | "assistant.delta"
   | "thinking.delta"
   | "thinking.finished"
@@ -2051,6 +2069,13 @@ export type RuntimeEventType =
 
 export interface RuntimeTextDeltaEventPayload {
   readonly text: string;
+  /** Absent only in historical journals written before liveOutputSegments:1. */
+  readonly providerRequestId?: string;
+  readonly meta?: KodaXActivityEventMeta;
+}
+
+export interface RuntimeOutputSegmentStartedEventPayload
+  extends KodaXOutputSegmentStarted {
   readonly meta?: KodaXActivityEventMeta;
 }
 
@@ -2238,6 +2263,7 @@ export type RuntimeEventPayloadMap = Omit<
   | "run.failed"
   | "run.cancelled"
   | "run.interrupted"
+  | "output.segment.started"
   | "assistant.delta"
   | "thinking.delta"
   | "thinking.finished"
@@ -2281,6 +2307,7 @@ export type RuntimeEventPayloadMap = Omit<
   readonly "run.failed": RuntimeRunStatus;
   readonly "run.cancelled": RuntimeRunStatus;
   readonly "run.interrupted": RuntimeRunStatus;
+  readonly "output.segment.started": RuntimeOutputSegmentStartedEventPayload;
   readonly "assistant.delta": RuntimeTextDeltaEventPayload;
   readonly "thinking.delta": RuntimeTextDeltaEventPayload;
   readonly "thinking.finished": RuntimeThinkingFinishedEventPayload;
@@ -3387,6 +3414,7 @@ export async function createKodaXRuntime(
       requirements: {
         ...options.requirements,
         sessionEventJournal: 1 as const,
+        liveOutputSegments: 1 as const,
         ...(autoStart
           ? {
             actorSettlementConvergence: 2 as const,
@@ -3483,6 +3511,12 @@ export async function createKodaXRuntime(
       sequenceScope: "session",
       cursor: "session_epoch_sequence",
       scopedAccessRequired: true,
+    },
+    liveOutputSegments: {
+      version: 1,
+      segmentIdentity: "provider_request",
+      replacement: "explicit",
+      rawJournal: "complete",
     },
     runtimeEventCoalescing: { version: 1 },
     runtimeAutoModeGuardrail: {
@@ -4288,6 +4322,7 @@ function assertRuntimeCapabilities(
     requirements?.daemonOrphanExit === undefined &&
     requirements?.daemonShutdownVerification === undefined &&
     requirements?.runtimeEventCoalescing === undefined &&
+    requirements?.liveOutputSegments === undefined &&
     requirements?.integrationConfigResilience === undefined &&
     requirements?.actorControlPlane === undefined &&
     requirements?.sandboxRuntime === undefined &&
@@ -4345,6 +4380,7 @@ function assertRuntimeCapabilities(
     ["daemonOrphanExit", requirements.daemonOrphanExit],
     ["daemonShutdownVerification", requirements.daemonShutdownVerification],
     ["runtimeEventCoalescing", requirements.runtimeEventCoalescing],
+    ["liveOutputSegments", requirements.liveOutputSegments],
     ["integrationConfigResilience", requirements.integrationConfigResilience],
     ["actorControlPlane", requirements.actorControlPlane],
     ["sandboxRuntime", requirements.sandboxRuntime],
@@ -4418,211 +4454,359 @@ function hasVersionedRuntimeCapability(
   );
 }
 
-async function replaceRuntimeDaemonForCapabilityUpgrade(input: {
+async function closeRejectedCapabilityUpgrade(
+  runtime: KodaXDaemonRuntime,
+  lease: RuntimeDaemonProcessLease,
+  requiredCapability: string,
+): Promise<void> {
+  let runtimeClosed = false;
+  let runtimeCloseError: unknown;
+  await runtime.close().then(
+    () => {
+      runtimeClosed = true;
+    },
+    (error: unknown) => {
+      runtimeCloseError = error;
+      emitKodaXDiagnostic({
+        source: "runtime.daemon.upgrade",
+        level: "warn",
+        message: "Failed to close the incompatible daemon client.",
+        detail: normalizeError(error),
+      });
+    },
+  );
+  if (!runtimeClosed) {
+    try {
+      await lease.close();
+    } catch (leaseCloseError: unknown) {
+      emitKodaXDiagnostic({
+        source: "runtime.daemon.upgrade",
+        level: "error",
+        message: "Failed to release the incompatible daemon process lease.",
+        detail: normalizeError(leaseCloseError),
+      });
+      throw new RuntimeDaemonCapabilityUpgradeError(
+        "The temporary incompatible-daemon client could not be closed. Relaunch before retrying the capability upgrade so a retained client lease cannot block settlement.",
+        undefined,
+        {
+          cause: new AggregateError(
+            [runtimeCloseError, leaseCloseError],
+            "Both temporary daemon client close attempts failed.",
+          ),
+        },
+        requiredCapability,
+      );
+    }
+  }
+}
+
+interface CapabilityUpgradeInput {
   readonly identity: RuntimeIdentity;
   readonly capabilities: Readonly<Record<string, unknown>>;
   readonly transport: RuntimeDaemonClientTransport;
   readonly lease: RuntimeDaemonProcessLease;
   readonly journalEpoch?: string;
   readonly grantedScopes?: readonly RuntimeGrantedScope[];
-  readonly startupTimeoutMs: number;
   readonly requiredCapability: string;
   readonly requiredVersion: number;
-}): Promise<void> {
-  if (
-    !hasVersionedRuntimeCapability(
-      input.capabilities as Record<string, unknown>,
-      "daemonManagement",
-      1,
-    )
-  ) {
-    throw new RuntimeDaemonCapabilityUpgradeError(
-      "The running daemon is too old to perform a fenced in-place upgrade. Stop it manually after all runs and pending interactions finish, then retry.",
-      undefined,
-      undefined,
-      input.requiredCapability,
-    );
-  }
-  if (
-    process.platform === "win32"
-    && !hasVersionedRuntimeCapability(
-      input.capabilities as Record<string, unknown>,
-      "daemonShutdownVerification",
-      1,
-    )
-  ) {
-    throw new RuntimeDaemonCapabilityUpgradeError(
-      "The running Windows daemon predates authoritative process containment. Stop it explicitly before upgrading; it cannot be migrated safely in place.",
-      undefined,
-      undefined,
-      input.requiredCapability,
-    );
-  }
-  const runtime = createRuntimeDaemonClient({
+}
+
+function createCapabilityUpgradeRuntime(
+  input: CapabilityUpgradeInput,
+): KodaXDaemonRuntime {
+  return createRuntimeDaemonClient({
     identity: { ...input.identity, mode: "daemon", isolation: "process" },
     transport: input.transport,
     capabilities: input.capabilities,
-    ...(input.journalEpoch !== undefined
-      ? { journalEpoch: input.journalEpoch }
-      : {}),
-    ...(input.grantedScopes !== undefined
-      ? { grantedScopes: input.grantedScopes }
-      : {}),
+    ...(input.journalEpoch !== undefined ? { journalEpoch: input.journalEpoch } : {}),
+    ...(input.grantedScopes !== undefined ? { grantedScopes: input.grantedScopes } : {}),
   });
-  let management: RuntimeDaemonManagementState | undefined;
-  try {
-    management = await runtime.daemon.inspect();
+}
+
+function capabilityUpgradeSettlementError(
+  settlement: Extract<RuntimeExitSettlement, { status: "blocked" }>,
+  capability: string,
+  preflight: RuntimeDaemonPreflight | undefined,
+): RuntimeDaemonCapabilityUpgradeError {
+  return new RuntimeDaemonCapabilityUpgradeError(
+    `The incompatible daemon could not be replaced safely: ${settlement.message}`,
+    preflight,
+    undefined,
+    capability,
+  );
+}
+
+function daemonCapabilityRequirements(
+  options: ConnectKodaXRuntimeOptions,
+  contract: "execution" | "prepared-exit-settlement",
+): RuntimeCapabilityRequirements {
+  if (contract === "prepared-exit-settlement") {
+    return { daemonManagement: 1 };
+  }
+  return {
+    ...options.requirements,
+    sessionEventJournal: 1,
+    liveOutputSegments: 1,
+    ...(options.autoStart === true
+      ? {
+          actorSettlementConvergence: 2,
+          managedRunDurability: 1,
+          ...(process.platform === "win32"
+            ? { daemonShutdownVerification: 1, sandboxRuntime: 3 }
+            : {}),
+          runtimeAutoModeGuardrail: 4,
+          runtimeEventCoalescing: 1,
+          ...(options.daemonOrphanExitMs !== undefined
+            ? { daemonOrphanExit: 1 }
+            : {}),
+        }
+      : {}),
+  };
+}
+
+function firstUpgradeableCapability(
+  capabilities: Readonly<Record<string, unknown>>,
+  requirements: RuntimeCapabilityRequirements,
+): { readonly name: string; readonly version: number } | undefined {
+  const upgradeOrder = [
+    "actorSettlementConvergence",
+    "managedRunDurability",
+    "sessionEventJournal",
+    "runtimeAutoModeGuardrail",
+    "runtimeEventCoalescing",
+    "liveOutputSegments",
+    "daemonShutdownVerification",
+    "sandboxRuntime",
+    "daemonOrphanExit",
+  ] as const satisfies readonly (keyof RuntimeCapabilityRequirements)[];
+  for (const name of upgradeOrder) {
+    const version = requirements[name];
     if (
-      process.platform === "win32"
-      && (
-        management.owner.processContainment !== "windows-job"
-        || !Number.isSafeInteger(management.owner.supervisorPid)
-        || management.owner.supervisorPid! <= 0
-      )
+      typeof version === "number"
+      && !hasVersionedRuntimeCapability(capabilities, name, version)
     ) {
+      return { name, version };
+    }
+  }
+  return undefined;
+}
+
+function parseProbedDaemon(
+  lease: RuntimeDaemonProcessLease | undefined,
+): {
+  readonly identity: RuntimeIdentity;
+  readonly capabilities: Readonly<Record<string, unknown>>;
+} | undefined {
+  if (lease?.probeInitialization === undefined) return undefined;
+  const initialized = requireRuntimeRecord(lease.probeInitialization);
+  return {
+    identity: parseRuntimeIdentity(initialized.identity),
+    capabilities:
+      initialized.capabilities === undefined
+        ? {}
+        : requireRuntimeRecord(initialized.capabilities),
+  };
+}
+
+function capabilityUpgradeClientInfo(): RuntimeClientInfo {
+  return {
+    name: "kodax-sdk-capability-upgrade",
+    instanceId: `sdk_upgrade_${randomUUID().replace(/-/g, "")}`,
+  };
+}
+
+async function replaceRuntimeDaemonForCapabilityUpgrade(
+  input: CapabilityUpgradeInput,
+): Promise<void> {
+  const runtime = createCapabilityUpgradeRuntime(input);
+  let settlementOwnsClose = false;
+  let preflight: RuntimeDaemonPreflight | undefined;
+  try {
+    if (!hasVersionedRuntimeCapability(input.capabilities, "daemonManagement", 1)) {
       throw new RuntimeDaemonCapabilityUpgradeError(
-        "The running Windows daemon did not provide an authoritative Job containment owner. Stop it explicitly before upgrading; it cannot be migrated safely in place.",
-        management.preflight,
+        "The running daemon is too old to perform a fenced in-place upgrade. Stop it manually after all runs and pending interactions finish, then retry.",
+        undefined,
         undefined,
         input.requiredCapability,
       );
     }
-    if (!management.preflight.canStop) {
+    const management = await runtime.daemon.inspect();
+    preflight = management.preflight;
+    if (!preflight.canStop) {
       throw new RuntimeDaemonCapabilityUpgradeError(
-        `The running daemon needs ${input.requiredCapability} v${input.requiredVersion} but cannot be replaced safely yet: ${management.preflight.blockers.join(", ")}. Finish or cancel that work and retry.`,
-        management.preflight,
+        `The running daemon needs ${input.requiredCapability} v${input.requiredVersion} but cannot be replaced safely yet: ${preflight.blockers.join(", ")}. Finish or cancel that work and retry.`,
+        preflight,
         undefined,
         input.requiredCapability,
       );
     }
-    await runtime.daemon.stopForInline({
-      expectedRuntimeId: management.runtimeId,
-      expectedRevision: management.revision,
-      expectedOwnerPolicyRevision: management.ownerPolicy.revision,
+    const settlement = await settleRuntimeDaemonExit({
+      configHome: input.lease.paths.configHome,
+      profile: input.lease.paths.profile,
+      runtime,
     });
+    settlementOwnsClose = settlement.status !== "blocked" || settlement.nextAction !== "keep-open";
+    if (settlement.status === "blocked") {
+      throw capabilityUpgradeSettlementError(
+        settlement,
+        input.requiredCapability,
+        preflight,
+      );
+    }
   } catch (error: unknown) {
     if (error instanceof RuntimeDaemonCapabilityUpgradeError) throw error;
     throw new RuntimeDaemonCapabilityUpgradeError(
       "The running daemon changed while preparing its safe capability upgrade. Retry after active and queued work has settled.",
-      management?.preflight,
+      preflight,
       { cause: error },
       input.requiredCapability,
     );
   } finally {
-    let runtimeClosed = false;
-    await runtime
-      .close()
-      .then(() => {
-        runtimeClosed = true;
-      })
-      .catch((error: unknown) => {
-        emitKodaXDiagnostic({
-          source: "runtime.daemon.upgrade",
-          level: "warn",
-          message:
-            "Failed to close the legacy daemon client after upgrade attempt.",
-          detail: normalizeError(error),
-        });
-      });
-    if (!runtimeClosed) {
-      await input.lease.close().catch((error: unknown) => {
-        emitKodaXDiagnostic({
-          source: "runtime.daemon.upgrade",
-          level: "warn",
-          message:
-            "Failed to close the legacy daemon process lease after client cleanup failed.",
-          detail: normalizeError(error),
-        });
-      });
+    if (!settlementOwnsClose) {
+      await closeRejectedCapabilityUpgrade(
+        runtime,
+        input.lease,
+        input.requiredCapability,
+      );
     }
   }
+}
 
-  try {
-    if (process.platform === "win32") {
-      if (management === undefined) {
-        throw new RuntimeDaemonCapabilityUpgradeError(
-          "The legacy Windows daemon stopped without a verifiable owner identity.",
-          undefined,
-          undefined,
-          input.requiredCapability,
-        );
-      }
-      const verification = await verifyRuntimeDaemonShutdown({
-        configHome: input.lease.paths.configHome,
-        profile: input.lease.paths.profile,
-        owner: management.owner,
-        timeoutMs: input.startupTimeoutMs,
-      });
-      if (verification.status !== "succeeded") {
-        const detail = verification.status === "unverified"
-          ? verification.reason
-          : verification.status;
-        throw new RuntimeDaemonCapabilityUpgradeError(
-          `The legacy Windows daemon accepted the upgrade stop, but its process-tree shutdown was not verified (${detail}). Stop it explicitly and retry.`,
-          undefined,
-          undefined,
-          input.requiredCapability,
-        );
-      }
-    } else {
-      const deadline = Date.now() + input.startupTimeoutMs;
-      while (
-        readRuntimeDaemonLockOwner(input.lease.paths.lockFile) !== undefined
-      ) {
-        if (Date.now() >= deadline) {
-          throw new RuntimeDaemonCapabilityUpgradeError(
-            "The legacy daemon accepted the upgrade stop but did not release its owner fence before timeout. Retry after the daemon exits.",
-            undefined,
-            undefined,
-            input.requiredCapability,
-          );
-        }
-        // This timer must stay referenced: the caller is awaiting a mandatory
-        // owner-policy transition. Unref'ing it lets a short-lived SDK process
-        // exit with an unsettled connectKodaXRuntime() promise, stranding the
-        // profile in inline mode after the legacy daemon has already stopped.
-        await new Promise<void>((resolve) => setTimeout(resolve, 50));
-      }
-    }
-  } catch (error: unknown) {
-    if (process.platform === "win32") {
-      throw new RuntimeDaemonCapabilityUpgradeError(
-        "The legacy Windows daemon did not prove that its process tree stopped. Daemon ownership remains disabled; stop every legacy KodaX process, then call `enableKodaXDaemonOwner(...)` and retry.",
-        undefined,
-        { cause: error },
-        input.requiredCapability,
-      );
-    }
-    try {
-      // rollbackToInline changes durable owner policy before shutdown. Restore
-      // daemon eligibility even when fence release times out so the documented
-      // retry path is actually usable and does not require manual repair.
-      enableRuntimeDaemonOwner(input.lease.paths);
-    } catch (restoreError: unknown) {
-      throw new RuntimeDaemonCapabilityUpgradeError(
-        "The legacy daemon upgrade failed and daemon ownership could not be restored automatically. Call `enableKodaXDaemonOwner(...)` from the SDK and retry.",
-        undefined,
-        { cause: new AggregateError([error, restoreError]) },
-        input.requiredCapability,
-      );
-    }
-    throw error;
+function samePreparedExitOwner(
+  intent: RuntimeExitSettlementIntent,
+  owner: ReturnType<typeof readRuntimeDaemonLockOwner>,
+): boolean {
+  return owner !== undefined
+    && owner.runtimeId === intent.owner.runtimeId
+    && owner.pid === intent.owner.pid
+    && owner.createdAt === intent.owner.createdAt
+    && owner.kind === intent.owner.kind
+    && owner.processStartIdentity === intent.owner.processStartIdentity
+    && owner.processContainment === intent.owner.processContainment
+    && owner.supervisorPid === intent.owner.supervisorPid;
+}
+
+function preparedExitTicketStillExact(
+  input: RuntimeExitSettlementInput,
+  expected: RuntimeExitSettlementIntent,
+): boolean {
+  const current = readRuntimeExitSettlementIntent(
+    input.configHome,
+    input.profile ?? "default",
+  );
+  if (
+    current?.phase !== "prepared"
+    || current.settlementId !== expected.settlementId
+    || !samePreparedExitOwner(current, expected.owner)
+  ) {
+    return false;
   }
+  const paths = resolveRuntimeDaemonPathsFromConfigHome(
+    input.configHome,
+    input.profile ?? "default",
+  );
+  const state = readRuntimeDaemonState(paths);
+  return state !== undefined
+    && state.runtimeId === expected.owner.runtimeId
+    && state.pid === expected.owner.pid
+    && state.profile === paths.profile
+    && samePreparedExitOwner(expected, readRuntimeDaemonLockOwner(paths.lockFile));
+}
+
+function preparedExitOwnerChanged(): RuntimeExitSettlement {
+  return {
+    status: "blocked",
+    reason: "owner_changed",
+    nextAction: "relaunch-space",
+    message: "The prepared Runtime exit ticket no longer matches the exact daemon owner.",
+  };
+}
+
+type PreparedExitRuntimeConnection =
+  | { runtime: KodaXDaemonRuntime }
+  | { settlement: RuntimeExitSettlement };
+
+async function connectPreparedExitSettlementRuntime(
+  input: RuntimeExitSettlementInput,
+): Promise<PreparedExitRuntimeConnection> {
+  const profile = input.profile ?? "default";
+  const paths = resolveRuntimeDaemonPathsFromConfigHome(input.configHome, profile);
+  const state = readRuntimeDaemonState(paths);
+  if (state === undefined) return { settlement: preparedExitOwnerChanged() };
+  const token = readRuntimeDaemonToken(paths);
+  if (token === undefined) {
+    return {
+      settlement: {
+        status: "blocked",
+        reason: "owner_unverified",
+        nextAction: "manual-recovery",
+        message: "The exact prepared Runtime owner has no readable daemon authentication token.",
+      },
+    };
+  }
+  const runtime = await connectKodaXRuntimeInternal(
+    {
+      profile,
+      autoStart: false,
+      endpoint: state.endpoint,
+      daemonToken: token,
+      clientInfo: {
+        name: "kodax-sdk-exit-settlement",
+        instanceId: `sdk_exit_${randomUUID().replace(/-/g, "")}`,
+      },
+      requirements: { daemonManagement: 1 },
+    },
+    false,
+    "prepared-exit-settlement",
+  );
+  return { runtime };
+}
+
+/**
+ * Resume a durable exit ticket. Only this exact prepared-ticket path may attach
+ * a management-only client that does not satisfy the normal execution contract.
+ */
+export async function settleKodaXRuntimeExit(
+  input: RuntimeExitSettlementInput,
+): Promise<RuntimeExitSettlement> {
+  const initial = await settleRuntimeDaemonExit(input);
+  if (
+    input.runtime !== undefined
+    || initial.status !== "blocked"
+    || initial.reason !== "stop_not_accepted"
+    || initial.nextAction !== "relaunch-space"
+  ) {
+    return initial;
+  }
+  const profile = input.profile ?? "default";
+  const intent = readRuntimeExitSettlementIntent(input.configHome, profile);
+  if (intent?.phase !== "prepared" || !preparedExitTicketStillExact(input, intent)) {
+    return preparedExitOwnerChanged();
+  }
+  const connection = await connectPreparedExitSettlementRuntime(input);
+  if ("settlement" in connection) return connection.settlement;
+  const { runtime } = connection;
+  let settlementOwnsClose = false;
   try {
-    enableRuntimeDaemonOwner(input.lease.paths);
-  } catch (error: unknown) {
-    throw new RuntimeDaemonCapabilityUpgradeError(
-      "The legacy daemon stopped, but daemon ownership could not be re-enabled automatically. Call `enableKodaXDaemonOwner(...)` from the SDK and retry.",
-      undefined,
-      { cause: error },
-      input.requiredCapability,
-    );
+    if (
+      runtime.identity.runtimeId !== intent.owner.runtimeId
+      || !preparedExitTicketStillExact(input, intent)
+    ) {
+      return preparedExitOwnerChanged();
+    }
+    const settlement = await settleRuntimeDaemonExit({ ...input, runtime });
+    settlementOwnsClose = settlement.status !== "blocked"
+      || settlement.nextAction !== "keep-open";
+    return settlement;
+  } finally {
+    if (!settlementOwnsClose) await runtime.close();
   }
 }
 
 async function connectKodaXRuntimeInternal(
   options: ConnectKodaXRuntimeOptions,
   allowCapabilityUpgrade: boolean,
+  contract: "execution" | "prepared-exit-settlement" = "execution",
 ): Promise<KodaXDaemonRuntime> {
   assertPositiveRuntimeTimeout(
     "daemonStartupTimeoutMs",
@@ -4689,7 +4873,12 @@ async function connectKodaXRuntimeInternal(
   let grantedScopes: readonly RuntimeGrantedScope[] | undefined;
   let upgradeReleasedLease = false;
   try {
-    const clientInfo: RuntimeClientInfo = {
+    const requirements = daemonCapabilityRequirements(options, contract);
+    const probedDaemon = parseProbedDaemon(lease);
+    const probedUpgrade = probedDaemon === undefined
+      ? undefined
+      : firstUpgradeableCapability(probedDaemon.capabilities, requirements);
+    const requestedClientInfo: RuntimeClientInfo = {
       name: options.clientInfo?.name ?? "kodax-sdk",
       instanceId:
         options.clientInfo?.instanceId ??
@@ -4704,6 +4893,12 @@ async function connectKodaXRuntimeInternal(
         ? { version: options.clientInfo.version }
         : {}),
     };
+    // Capability-incompatible daemons get an ephemeral management identity:
+    // never restore a real embedder's reverse bridge or credential leases
+    // before the read-only probe has passed the execution contract gate.
+    const clientInfo = probedUpgrade === undefined
+      ? requestedClientInfo
+      : capabilityUpgradeClientInfo();
     const initialized = requireRuntimeRecord(
       await transport.request("initialize", {
         profile: options.profile ?? "default",
@@ -4728,70 +4923,21 @@ async function connectKodaXRuntimeInternal(
         ? initialized.journalEpoch
         : undefined;
     grantedScopes = parseRuntimeGrantedScopes(initialized.grantedScopes);
-    const requirements =
-      {
-        ...options.requirements,
-        sessionEventJournal: 1 as const,
-        ...(options.autoStart === true
-          ? {
-            actorSettlementConvergence: 2 as const,
-            managedRunDurability: 1 as const,
-            ...(process.platform === "win32"
-              ? {
-                  daemonShutdownVerification: 1 as const,
-                  sandboxRuntime: 3 as const,
-                }
-              : {}),
-            runtimeAutoModeGuardrail: 4 as const,
-            runtimeEventCoalescing: 1 as const,
-            ...(options.daemonOrphanExitMs !== undefined
-              ? { daemonOrphanExit: 1 as const }
-              : {}),
-          }
-          : {}),
-      };
-    const requiredUpgrade = [
-      {
-        name: "actorSettlementConvergence",
-        version: requirements?.actorSettlementConvergence,
-      },
-      {
-        name: "managedRunDurability",
-        version: requirements?.managedRunDurability,
-      },
-      {
-        name: "sessionEventJournal",
-        version: requirements?.sessionEventJournal,
-      },
-      {
-        name: "runtimeAutoModeGuardrail",
-        version: requirements?.runtimeAutoModeGuardrail,
-      },
-      {
-        name: "runtimeEventCoalescing",
-        version: requirements?.runtimeEventCoalescing,
-      },
-      {
-        name: "daemonShutdownVerification",
-        version: requirements?.daemonShutdownVerification,
-      },
-      {
-        name: "sandboxRuntime",
-        version: requirements?.sandboxRuntime,
-      },
-      {
-        name: "daemonOrphanExit",
-        version: requirements?.daemonOrphanExit,
-      },
-    ].find(
-      (requirement): requirement is { name: string; version: number } =>
-        requirement.version !== undefined &&
-        !hasVersionedRuntimeCapability(
-          daemonCapabilities,
-          requirement.name,
-          requirement.version,
-        ),
+    const requiredUpgrade = firstUpgradeableCapability(
+      daemonCapabilities,
+      requirements,
     );
+    if (
+      probedDaemon !== undefined
+      && probedDaemon.identity.runtimeId !== identity.runtimeId
+    ) {
+      throw new RuntimeDaemonCapabilityUpgradeError(
+        "Runtime daemon owner changed between capability probe and authenticated attach. Retry against the current owner.",
+        undefined,
+        undefined,
+        requiredUpgrade?.name ?? probedUpgrade?.name ?? "runtimeIdentity",
+      );
+    }
     if (requiredUpgrade !== undefined) {
       if (
         !allowCapabilityUpgrade ||
@@ -4805,14 +4951,6 @@ async function connectKodaXRuntimeInternal(
           requiredUpgrade.name,
         );
       }
-      if (requiredUpgrade.name === "daemonShutdownVerification") {
-        throw new RuntimeDaemonCapabilityUpgradeError(
-          "The running Windows daemon predates authoritative process containment. Stop it explicitly before requiring daemonShutdownVerification v1; it cannot be migrated safely in place.",
-          undefined,
-          undefined,
-          requiredUpgrade.name,
-        );
-      }
       try {
         await replaceRuntimeDaemonForCapabilityUpgrade({
           identity,
@@ -4821,7 +4959,6 @@ async function connectKodaXRuntimeInternal(
           lease,
           ...(journalEpoch !== undefined ? { journalEpoch } : {}),
           ...(grantedScopes !== undefined ? { grantedScopes } : {}),
-          startupTimeoutMs: options.daemonStartupTimeoutMs ?? 60_000,
           requiredCapability: requiredUpgrade.name,
           requiredVersion: requiredUpgrade.version,
         });
@@ -10793,8 +10930,19 @@ function runtimeEventMergePlan(
     (type === "assistant.delta" || type === "thinking.delta")
     && typeof value?.text === "string"
   ) {
+    const providerRequestId =
+      typeof value.providerRequestId === "string"
+        ? value.providerRequestId
+        : undefined;
     return {
-      key: runtimeEventMergeKey(type, payload, scope),
+      key: runtimeEventMergeKey(
+        type,
+        payload,
+        scope,
+        providerRequestId === undefined
+          ? ""
+          : `provider-request:${providerRequestId}`,
+      ),
       mode: "append_text",
       bytes: Buffer.byteLength(value.text, "utf-8"),
     };
@@ -11733,6 +11881,7 @@ function createRuntimeEventBus(persistence: RuntimePersistence) {
 interface RuntimeSessionLiveProjectionState {
   readonly assistantTextByRun: Record<string, string>;
   readonly thinkingTextByRun: Record<string, string>;
+  readonly outputSegmentsByRun: Record<string, KodaXOutputSegmentProjection>;
   readonly activeTools: Map<string, RuntimeActiveToolProjection>;
   readonly pendingUserInputs: Map<string, RuntimePendingUserInputProjection>;
   readonly managedTasks: Map<string, RuntimeManagedTaskProjection>;
@@ -11743,6 +11892,7 @@ function createRuntimeSessionLiveProjectionState(): RuntimeSessionLiveProjection
   return {
     assistantTextByRun: {},
     thinkingTextByRun: {},
+    outputSegmentsByRun: {},
     activeTools: new Map(),
     pendingUserInputs: new Map(),
     managedTasks: new Map(),
@@ -11756,15 +11906,48 @@ function applyRuntimeSessionEvent(
 ): void {
   const payload = isRecord(event.payload) ? event.payload : undefined;
   if (isChildOwnedPrimaryLiveEvent(event.type, payload)) return;
-  if (event.type === "assistant.delta" && typeof payload?.text === "string") {
-    live.assistantTextByRun[event.runId] =
-      `${live.assistantTextByRun[event.runId] ?? ""}${payload.text}`;
+  if (event.type === "turn.started") {
+    delete live.assistantTextByRun[event.runId];
+    delete live.thinkingTextByRun[event.runId];
+    delete live.outputSegmentsByRun[event.runId];
+  } else if (
+    event.type === "output.segment.started" &&
+    typeof payload?.responseId === "string" &&
+    typeof payload?.providerRequestId === "string" &&
+    (payload?.mode === "append" || payload?.mode === "replace")
+  ) {
+    updateRuntimeOutputSegmentProjection(live, event.runId, {
+      type: "segment.started",
+      responseId: payload.responseId,
+      providerRequestId: payload.providerRequestId,
+      mode: payload.mode,
+      startedAtSeq: event.seq,
+    });
+  } else if (event.type === "assistant.delta" && typeof payload?.text === "string") {
+    if (typeof payload.providerRequestId === "string") {
+      updateRuntimeOutputSegmentProjection(live, event.runId, {
+        type: "assistant.delta",
+        providerRequestId: payload.providerRequestId,
+        text: payload.text,
+      });
+    } else {
+      live.assistantTextByRun[event.runId] =
+        `${live.assistantTextByRun[event.runId] ?? ""}${payload.text}`;
+    }
   } else if (
     event.type === "thinking.delta" &&
     typeof payload?.text === "string"
   ) {
-    live.thinkingTextByRun[event.runId] =
-      `${live.thinkingTextByRun[event.runId] ?? ""}${payload.text}`;
+    if (typeof payload.providerRequestId === "string") {
+      updateRuntimeOutputSegmentProjection(live, event.runId, {
+        type: "thinking.delta",
+        providerRequestId: payload.providerRequestId,
+        text: payload.text,
+      });
+    } else {
+      live.thinkingTextByRun[event.runId] =
+        `${live.thinkingTextByRun[event.runId] ?? ""}${payload.text}`;
+    }
   } else if (event.type === "tool.started") {
     const key = runtimeToolProjectionKey(event);
     live.activeTools.set(key, {
@@ -11836,6 +12019,7 @@ function applyRuntimeSessionEvent(
   } else if (isTerminalRuntimeEvent(event.type)) {
     delete live.assistantTextByRun[event.runId];
     delete live.thinkingTextByRun[event.runId];
+    delete live.outputSegmentsByRun[event.runId];
     for (const [key, tool] of live.activeTools) {
       if (tool.runId === event.runId) live.activeTools.delete(key);
     }
@@ -11847,6 +12031,7 @@ function applyRuntimeSessionEvent(
 }
 
 const PRIMARY_LIVE_ACTIVITY_EVENT_TYPES = new Set<RuntimeEventType>([
+  "output.segment.started",
   "assistant.delta",
   "thinking.delta",
   "thinking.finished",
@@ -11884,11 +12069,33 @@ function snapshotRuntimeSessionLiveProjection(
   return {
     assistantTextByRun: { ...live.assistantTextByRun },
     thinkingTextByRun: { ...live.thinkingTextByRun },
+    outputSegmentsByRun: structuredClone(live.outputSegmentsByRun),
     activeTools: [...live.activeTools.values()],
     ...(live.todo !== undefined ? { todo: live.todo } : {}),
     pendingUserInputs: [...live.pendingUserInputs.values()],
     managedTasks: [...live.managedTasks.values()],
   };
+}
+
+function updateRuntimeOutputSegmentProjection(
+  live: RuntimeSessionLiveProjectionState,
+  runId: string,
+  event: Parameters<typeof reduceOutputSegmentProjection>[1],
+): void {
+  const result = reduceOutputSegmentProjection(
+    live.outputSegmentsByRun[runId] ?? createOutputSegmentProjection(),
+    event,
+  );
+  live.outputSegmentsByRun[runId] = result.state;
+  if (!result.accepted) return;
+  live.assistantTextByRun[runId] = effectiveOutputSegmentText(
+    result.state,
+    "assistant",
+  );
+  live.thinkingTextByRun[runId] = effectiveOutputSegmentText(
+    result.state,
+    "thinking",
+  );
 }
 
 function parseRuntimeManagedTaskStatus(
@@ -16366,6 +16573,36 @@ function wrapKodaXEvents(input: {
       && record.abortController?.signal.aborted === true
       ? record.stop.reason
       : undefined);
+  const knownOutputSegments = new Set<string>();
+  const implicitOutputSegments = new Map<string, string>();
+  const ensureOutputSegment = (
+    meta: KodaXActivityEventMeta | undefined,
+  ): KodaXActivityEventMeta => {
+    const turnId = meta?.turnId ?? record.turnId;
+    const scopeKey = [
+      turnId ?? "turn",
+      meta?.contextKind ?? "root",
+      meta?.contextId ?? "",
+      meta?.childAgentId ?? "",
+    ].join("\u0000");
+    const providerRequestId = meta?.providerRequestId
+      ?? implicitOutputSegments.get(scopeKey)
+      ?? `request_${randomUUID().replace(/-/g, "")}`;
+    if (!knownOutputSegments.has(providerRequestId)) {
+      knownOutputSegments.add(providerRequestId);
+      if (meta?.providerRequestId === undefined) {
+        implicitOutputSegments.set(scopeKey, providerRequestId);
+      }
+      const outputMeta = { ...meta, providerRequestId };
+      emit("output.segment.started", {
+        responseId: turnId ?? `response_${record.runId}`,
+        providerRequestId,
+        mode: "append",
+        meta: outputMeta,
+      }, outputMeta);
+    }
+    return { ...meta, providerRequestId };
+  };
   const runWithUserInputPhase = async <T>(
     kind: RuntimeUserInputKind,
     options: unknown,
@@ -16448,17 +16685,37 @@ function wrapKodaXEvents(input: {
 
   return {
     ...original,
+    onOutputSegmentStart(segment, meta) {
+      if (actorDurabilityFenced()) return;
+      const outputMeta = {
+        ...meta,
+        providerRequestId: segment.providerRequestId,
+      };
+      knownOutputSegments.add(segment.providerRequestId);
+      emit("output.segment.started", { ...segment, meta: outputMeta }, outputMeta);
+      externalCallbacks()?.onOutputSegmentStart?.(segment, outputMeta);
+    },
     onTextDelta(text, meta) {
       if (actorDurabilityFenced()) return;
       resumeFromTransientPhase();
-      emit("assistant.delta", { text, meta }, meta);
-      externalCallbacks()?.onTextDelta?.(text, meta);
+      const outputMeta = ensureOutputSegment(meta);
+      emit("assistant.delta", {
+        text,
+        providerRequestId: outputMeta.providerRequestId,
+        meta: outputMeta,
+      }, outputMeta);
+      externalCallbacks()?.onTextDelta?.(text, outputMeta);
     },
     onThinkingDelta(text, meta) {
       if (actorDurabilityFenced()) return;
       resumeFromTransientPhase();
-      emit("thinking.delta", { text, meta }, meta);
-      externalCallbacks()?.onThinkingDelta?.(text, meta);
+      const outputMeta = ensureOutputSegment(meta);
+      emit("thinking.delta", {
+        text,
+        providerRequestId: outputMeta.providerRequestId,
+        meta: outputMeta,
+      }, outputMeta);
+      externalCallbacks()?.onThinkingDelta?.(text, outputMeta);
     },
     onThinkingEnd(thinking, meta) {
       emit("thinking.finished", { thinking, meta }, meta);
@@ -16525,6 +16782,7 @@ function wrapKodaXEvents(input: {
     onTurnStarted(event) {
       if (record.actorDurabilityFailure !== undefined) return;
       record.turnId = event.turnId;
+      implicitOutputSegments.clear();
       emit("turn.started", event, event);
       externalCallbacks()?.onTurnStarted?.(event);
     },

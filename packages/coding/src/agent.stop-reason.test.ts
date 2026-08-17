@@ -140,10 +140,14 @@ describe('runKodaX stopReason normalization', () => {
       response('end_turn', 'still plain'),
     ];
 
+    const segments: Array<{ responseId: string; mode: 'append' | 'replace' }> = [];
     const result = await runKodaX(
       {
         provider: TEST_PROVIDER_NAME,
         reasoningMode: 'off',
+        events: {
+          onOutputSegmentStart: ({ responseId, mode }) => segments.push({ responseId, mode }),
+        },
         context: {
           managedProtocolEmission: {
             enabled: true,
@@ -157,6 +161,8 @@ describe('runKodaX stopReason normalization', () => {
     expect(result.success).toBe(true);
     expect(StopReasonScriptedProvider.streamCalls).toBe(2);
     expect(syntheticMessageText(result.messages)).toContain('required protocol was not emitted');
+    expect(segments.map((segment) => segment.mode)).toEqual(['append', 'append']);
+    expect(segments[1]?.responseId).toBe(segments[0]?.responseId);
   }, 30_000);
 
   it('treats pause_turn as a clean terminal without managed-protocol retry', async () => {

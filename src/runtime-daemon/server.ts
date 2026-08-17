@@ -2182,6 +2182,7 @@ function runtimeDaemonCapabilities(
   delete safeOverrides.daemonOrphanExit;
   delete safeOverrides.daemonShutdownVerification;
   delete safeOverrides.runtimeEventCoalescing;
+  delete safeOverrides.liveOutputSegments;
   delete safeOverrides.runtimeAutoModeGuardrail;
   delete safeOverrides.sandboxRuntime;
   delete safeOverrides.runLifecycleControl;
@@ -2221,6 +2222,12 @@ function runtimeDaemonCapabilities(
       sequenceScope: "session",
       cursor: "session_epoch_sequence",
       scopedAccessRequired: true,
+    },
+    liveOutputSegments: {
+      version: 1,
+      segmentIdentity: "provider_request",
+      replacement: "explicit",
+      rawJournal: "complete",
     },
     ...(runtimeEventCoalescing
       ? { runtimeEventCoalescing: { version: 1 } }

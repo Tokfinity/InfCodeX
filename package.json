@@ -13,7 +13,8 @@
     "integrationConfigResilience": 1,
     "managedRunDurability": 1,
     "runtimeExitSettlement": 1,
-    "sessionEventJournal": 1
+    "sessionEventJournal": 1,
+    "liveOutputSegments": 1
   },
   "workspaces": [
     "packages/*"

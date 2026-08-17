@@ -12,6 +12,7 @@ import type { KodaXManualTopicId, KodaXManualTopicInput } from './self-knowledge
 import type { KodaXTimeoutConfig } from './timeouts.js';
 import type { RuntimeContextBudgetSnapshot } from './agent-runtime/context-budget.js';
 import type { RuntimeToolExposurePlan } from './agent-runtime/tool-exposure-planner.js';
+import type { KodaXOutputSegmentStarted } from './output-segments.js';
 import type {
   CompactionSkipReason,
   RuntimeCompactionSkippedEvent,
@@ -274,6 +275,8 @@ export interface KodaXTurnFailedEvent extends KodaXLiveEventMeta {
 }
 
 export interface KodaXActivityEventMeta extends KodaXWorkflowEventMeta, Partial<KodaXLiveEventMeta> {
+  /** Physical provider request currently producing this live output. */
+  readonly providerRequestId?: string;
   readonly childAgentId?: string;
   readonly childAgentName?: string;
   readonly parentToolId?: string;
@@ -507,6 +510,10 @@ export interface KodaXEvents {
   /** FEATURE_229: correlates child-agent SDK callbacks back to a workflow run/item. */
   workflowCorrelation?: WorkflowEventCorrelation;
   // 流式输出
+  onOutputSegmentStart?: (
+    segment: KodaXOutputSegmentStarted,
+    meta?: KodaXActivityEventMeta,
+  ) => void;
   onTextDelta?: (text: string, meta?: KodaXActivityEventMeta) => void;
   onThinkingDelta?: (text: string, meta?: KodaXActivityEventMeta) => void;
   onThinkingEnd?: (thinking: string, meta?: KodaXActivityEventMeta) => void;

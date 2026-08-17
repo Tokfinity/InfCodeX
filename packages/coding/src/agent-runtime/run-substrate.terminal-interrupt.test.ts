@@ -59,6 +59,7 @@ describe('runKodaX Runtime terminal interrupt continuation', { timeout: 30_000 }
     const delivered: string[][] = [];
     const turnStarts: Array<{ turnId: string; deliveryKind: string }> = [];
     const turnCompletions: string[] = [];
+    const outputSegments: Array<{ responseId: string; mode: 'append' | 'replace' }> = [];
 
     class TerminalInterruptProvider extends KodaXBaseProvider {
       readonly name = PROVIDER_NAME;
@@ -140,6 +141,9 @@ describe('runKodaX Runtime terminal interrupt continuation', { timeout: 30_000 }
           onTurnCompleted(event) {
             turnCompletions.push(event.turnId);
           },
+          onOutputSegmentStart({ responseId, mode }) {
+            outputSegments.push({ responseId, mode });
+          },
         },
       },
       'first prompt',
@@ -153,6 +157,10 @@ describe('runKodaX Runtime terminal interrupt continuation', { timeout: 30_000 }
     expect(turnStarts[0]?.deliveryKind).toBe('initial');
     expect(turnStarts[1]?.deliveryKind).toBe('queued');
     expect(turnStarts[1]?.turnId).not.toBe(turnStarts[0]?.turnId);
+    expect(outputSegments).toEqual([
+      { responseId: turnStarts[0]?.turnId, mode: 'append' },
+      { responseId: turnStarts[1]?.turnId, mode: 'append' },
+    ]);
     expect(turnCompletions).toEqual([
       turnStarts[0]?.turnId,
       turnStarts[1]?.turnId,

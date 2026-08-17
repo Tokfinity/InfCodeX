@@ -73,6 +73,7 @@ function makeInput(provider: KodaXBaseProvider, clearStreamTimers = vi.fn()): Pa
     emitActiveExtensionEvent: vi.fn().mockResolvedValue(undefined) as unknown as ExtensionEventEmitter,
     providerName: 'anthropic',
     attempt: 2,
+    responseId: 'response_test',
     clearStreamTimers,
   };
 }

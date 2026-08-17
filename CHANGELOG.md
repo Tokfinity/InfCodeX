@@ -8,6 +8,17 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Provider retries, fallback, output-budget escalation, and max-token
+  continuation now share an SDK-owned output-segment contract. Streaming no
+  longer receives a second cumulative append during recovery; raw Runtime
+  journals retain abandoned attempts while live snapshots expose only the
+  effective response.
+- Auto-starting Runtime clients require `liveOutputSegments:1` and replace an
+  incompatible daemon only after a read-only capability probe and fenced
+  management prove that no other client or governed work still owns it. The
+  replacement reuses crash-resumable exit settlement, exact process identity,
+  complete process exit, and verified cleanup. Attach-only clients fail closed;
+  hosts no longer need checkpoint/text replay compatibility paths.
 - Standalone Bun binaries now bundle the Anthropic and OpenAI SDK dependency
   graphs while retaining first-use lazy loading, so provider startup no longer
   falls back to filesystem `node_modules` resolution or fails on transitive

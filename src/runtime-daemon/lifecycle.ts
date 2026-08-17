@@ -64,6 +64,7 @@ export async function observeRuntimeDaemonHealth(
     );
     return {
       state,
+      initialization: initialized,
       pidAlive,
       endpointReachable: true,
       identityMatches: daemonIdentityMatchesState(initialized, state)

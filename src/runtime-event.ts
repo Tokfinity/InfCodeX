@@ -10,7 +10,7 @@ const RUNTIME_EVENT_TYPES: ReadonlySet<string> = new Set<RuntimeEventType>([
   'session.created', 'session.loaded', 'session.settings.updated', 'session.notice.appended',
   'session.rewound', 'session.active_entry.updated', 'session.compacted', 'run.queued',
   'run.started', 'run.updated', 'run.progress', 'run.input.queued', 'run.input.delivered',
-  'turn.started', 'turn.completed', 'turn.failed',
+  'turn.started', 'turn.completed', 'turn.failed', 'output.segment.started',
   'assistant.delta', 'thinking.delta', 'thinking.finished', 'tool.started', 'tool.progress',
   'tool.sandbox', 'tool.finished', 'user_input.requested', 'user_input.resolved', 'permission.requested',
   'permission.resolved', 'permission.grant.changed', 'workflow.started', 'workflow.updated',
@@ -121,6 +121,16 @@ function validateKnownRuntimeEventPayload(
     return isRecord(payload) && typeof payload.thinking === 'string'
       ? undefined
       : 'requires a string thinking payload.';
+  }
+  if (type === 'output.segment.started') {
+    return isRecord(payload)
+      && typeof payload.responseId === 'string'
+      && payload.responseId.length > 0
+      && typeof payload.providerRequestId === 'string'
+      && payload.providerRequestId.length > 0
+      && (payload.mode === 'append' || payload.mode === 'replace')
+      ? undefined
+      : 'requires responseId, providerRequestId, and append/replace mode.';
   }
   if (type === 'tool.started') {
     return isRecord(payload)

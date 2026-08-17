@@ -107,6 +107,8 @@ export type RuntimeDaemonHealth =
 
 export interface RuntimeDaemonHealthObservation {
   readonly state?: RuntimeDaemonState;
+  /** Authenticated probe handshake; lets the SDK gate capabilities before a client attach. */
+  readonly initialization?: unknown;
   readonly pidAlive: boolean;
   readonly endpointReachable: boolean;
   readonly identityMatches: boolean;

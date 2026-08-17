@@ -300,6 +300,16 @@ flush boundaries and an 8 KiB accumulated-merge limit. Clients that depend on
 this behavior require `runtimeEventCoalescing:1`; daemon auto-start may replace
 only an idle older owner and fails closed when preflight is unsafe.
 
+Provider output is additionally projected by logical response and physical
+request identity. Each request emits `responseId`, `providerRequestId`, and an
+explicit append/replace mode. The raw Session journal retains abandoned request
+facts, while the observation snapshot exposes only the effective segments.
+`liveOutputSegments:1` is mandatory for new SDK clients; an auto-start client
+gates it from the authenticated read-only probe before attaching the embedder's
+stable identity. It may replace an incompatible daemon only after the existing
+management, client/work-idle, owner/process-start identity, durable settlement,
+process-exit, and verified-shutdown fences pass.
+
 Session read APIs expose three intentionally separate planes: active model
 context, raw append-order transcript audit, and ordinary conversation. The
 ordinary projection is owned by the Session implementation, folds only

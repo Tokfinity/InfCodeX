@@ -769,6 +769,14 @@ Partner remains on its private inline Runtime and must use a distinct product
 data/session root. A missing daemon capability is an error, not permission to
 silently fall back to inline Coder.
 
+Live assistant output is owned by the Runtime segment projection. Provider
+requests identify one logical reply (`responseId`), one physical request
+(`providerRequestId`), and whether the new segment appends or replaces the
+active request. Hosts requiring `liveOutputSegments:1` receive the same
+effective draft after streaming and reconnect while raw journals retain the
+complete audit trail. They must not replay provider recovery checkpoints or
+deduplicate text heuristically.
+
 For the full host-integration contract, including inline/Worker/daemon selection,
 multi-client permission handling, config/catalog/MCP admin APIs, artifacts,
 context diagnostics, and daemon protocol schemas, see

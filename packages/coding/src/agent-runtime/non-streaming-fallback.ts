@@ -75,6 +75,7 @@ export interface NonStreamingFallbackInput {
   readonly emitActiveExtensionEvent: ExtensionEventEmitter;
   readonly providerName: string;
   readonly attempt: number;
+  readonly responseId: string;
   /**
    * Hook to clear the streaming-mode timers BEFORE the fallback fires.
    * Required because the streaming attempt's watchdogs would otherwise
@@ -84,8 +85,12 @@ export interface NonStreamingFallbackInput {
 }
 
 export type NonStreamingFallbackOutcome =
-  | { readonly ok: true; readonly result: KodaXStreamResult }
-  | { readonly ok: false; readonly error: Error };
+  | {
+      readonly ok: true;
+      readonly result: KodaXStreamResult;
+      readonly providerRequestId: string;
+    }
+  | { readonly ok: false; readonly error: Error; readonly providerRequestId: string };
 
 export async function executeNonStreamingFallback(
   input: NonStreamingFallbackInput,
@@ -105,15 +110,22 @@ export async function executeNonStreamingFallback(
     fallbackTimeoutController.abort(new Error('API Hard Timeout (10 minutes)'));
   }, input.hardTimeoutMs);
 
+  let providerRequestId: string | undefined;
   try {
     input.clearStreamTimers();
-    input.boundarySession.beginAttempt(
+    providerRequestId = input.boundarySession.beginAttempt(
       input.providerName,
       input.modelOverride ?? input.streamProvider.getModel(),
       input.providerMessages,
       input.attempt,
       true,
     );
+    input.events.onOutputSegmentStart?.({
+      responseId: input.responseId,
+      providerRequestId,
+      mode: 'replace',
+    });
+    const requestMeta = { providerRequestId } as const;
     const result = await input.streamProvider.complete(
       input.providerMessages,
       input.activeToolDefinitions,
@@ -124,16 +136,16 @@ export async function executeNonStreamingFallback(
         onTextDelta: (text: string) => {
           input.boundarySession.markTextDelta(text);
           void input.emitActiveExtensionEvent('text:delta', { text });
-          input.events.onTextDelta?.(text);
+          input.events.onTextDelta?.(text, requestMeta);
         },
         onThinkingDelta: (text: string) => {
           input.boundarySession.markThinkingDelta(text);
           void input.emitActiveExtensionEvent('thinking:delta', { text });
-          input.events.onThinkingDelta?.(text);
+          input.events.onThinkingDelta?.(text, requestMeta);
         },
         onThinkingEnd: (thinking: string) => {
           void input.emitActiveExtensionEvent('thinking:end', { thinking });
-          input.events.onThinkingEnd?.(thinking);
+          input.events.onThinkingEnd?.(thinking, requestMeta);
         },
         modelOverride: input.modelOverride,
         ephemeralSuffix: input.ephemeralSuffix,
@@ -141,10 +153,11 @@ export async function executeNonStreamingFallback(
       },
       fallbackSignal,
     );
-    return { ok: true, result };
+    return { ok: true, result, providerRequestId };
   } catch (rawError) {
     const error = rawError instanceof Error ? rawError : new Error(String(rawError));
-    return { ok: false, error };
+    if (providerRequestId === undefined) throw error;
+    return { ok: false, error, providerRequestId };
   } finally {
     clearTimeout(fallbackHardTimer);
   }

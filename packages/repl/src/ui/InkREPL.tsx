@@ -131,11 +131,14 @@ import {
   resolveRepoIntelligenceRuntimeConfig,
   CANCELLED_TOOL_RESULT_MESSAGE,
   classifyBashCommand,
+  createOutputSegmentProjection,
   createDenialTracker,
   recordDenial,
   isDeniedRecently,
   getDenialContext,
   getRegisteredToolDefinition,
+  effectiveOutputSegmentText,
+  reduceOutputSegmentProjection,
   createBashPrefixExtractor,
   decideWorkflowInvocation,
   workflowStartOutcomeConsumesTurn,
@@ -151,6 +154,8 @@ import type {
   KodaXSessionArtifactLedgerEntry,
   KodaXSessionLineage,
   KodaXActivityEventMeta,
+  KodaXOutputSegmentProjection,
+  KodaXOutputSegmentStarted,
   KodaXSidecarMessageEvent,
   KodaXToolEventMeta,
   KodaXWorkflowAgentDigestEvent,
@@ -1012,6 +1017,50 @@ export function shouldAppendManagedAssistantTextDelta(
     return false;
   }
   return hasActiveAssistantBlock || text.trim().length > 0;
+}
+
+export function discardReplacedOutputSegmentItems(
+  items: readonly HistoryItem[],
+  itemIds: readonly (string | undefined)[],
+  mode: "replace" | "append",
+): HistoryItem[] {
+  if (mode === "append") return [...items];
+  const discardedIds = new Set(
+    itemIds.filter((id): id is string => id !== undefined),
+  );
+  return discardedIds.size === 0
+    ? [...items]
+    : items.filter((item) => !discardedIds.has(item.id));
+}
+
+export function applyDistinctOutputSegmentStart(
+  projection: KodaXOutputSegmentProjection,
+  segment: KodaXOutputSegmentStarted,
+  onStarted: (next: KodaXOutputSegmentProjection) => void,
+): KodaXOutputSegmentProjection {
+  const next = reduceOutputSegmentProjection(
+    projection,
+    { type: "segment.started", ...segment },
+  ).state;
+  if (next !== projection) onStarted(next);
+  return next;
+}
+
+export function applyProviderRecoveryTransientReset(actions: {
+  readonly clearResponse: () => void;
+  readonly clearThinkingContent: () => void;
+  readonly stopThinking: () => void;
+  readonly clearToolInputContent: () => void;
+  readonly clearCurrentTool: () => void;
+  readonly resetLiveToolCalls: () => void;
+  readonly clearLiveActivityLabel: () => void;
+}): void {
+  // Provider-owned buffers stay visible until the next distinct segment start.
+  actions.stopThinking();
+  actions.clearToolInputContent();
+  actions.clearCurrentTool();
+  actions.resetLiveToolCalls();
+  actions.clearLiveActivityLabel();
 }
 
 function isForegroundManagedStreamingStatus(
@@ -1992,6 +2041,14 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const managedForegroundLedgerRef = useRef<ManagedForegroundLedgerState>({
     activeToolGroupTools: [],
   });
+  const outputSegmentProjectionRef = useRef<KodaXOutputSegmentProjection>(
+    createOutputSegmentProjection(),
+  );
+  const managedOutputSegmentItemsRef = useRef<{
+    providerRequestId?: string;
+    assistantItemId?: string;
+    thinkingItemId?: string;
+  }>({});
   const managedForegroundItemSeqRef = useRef(0);
 
   // === Foreground text buffer (O(n²) → O(n) fix) ===
@@ -2514,6 +2571,67 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     }
     scheduleForegroundFlush();
   }, [startManagedForegroundLedgerBlock, flushForegroundTextBuffer, scheduleForegroundFlush]);
+
+  const beginOutputSegment = useCallback((
+    segment: KodaXOutputSegmentStarted,
+  ): void => {
+    outputSegmentProjectionRef.current = applyDistinctOutputSegmentStart(
+      outputSegmentProjectionRef.current,
+      segment,
+      (nextProjection) => {
+        if (managedForegroundOwnerRef.current.workerId) {
+          flushForegroundTextBuffer();
+          const previousItems = managedOutputSegmentItemsRef.current;
+          if (segment.mode === "replace") {
+            mutateManagedForegroundTurnHistory((items) =>
+              discardReplacedOutputSegmentItems(
+                items,
+                [previousItems.assistantItemId, previousItems.thinkingItemId],
+                segment.mode,
+              ),
+            );
+          }
+          const ledger = managedForegroundLedgerRef.current;
+          managedForegroundLedgerRef.current = {
+            ...ledger,
+            activeKind: ledger.activeKind === "tool_group" ? "tool_group" : undefined,
+            activeAssistantItemId: undefined,
+            activeThinkingItemId: undefined,
+            currentTurnThinkingItemId: undefined,
+          };
+          foregroundTextBufferRef.current = {
+            itemId: undefined,
+            kind: "thinking",
+            pendingText: "",
+          };
+          managedOutputSegmentItemsRef.current = {
+            providerRequestId: segment.providerRequestId,
+          };
+          return;
+        }
+
+        clearResponse();
+        clearThinkingContent();
+        const assistantText = effectiveOutputSegmentText(nextProjection, "assistant");
+        const thinkingText = effectiveOutputSegmentText(nextProjection, "thinking");
+        if (assistantText) appendResponse(assistantText);
+        if (thinkingText) {
+          startThinking();
+          appendThinkingChars(thinkingText.length);
+          appendThinkingContent(thinkingText);
+        }
+      },
+    );
+  }, [
+    appendResponse,
+    appendThinkingChars,
+    appendThinkingContent,
+    clearResponse,
+    clearThinkingContent,
+    flushForegroundTextBuffer,
+    mutateManagedForegroundTurnHistory,
+    startThinking,
+  ]);
 
   const syncManagedForegroundThinkingBlock = useCallback((thinking: string) => {
     const normalizedThinking = thinking.trim();
@@ -6364,6 +6482,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   // Process special syntax (shell commands, file references)
   // Create KodaXEvents for streaming updates
   const createStreamingEvents = useCallback((): StreamingEvents => ({
+    onOutputSegmentStart: (segment, meta) => {
+      if (userInterruptedRef.current || shouldRouteToChildActivity(meta)) {
+        return;
+      }
+      beginOutputSegment(segment);
+    },
     onMemoryOutcomeDigest: (digest, metadata) => {
       if (digest.sessionId !== context.sessionId) {
         options.events?.onMemoryOutcomeDigest?.(digest, metadata);
@@ -6411,6 +6535,18 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       if (upsertChildActivityRecord(meta, "thinking", text, { append: true })) {
         return;
       }
+      if (meta?.providerRequestId !== undefined) {
+        const reduced = reduceOutputSegmentProjection(
+          outputSegmentProjectionRef.current,
+          {
+            type: "thinking.delta",
+            providerRequestId: meta.providerRequestId,
+            text,
+          },
+        );
+        outputSegmentProjectionRef.current = reduced.state;
+        if (!reduced.accepted) return;
+      }
       if (streamingState.currentTool) {
         setCurrentTool(undefined);
         clearToolInputContent();
@@ -6432,6 +6568,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       appendThinkingContent(text);
       if (managedForegroundOwnerRef.current.workerId) {
         appendManagedForegroundTextBlock("thinking", text);
+        managedOutputSegmentItemsRef.current = {
+          ...managedOutputSegmentItemsRef.current,
+          thinkingItemId: managedForegroundLedgerRef.current.activeThinkingItemId,
+        };
       }
     },
     onThinkingEnd: (thinking: string, meta?: KodaXActivityEventMeta) => {
@@ -6461,6 +6601,18 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       if (upsertChildActivityRecord(meta, "assistant", text, { append: true })) {
         return;
       }
+      if (meta?.providerRequestId !== undefined) {
+        const reduced = reduceOutputSegmentProjection(
+          outputSegmentProjectionRef.current,
+          {
+            type: "assistant.delta",
+            providerRequestId: meta.providerRequestId,
+            text,
+          },
+        );
+        outputSegmentProjectionRef.current = reduced.state;
+        if (!reduced.accepted) return;
+      }
       if (streamingState.currentTool) {
         setCurrentTool(undefined);
         clearToolInputContent();
@@ -6470,6 +6622,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       appendResponse(text);
       if (managedForegroundOwnerRef.current.workerId) {
         appendManagedForegroundTextBlock("assistant", text);
+        managedOutputSegmentItemsRef.current = {
+          ...managedOutputSegmentItemsRef.current,
+          assistantItemId: managedForegroundLedgerRef.current.activeAssistantItemId,
+        };
       }
     },
     onToolUseStart: (
@@ -6832,26 +6988,21 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       }
       const inManagedForeground = !!managedForegroundOwnerRef.current.workerId;
 
-      // 1. Commit partial text from the failed attempt to the correct layer
-      const partialText = getFullResponse().trim();
-      if (partialText) {
-        if (inManagedForeground) {
-          appendManagedForegroundTextBlock("assistant", partialText);
-        } else {
-          addHistoryItem({ type: "assistant", text: partialText });
-        }
-      }
+      // The failed provider request already owns its streamed text in the
+      // output-segment projection. The next segment.started(replace) event
+      // removes that request exactly once; never append the cumulative live
+      // buffer here, or the managed ledger and persisted uiHistory get P1+P1.
+      applyProviderRecoveryTransientReset({
+        clearResponse,
+        clearThinkingContent,
+        stopThinking,
+        clearToolInputContent,
+        clearCurrentTool: () => setCurrentTool(undefined),
+        resetLiveToolCalls,
+        clearLiveActivityLabel: () => setLastLiveActivityLabel(undefined),
+      });
 
-      // 2. Clear live streaming state for the retry
-      clearResponse();
-      clearThinkingContent();
-      stopThinking();
-      clearToolInputContent();
-      setCurrentTool(undefined);
-      resetLiveToolCalls();
-      setLastLiveActivityLabel(undefined);
-
-      // 3. Commit recovery info to the correct layer (same as partial text)
+      // Commit recovery info to the correct layer.
       if (inManagedForeground) {
         appendManagedForegroundLedgerItem({
           ...recoveryItem,
@@ -7630,6 +7781,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     appendManagedForegroundTextBlock,
     syncManagedForegroundThinkingBlock,
     syncManagedForegroundToolGroup,
+    beginOutputSegment,
     addLiveToolCall,
     updateExecutingTool,
     finalizeLiveToolCall,
@@ -7778,6 +7930,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       : context.messages,
     inputArtifacts?: readonly KodaXInputArtifact[],
   ): Promise<KodaXResult> => {
+    outputSegmentProjectionRef.current = createOutputSegmentProjection();
+    managedOutputSegmentItemsRef.current = {};
     const events = {
       ...createStreamingEvents(),
       getCostReport: inkCostReportRef,

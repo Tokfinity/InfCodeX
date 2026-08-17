@@ -169,12 +169,18 @@ describe('runKodaX max_tokens continuation (L5)', () => {
     ];
 
     const textDeltas: string[] = [];
+    const segments: Array<{
+      responseId: string;
+      providerRequestId: string;
+      mode: 'append' | 'replace';
+    }> = [];
     const result = await runKodaX(
       {
         provider: TEST_PROVIDER_NAME,
         reasoningMode: 'off',
         events: {
           onTextDelta: (t) => textDeltas.push(t),
+          onOutputSegmentStart: (segment) => segments.push(segment),
         },
       },
       'Generate a long document.',
@@ -188,6 +194,9 @@ describe('runKodaX max_tokens continuation (L5)', () => {
     // The Claude-Code-style meta message surfaces via onTextDelta.
     const joined = textDeltas.join('');
     expect(joined).toContain('output token limit hit');
+    expect(segments.map((segment) => segment.mode)).toEqual(['append', 'append']);
+    expect(segments[1]?.responseId).toBe(segments[0]?.responseId);
+    expect(segments[1]?.providerRequestId).not.toBe(segments[0]?.providerRequestId);
   }, 30_000);
 
   it('honors a run-scoped maxOutputTokens passed to runKodaX (SDK ALS wrap)', async () => {

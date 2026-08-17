@@ -78,6 +78,19 @@ export {
 } from '@kodax-ai/llm';
 
 export {
+  createOutputSegmentProjection,
+  effectiveOutputSegmentText,
+  reduceOutputSegmentProjection,
+  type KodaXOutputSegmentActiveState,
+  type KodaXOutputSegmentDelta,
+  type KodaXOutputSegmentMode,
+  type KodaXOutputSegmentProjection,
+  type KodaXOutputSegmentProjectionEvent,
+  type KodaXOutputSegmentProjectionResult,
+  type KodaXOutputSegmentStarted,
+} from './output-segments.js';
+
+export {
   awaitLatestCodingMemoryReviewDrain,
   canonicalMemoryProjectId,
   deriveCodingMemoryIdentity,

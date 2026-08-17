@@ -4312,6 +4312,7 @@ const runtime = await connectKodaXRuntime({
     durableRecoveryQueries: 1,
     daemonManagement: 1,
     runtimeEventCoalescing: 1,
+    liveOutputSegments: 1,
     runtimeAutoModeGuardrail: 4,
   },
 });
@@ -4351,6 +4352,16 @@ The capability changes event allocation/persistence pressure, not reconstructed
 stream content: flush boundaries remain explicit and an accumulated merge
 never exceeds 8 KiB.
 
+`liveOutputSegments:1` makes provider replacement semantics an SDK fact rather
+than a host heuristic. `output.segment.started` identifies the logical reply
+with `responseId`, the physical call with `providerRequestId`, and whether the
+segment appends or replaces the current call. Text and reasoning deltas carry
+the physical request id. Raw replay retains every attempt; use
+`snapshot.live.outputSegmentsByRun` for the effective live response after an
+observation join or reconnect. Do not append a provider's cumulative response
+again during recovery, and do not infer replacement from attempt numbers or
+text equality.
+
 Observation boundaries such as `events.subscribe()`, `events.replay()`, and
 Session status projection flush pending events before answering, so they can
 surface a durable-persistence failure instead of returning a stale waterline.
@@ -4362,11 +4373,18 @@ required first sample plus the most recent sample; discarded intermediate
 snapshots are not lifecycle events, and surviving samples retain their latest
 emission order.
 
-When a healthy profile daemon is too old, the SDK first requires
-`daemonManagement:1`, takes a revision/owner-policy fenced preflight, and
-replaces it only when no active or queued run, Workflow, Agent turn, pending
-permission/user input, or other logical client exists. A busy or still-older
-daemon is never stopped: the connection rejects with
+When a healthy profile daemon is too old, the SDK first reads capabilities from
+the authenticated health probe, before attaching the embedder's stable client
+identity or restoring its reverse bridge. The incompatible daemon is contacted
+with an ephemeral upgrade identity. The SDK requires `daemonManagement:1`,
+takes a revision/owner-policy fenced preflight, and replaces it only when no
+active or queued run, Workflow, Agent turn, pending permission/user input, or
+other logical client exists. Replacement reuses the durable Runtime exit
+settlement: it records a crash-resumable ticket, verifies the captured
+owner/process-start identity, waits for the complete process exit and shutdown
+outcome, repairs only identity-scoped remnants, restores daemon owner policy,
+and then starts the packaged Runtime.
+A busy or still-older daemon is never stopped: the connection rejects with
 `RuntimeDaemonCapabilityUpgradeError`, whose `recoverable` and
 `restartRequired` fields are `true` and whose optional `preflight` explains the
 blockers. Attach-only connections never mutate daemon ownership and must request
