@@ -203,10 +203,6 @@ function logicalIdForEntry(entry: KodaXSessionEntry): string {
   return entry.logicalId ?? entry.id;
 }
 
-function sourceEntryIdForClone(entry: KodaXSessionEntry): string {
-  return entry.sourceEntryId ?? entry.id;
-}
-
 function recordMessageProvenanceSource(
   message: KodaXMessage,
   entry: NavigableSessionEntry,
@@ -260,7 +256,7 @@ function inheritCompactionMessageProvenance(
       ? {
           ...entry,
           logicalId: logicalIdForEntry(source),
-          sourceEntryId: sourceEntryIdForClone(source),
+          sourceEntryId: source.id,
         }
       : entry;
   });
@@ -1072,7 +1068,7 @@ function cloneForkableEntry(
     parentId,
     timestamp: entry.timestamp,
     logicalId: logicalIdForEntry(entry),
-    sourceEntryId: sourceEntryIdForClone(entry),
+    sourceEntryId: entry.id,
   };
   switch (entry.type) {
     case 'message':
@@ -1303,7 +1299,7 @@ export function forkSessionLineage(
       parentId,
       timestamp: new Date().toISOString(),
       logicalId: logicalIdForEntry(sourceLatestGoal),
-      sourceEntryId: sourceEntryIdForClone(sourceLatestGoal),
+      sourceEntryId: sourceLatestGoal.id,
       goal: sourceLatestGoal.goal,
       // Reuse the source event ('created' / 'updated' / 'paused' / etc.)
       // so the fork's transcript honestly reflects the goal's last state
@@ -1486,11 +1482,18 @@ export function archiveOldIslands(lineage: KodaXSessionLineage): {
     }
   }
 
-  // 6. Collect entries to archive (everything NOT in preserve closure)
+  // 6. Retained-suffix physical references: a preserved clone's sourceEntryId must stay
+  // addressable in the slimmed lineage, so never archive the direct predecessor a live
+  // clone points at (one hop — bounded retention; older generations archive naturally
+  // once no newest clone references them). logicalId references are deliberately not
+  // excluded: logical identity is stable by design and resolves through the archive
+  // merge-back.
+  const referencedByRetained = collectReferencedByRetained(lineage, preserved, byId);
+  // 7. Collect entries to archive (everything NOT in preserve closure and not referenced)
   const toArchive: KodaXSessionEntry[] = [];
   const toArchiveIds = new Set<string>();
   for (const entry of lineage.entries) {
-    if (!preserved.has(entry.id)) {
+    if (!preserved.has(entry.id) && !referencedByRetained.has(entry.id)) {
       toArchive.push(entry);
       toArchiveIds.add(entry.id);
     }
@@ -1500,7 +1503,7 @@ export function archiveOldIslands(lineage: KodaXSessionLineage): {
     return { slimmedLineage: lineage, archivedEntries: [], archivedCount: 0, archiveBatchId: '' };
   }
 
-  // 7. Generate archive batch ID and markers (one per old island group)
+  // 8. Generate archive batch ID and markers (one per old island group)
   const archiveBatchId = `batch_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
 
   // Group archived entries by their connected subtree root
@@ -1546,7 +1549,7 @@ export function archiveOldIslands(lineage: KodaXSessionLineage): {
     });
   }
 
-  // 8. Build slimmed lineage
+  // 9. Build slimmed lineage
   const slimmedEntries = [
     ...lineage.entries.filter((e) => !toArchiveIds.has(e.id)),
     ...markers,
@@ -1558,6 +1561,23 @@ export function archiveOldIslands(lineage: KodaXSessionLineage): {
     archivedCount: toArchive.length,
     archiveBatchId,
   };
+}
+
+/** One-hop direct predecessors referenced by preserved message clones (Issue 186). */
+function collectReferencedByRetained(
+  lineage: KodaXSessionLineage,
+  preserved: ReadonlySet<string>,
+  byId: ReadonlyMap<string, KodaXSessionEntry>,
+): Set<string> {
+  const referenced = new Set<string>();
+  for (const entry of lineage.entries) {
+    if (!preserved.has(entry.id) || entry.type !== 'message') continue;
+    const ref = entry.sourceEntryId;
+    if (ref !== undefined && ref !== entry.id && byId.has(ref) && !preserved.has(ref)) {
+      referenced.add(ref);
+    }
+  }
+  return referenced;
 }
 
 function isTextContentBlock(block: unknown): block is { type: 'text'; text: string } {

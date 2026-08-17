@@ -707,8 +707,9 @@ the active model context nor the raw audit stream.
 
 Transcript entries expose both physical and logical identity. `entryId`
 identifies the persisted lineage node; `logicalId` is stable across cloned or
-forked copies; `sourceEntryId` points at the root physical source when an entry
-is a clone. These fields support audit inspection but do not authorize a host
+forked copies; `sourceEntryId` points at the direct physical predecessor copy when an entry
+is a clone, so every chained-compaction generation stays addressable (until
+v0.7.89 it addressed the transitive root source). These fields support audit inspection but do not authorize a host
 to fold by `logicalId` alone. The Session-owned ordinary-conversation projection
 validates provenance and topology, reports unresolved ambiguity, and supplies
 revision-fenced physical boundaries; `loadFullTranscript()` continues to return

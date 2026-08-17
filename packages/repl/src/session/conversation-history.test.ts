@@ -434,6 +434,54 @@ describe('buildSessionConversationHistory', () => {
     expect(history.entries[4]?.auditEntryIds).toEqual(['u3', 'u3-copy-2']);
   });
 
+  it('resolves an epoch-2 retained suffix that re-retains the epoch-1 clone', () => {
+    const entries = [
+      messageEntry('u1', null, 'user', 'first request'),
+      messageEntry('a1', 'u1', 'assistant', 'first answer'),
+      messageEntry('u2', 'a1', 'user', 'second request'),
+      messageEntry('a2', 'u2', 'assistant', 'second answer'),
+      compactionEntry('compact-1', 'u2-copy-1'),
+      messageEntry('u2-copy-1', 'compact-1', 'user', 'second request', {
+        logicalId: 'u2',
+        sourceEntryId: 'u2',
+      }),
+      messageEntry('a2-copy-1', 'u2-copy-1', 'assistant', 'second answer', {
+        logicalId: 'a2',
+        sourceEntryId: 'a2',
+      }),
+      compactionEntry('compact-2', 'u2-copy-2'),
+      // Cross-generation re-retention: the epoch-2 copy of 'second request'
+      // is a clone OF the epoch-1 clone. It names the epoch-1 clone's
+      // physical id as its direct sourceEntryId while keeping the original
+      // logical identity — the shape the writer emits when the second
+      // compaction retains a suffix that the first compaction already cloned.
+      messageEntry('u2-copy-2', 'compact-2', 'user', 'second request', {
+        logicalId: 'u2',
+        sourceEntryId: 'u2-copy-1',
+      }),
+      messageEntry('a2-copy-2', 'u2-copy-2', 'assistant', 'second answer', {
+        logicalId: 'a2',
+        sourceEntryId: 'a2-copy-1',
+      }),
+      messageEntry('u3', 'a2-copy-2', 'user', 'third request'),
+    ];
+
+    const history = project(entries, 'u3');
+
+    expect(history.status).toBe('resolved');
+    expect(history.issues.filter((issue) =>
+      issue.code === 'compaction_boundary_invalid'
+      || issue.code === 'compaction_predecessor_missing')).toEqual([]);
+    expect(history.entries.map((entry) => entry.message.content)).toEqual([
+      'first request',
+      'first answer',
+      'second request',
+      'second answer',
+      'third request',
+    ]);
+    expect(history.entries[2]?.auditEntryIds).toEqual(['u2', 'u2-copy-1', 'u2-copy-2']);
+  });
+
   it('uses sourceEntryId as explicit provenance when a legacy logicalId changed', () => {
     const entries = [
       messageEntry('u1', null, 'user', 'request'),

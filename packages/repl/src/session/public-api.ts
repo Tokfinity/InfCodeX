@@ -219,7 +219,7 @@ export interface SessionTranscriptEntry {
   readonly parentId: string | null;
   /** Stable logical identity shared by cloned/forked copies of the same entry. */
   readonly logicalId: string;
-  /** Root source physical entry id when this transcript entry was cloned/forked. */
+  /** Direct physical predecessor entry id when this transcript entry was cloned/forked. */
   readonly sourceEntryId?: string;
   readonly timestamp: string;
   readonly type: SessionTranscriptEntryType;

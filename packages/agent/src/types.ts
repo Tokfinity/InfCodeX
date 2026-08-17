@@ -91,10 +91,10 @@ export interface KodaXSessionEntryBase {
    * SDK hosts to group or fold cloned history without comparing content.
    */
   logicalId?: string;
-  /** Root physical entry id this item was cloned from, when it is a clone. */
-  sourceEntryId?: string;
+  /** Direct physical predecessor entry id this clone was copied from (the
+   *  clone source's own id, not a transitive root — see the SDK embedder guide). */
+   sourceEntryId?: string;
 }
-
 export interface KodaXSessionMessageEntry extends KodaXSessionEntryBase {
   type: 'message';
   message: KodaXMessage;

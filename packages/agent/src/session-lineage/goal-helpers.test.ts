@@ -303,4 +303,29 @@ describe('forkSessionLineage carries the active goal forward', () => {
     expect(carried?.goal?.objective).toBe('new-objective');
     expect(carried?.event).toBe('created');
   });
+
+  it('fork-of-fork carried goal points at the first fork clone, not the original', () => {
+    const m1 = makeMsg('m1', null);
+    let lineage = makeLineage([m1], 'm1');
+    lineage = appendGoalEntry(
+      lineage,
+      makeGoal({ objective: 'direct-predecessor', id: 'goal-ABC' }),
+      'created',
+      { id: 'goal-entry-orig' },
+    );
+    const firstFork = forkSessionLineage(lineage);
+    expect(firstFork).not.toBeNull();
+    const firstCarried = readLatestGoalFromBranch(firstFork!);
+    expect(firstCarried).not.toBeNull();
+    expect(firstCarried!.sourceEntryId).toBe('goal-entry-orig');
+
+    const secondFork = forkSessionLineage(firstFork!);
+    expect(secondFork).not.toBeNull();
+    const secondCarried = readLatestGoalFromBranch(secondFork!);
+    expect(secondCarried).not.toBeNull();
+    // Direct addressing: the second-level fork's carried goal names the
+    // first-level fork clone's physical id, not the generation-0 original.
+    expect(secondCarried!.sourceEntryId).toBe(firstCarried!.id);
+    expect(secondCarried!.sourceEntryId).not.toBe('goal-entry-orig');
+  });
 });

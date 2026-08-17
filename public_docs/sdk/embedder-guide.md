@@ -842,7 +842,9 @@ interface SessionTranscriptEntry {
 
 `entryId` is the physical lineage node id. `logicalId` is stable across
 forked/cloned copies of the same transcript item, and `sourceEntryId` is present
-on cloned entries to point back to the root physical source entry. These fields
+on cloned entries to point back to the direct physical predecessor copy — the
+immediate source the clone was materialized from (until v0.7.89 it addressed
+the transitive root source; hosts must not assume root semantics). These fields
 support audit inspection, but a host must not infer the complete ordinary-chat
 fold merely by grouping them: legacy omissions and conflicting metadata require
 lineage validation. Use `readConversationHistory()` instead of implementing

@@ -27,6 +27,7 @@ import type {
   KodaXSessionArtifactLedgerEntry,
   KodaXSessionEntry,
   KodaXSessionLineage,
+  KodaXSessionMessageEntry,
 } from '@kodax-ai/agent';
 
 // 'C:/...' is absolute on win32 but RELATIVE on POSIX, so path.resolve() would
@@ -2793,6 +2794,92 @@ describe('FileSessionStorage', () => {
       .map((entry) => entry.message.content);
     expect(exactBodies).toContain('旧需求精确值是 ALPHA-9274，不得猜测。');
     expect(exactBodies).toContain('已记录 ALPHA-9274，并完成第一阶段。');
+  });
+
+  it('keeps the direct predecessor of a retained clone exact after two compaction saves', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+    const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
+    const sessionId = 'two-compactions-direct-predecessor';
+    const originalMessages = [
+      { role: 'user' as const, content: '旧需求精确值是 BETA-5501，不得猜测。' },
+      { role: 'assistant' as const, content: '已记录 BETA-5501，并完成第一阶段。' },
+    ];
+    const initialLineage = createSessionLineage(originalMessages);
+
+    await storage.save(sessionId, {
+      messages: originalMessages,
+      title: 'Two compactions',
+      gitRoot,
+      lineage: initialLineage,
+    });
+
+    const firstCompaction = applySessionCompaction(
+      initialLineage,
+      [
+        { role: 'system', content: '[对话历史摘要]\n\n第一阶段摘要。' },
+        originalMessages[1]!,
+      ],
+      { summary: '第一阶段摘要。', reason: 'automatic_compaction' },
+    );
+    // Durable commit first, then the host releases old-island bodies from
+    // memory — the eviction transaction boundary.
+    await storage.save(sessionId, {
+      messages: getSessionMessagesFromLineage(firstCompaction),
+      title: 'Two compactions',
+      gitRoot,
+      lineage: firstCompaction,
+    });
+    await storage.save(sessionId, {
+      messages: getSessionMessagesFromLineage(firstCompaction),
+      title: 'Two compactions',
+      gitRoot,
+      lineage: evictOldIslandMessageContent(firstCompaction),
+    });
+
+    const restarted = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+    const reloaded = await restarted.load(sessionId);
+    if (!reloaded?.lineage) throw new Error('expected a reloaded lineage');
+    const firstClone = getSessionLineagePath(reloaded.lineage)
+      .filter((entry): entry is KodaXSessionMessageEntry => entry.type === 'message')
+      .at(-1);
+    if (!firstClone) throw new Error('expected the first-compaction retained clone');
+
+    const secondCompaction = applySessionCompaction(
+      reloaded.lineage,
+      [
+        { role: 'system', content: '[对话历史摘要]\n\n第二阶段摘要。' },
+        firstClone.message,
+      ],
+      { summary: '第二阶段摘要。', reason: 'automatic_compaction' },
+    );
+    await restarted.save(sessionId, {
+      messages: getSessionMessagesFromLineage(secondCompaction),
+      title: 'Two compactions',
+      gitRoot,
+      lineage: evictOldIslandMessageContent(secondCompaction),
+    });
+
+    const finalReload = await new FileSessionStorage({ sessionsDir: testSessionsDir() })
+      .load(sessionId);
+    if (!finalReload?.lineage) throw new Error('expected a final lineage');
+    const secondClone = getSessionLineagePath(finalReload.lineage)
+      .filter((entry): entry is KodaXSessionMessageEntry => entry.type === 'message')
+      .at(-1);
+    if (!secondClone) throw new Error('expected the second-compaction retained clone');
+
+    // The second compaction clone names the first clone's physical id as its
+    // direct predecessor…
+    expect(secondClone.sourceEntryId).toBe(firstClone.id);
+    // …and that predecessor must survive in the slimmed main lineage with its
+    // exact body instead of being archived or placeholder-evicted.
+    const predecessor = finalReload.lineage.entries.find(
+      (entry) => entry.id === secondClone.sourceEntryId,
+    );
+    expect(predecessor).toBeDefined();
+    expect(
+      predecessor?.type === 'message' && predecessor.message.content,
+    ).toBe('已记录 BETA-5501，并完成第一阶段。');
   });
 
   it('round-trips full lineage by merging the main file and island sidecar', async () => {

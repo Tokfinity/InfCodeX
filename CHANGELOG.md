@@ -20,6 +20,13 @@ All notable changes to this project will be documented in this file.
 - Daemon log diagnostics keep Error details diagnosable: `detail` payloads
   serialize `name`/`message` plus `AggregateError.errors[]` and `cause` chains
   instead of collapsing to `{}`.
+- Chained-compaction clone provenance now addresses the direct physical
+  predecessor copy instead of the transitive root source, and archive
+  collection never removes an entry that a retained clone physically
+  references. Together these eliminate the double-booked `logicalId` shape
+  that could make repeated compaction resolve as ambiguous history;
+  `sourceEntryId` semantics for hosts change from "root physical source" to
+  "direct physical predecessor" (see the SDK embedder guide).
 
 ---
 

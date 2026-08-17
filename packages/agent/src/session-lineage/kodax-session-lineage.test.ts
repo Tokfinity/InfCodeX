@@ -367,7 +367,11 @@ describe('session lineage helpers', () => {
       const secondForkEntry = secondForkEntries[i]!;
       expect(secondForkEntry.id).not.toBe(source.id);
       expect(secondForkEntry.logicalId).toBe(source.logicalId);
-      expect(secondForkEntry.sourceEntryId).toBe(source.id);
+      // Direct addressing: the second-level fork names the first-level fork
+      // clone's physical id as its source instead of collapsing to the
+      // generation-0 original.
+      expect(secondForkEntry.sourceEntryId).toBe(forkEntries[i]!.id);
+      expect(secondForkEntry.sourceEntryId).not.toBe(source.id);
     }
   });
 
@@ -564,10 +568,54 @@ describe('session lineage helpers', () => {
       const clone = rematerialized[index]!;
       expect(clone.id).not.toBe(retained.id);
       expect(clone.logicalId).toBe(retained.logicalId);
-      expect(clone.sourceEntryId).toBe(retained.sourceEntryId);
+      // Direct addressing: the rematerialized clone names the retained fork
+      // clone's own physical id, not its collapsed cross-generation source.
+      expect(clone.sourceEntryId).toBe(retained.id);
     }
     expect(rematerialized[2]!.logicalId).toBe(rematerialized[2]!.id);
     expect(rematerialized[2]!.sourceEntryId).toBeUndefined();
+  });
+
+  it('points each compaction clone at its direct physical predecessor across chained compactions', () => {
+    const gen0 = createSessionLineage([
+      createTextMessage('user', 'chain prompt'),
+      createTextMessage('assistant', 'chain answer'),
+    ]);
+    const original = messageEntries(gen0).at(-1)!;
+
+    const gen1 = applySessionCompaction(
+      gen0,
+      [
+        { role: 'system', content: '[对话历史摘要]\n\nChain summary one' },
+        original.message,
+      ],
+      { summary: 'Chain summary one' },
+    );
+    const firstClone = messageEntries(gen1).find(
+      (entry) => entry.id !== original.id && entry.message === original.message,
+    )!;
+    expect(firstClone.sourceEntryId).toBe(original.id);
+
+    const gen2 = applySessionCompaction(
+      gen1,
+      [
+        { role: 'system', content: '[对话历史摘要]\n\nChain summary two' },
+        firstClone.message,
+      ],
+      { summary: 'Chain summary two' },
+    );
+    const secondClone = messageEntries(gen2).find(
+      (entry) => entry.message === original.message
+        && entry.id !== original.id
+        && entry.id !== firstClone.id,
+    )!;
+
+    // The gen-2 clone must name the gen-1 clone's physical id instead of
+    // collapsing to the gen-0 original, while the logical identity still
+    // anchors to the generation-0 entry.
+    expect(secondClone.sourceEntryId).toBe(firstClone.id);
+    expect(secondClone.sourceEntryId).not.toBe(original.id);
+    expect(secondClone.logicalId).toBe(original.id);
   });
 
   it('remaps a cloned compaction firstKeptEntryId into the fork', () => {
@@ -1310,6 +1358,113 @@ describe('archiveOldIslands', () => {
     collectTypes(tree);
 
     expect(allNodeTypes.has('archive_marker')).toBe(true);
+  });
+
+  it('keeps a referenced direct predecessor of a retained clone out of the archive', () => {
+    const initial = createSessionLineage([
+      createTextMessage('user', 'archive candidate prompt'),
+      createTextMessage('assistant', 'archive candidate answer'),
+    ]);
+    const originals = messageEntries(initial);
+    const compacted = applySessionCompaction(
+      initial,
+      [
+        { role: 'system', content: '[对话历史摘要]\n\nReferenced predecessor summary' },
+        originals[1]!.message,
+      ],
+      { summary: 'Referenced predecessor summary' },
+    );
+    const retainedClone = compacted.entries.find(
+      (entry): entry is KodaXSessionMessageEntry =>
+        entry.type === 'message' && entry.id !== originals[1]!.id
+        && entry.message === originals[1]!.message,
+    )!;
+    expect(retainedClone.sourceEntryId).toBe(originals[1]!.id);
+
+    const { slimmedLineage, archivedEntries, archivedCount } = archiveOldIslands(compacted);
+
+    // The retained clone still references the original answer entry, so that
+    // direct predecessor must stay in slimmedLineage instead of being
+    // archived — only the unreferenced prompt entry may be archived.
+    const archivedIds = new Set(archivedEntries.map((entry) => entry.id));
+    expect(archivedIds.has(originals[1]!.id)).toBe(false);
+    expect(slimmedLineage.entries.some((entry) => entry.id === originals[1]!.id)).toBe(true);
+    expect(archivedIds.has(originals[0]!.id)).toBe(true);
+    expect(archivedCount).toBe(1);
+  });
+
+  it('never archives an entry still referenced by a retained message clone', () => {
+    const initial = createSessionLineage([
+      createTextMessage('user', 'invariant prompt'),
+      createTextMessage('assistant', 'invariant answer'),
+      createTextMessage('assistant', 'invariant tail'),
+    ]);
+    const originals = messageEntries(initial);
+    const compacted = applySessionCompaction(
+      initial,
+      [
+        { role: 'system', content: '[对话历史摘要]\n\nInvariant summary' },
+        originals[2]!.message,
+      ],
+      { summary: 'Invariant summary' },
+    );
+    const retainedClone = compacted.entries.find(
+      (entry): entry is KodaXSessionMessageEntry =>
+        entry.type === 'message' && entry.id !== originals[2]!.id
+        && entry.message === originals[2]!.message,
+    )!;
+
+    const { slimmedLineage, archivedEntries } = archiveOldIslands(compacted);
+
+    // Invariant (one hop) — archive ∩ direct retained references = ∅: in this
+    // single-round shape every slimmed message's sourceEntryId still resolves
+    // inside the slimmed id set. Across multiple rounds the guarantee is one
+    // hop: each newest clone's direct predecessor stays addressable; older
+    // dangling references resolve again after the archive merge-back reload
+    // (storage reconcile path, pinned by the epoch-2 reader test).
+    const slimmedIds = new Set(slimmedLineage.entries.map((entry) => entry.id));
+    for (const entry of messageEntries(slimmedLineage)) {
+      if (entry.sourceEntryId === undefined || entry.sourceEntryId === entry.id) continue;
+      expect(slimmedIds.has(entry.sourceEntryId)).toBe(true);
+    }
+    const archivedIds = new Set(archivedEntries.map((entry) => entry.id));
+    expect(archivedIds.has(retainedClone.sourceEntryId)).toBe(false);
+  });
+
+  it('bounds retained predecessor generations across repeated compaction cycles', () => {
+    const initial = createSessionLineage([
+      createTextMessage('user', 'bounded round one'),
+      createTextMessage('assistant', 'bounded answer one'),
+      createTextMessage('user', 'bounded round two'),
+      createTextMessage('assistant', 'bounded answer two'),
+    ]);
+    let working = initial;
+    for (const summary of ['First cycle', 'Second cycle', 'Third cycle']) {
+      const activeTail = getSessionLineagePath(working)
+        .filter((entry): entry is KodaXSessionMessageEntry => entry.type === 'message')
+        .at(-1)!;
+      const compacted = applySessionCompaction(
+        working,
+        [
+          { role: 'system', content: `[对话历史摘要]\n\n${summary}` },
+          activeTail.message,
+        ],
+        { summary },
+      );
+      working = archiveOldIslands(compacted).slimmedLineage;
+    }
+
+    // Each cycle may retain at most one extra direct-predecessor generation,
+    // so three consecutive compactions must not accumulate retained message
+    // entries generation after generation.
+    expect(messageEntries(working).length).toBeLessThanOrEqual(2);
+
+    const latestClone = getSessionLineagePath(working)
+      .filter((entry): entry is KodaXSessionMessageEntry => entry.type === 'message')
+      .at(-1)!;
+    const retainedIds = new Set(working.entries.map((entry) => entry.id));
+    expect(latestClone.sourceEntryId).toBeDefined();
+    expect(retainedIds.has(latestClone.sourceEntryId!)).toBe(true);
   });
 });
 

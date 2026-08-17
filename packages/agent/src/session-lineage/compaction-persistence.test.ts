@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { KodaXSessionData } from '../index.js';
+import type { KodaXSessionData, KodaXSessionMessageEntry } from '../index.js';
 import {
   applySessionCompaction,
   createSessionLineage,
@@ -88,6 +88,13 @@ describe('persistCompactedSessionHistory', () => {
         _source: 'compaction-context',
       }],
     );
+    const firstCompactionClone = firstCompaction.entries
+      .filter((entry): entry is KodaXSessionMessageEntry =>
+        entry.type === 'message' && entry.message.content === 'retained exact tail')
+      .at(-1);
+    if (!firstCompactionClone) {
+      throw new Error('expected the first-compaction retained clone');
+    }
     const persisted: KodaXSessionData = {
       title: 'reloaded provenance',
       gitRoot: 'C:/repo',
@@ -128,7 +135,10 @@ describe('persistCompactedSessionHistory', () => {
 
     expect(rematerialized).toEqual(expect.objectContaining({
       logicalId: 'logical_retained_origin',
-      sourceEntryId: 'entry_retained_origin',
+      // Direct addressing: the post-reload compaction clone names the
+      // reloaded entry's own physical id, not the collapsed archived
+      // original's 'entry_retained_origin'.
+      sourceEntryId: firstCompactionClone.id,
     }));
     expect(rematerialized?.id).not.toBe(source.id);
     expect(lineage.entries).not.toContainEqual(expect.objectContaining({
