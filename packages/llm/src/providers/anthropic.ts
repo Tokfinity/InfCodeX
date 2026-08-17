@@ -4,7 +4,6 @@
  * 支持 Anthropic API 格式的 Provider 基类
  */
 
-import { createRequire } from 'node:module';
 import type Anthropic from '@anthropic-ai/sdk';
 import { KodaXBaseProvider } from './base.js';
 import { parseToolInputWithSalvageTracked } from './tool-input-parser.js';
@@ -47,13 +46,12 @@ import { resolvePromptCacheDisabled } from '../run-scoped-config.js';
 
 const KODAX_ANTHROPIC_COMPAT_USER_AGENT = 'KodaX';
 const KODAX_ANTHROPIC_EFFORT_BETA_HEADER = 'effort-2025-11-24';
-const requireModule = createRequire(import.meta.url);
 
-export function createAnthropicSdkClient(
+export async function createAnthropicSdkClient(
   options: ConstructorParameters<typeof Anthropic>[0],
-): Anthropic {
-  const sdk = requireModule('@anthropic-ai/sdk') as { readonly default: typeof Anthropic };
-  return new sdk.default(options);
+): Promise<Anthropic> {
+  const { default: AnthropicSdk } = await import('@anthropic-ai/sdk');
+  return new AnthropicSdk(options);
 }
 
 interface AnthropicRequestOptions {
@@ -192,6 +190,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
   readonly supportsThinking = true;
   protected abstract override readonly config: KodaXProviderConfig;
   private _client?: Anthropic;
+  private _clientPromise?: Promise<Anthropic>;
 
   /**
    * The SDK client is built lazily on first use. Constructing it requires the
@@ -200,17 +199,32 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
    * window, model descriptors) without a key. This also keeps key-less unit
    * tests (which mock the actual LLM calls) from failing at construction time.
    */
-  protected get client(): Anthropic {
-    return (this._client ??= this.buildClient());
+  protected async getClient(): Promise<Anthropic> {
+    if (this._client) return this._client;
+    const clientPromise = this._clientPromise ??= Promise.resolve(this.buildClient());
+    try {
+      const client = await clientPromise;
+      if (this._clientPromise === clientPromise) {
+        this._client = client;
+        this._clientPromise = undefined;
+      }
+      return this._client ?? client;
+    } catch (error) {
+      if (this._clientPromise === clientPromise) {
+        this._clientPromise = undefined;
+      }
+      throw error;
+    }
   }
 
   // Lets subclasses / tests inject a client without going through buildClient
   // (and so without requiring an API key).
   protected set client(client: Anthropic) {
     this._client = client;
+    this._clientPromise = undefined;
   }
 
-  protected buildClient(): Anthropic {
+  protected buildClient(): Anthropic | Promise<Anthropic> {
     const defaultHeaders = getAnthropicCompatDefaultHeaders(this.config);
     return createAnthropicSdkClient({
       apiKey: this.getApiKey(),
@@ -450,7 +464,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
     signal?: AbortSignal;
   }): Promise<KodaXVerifyCredentialResult> {
     const model = this.config.model;
-    const client = this.client;
+    const client = await this.getClient();
     const runners: VerifyPrimitiveRunner[] = [
       {
         strategy: 'count-tokens',
@@ -758,14 +772,15 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
 
       // 传递 signal 给 SDK，确保底层 HTTP 请求能被取消
       // 参考: https://github.com/anthropics/anthropic-sdk-typescript
-      let response: Awaited<ReturnType<typeof this.client.messages.create>> | undefined;
+      const client = await this.getClient();
+      let response: Awaited<ReturnType<typeof client.messages.create>> | undefined;
       let lastError: unknown;
 
       for (const capability of attempts) {
         while (!response) {
           try {
             const request = buildRequest(capability);
-            response = await this.client.messages.create(
+            response = await client.messages.create(
               request,
               this.buildMessageCreateOptions(request, model, signal),
             );
@@ -1179,14 +1194,15 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
         return kwargs;
       };
 
-      let response: Awaited<ReturnType<typeof this.client.messages.create>> | undefined;
+      const client = await this.getClient();
+      let response: Awaited<ReturnType<typeof client.messages.create>> | undefined;
       let lastError: unknown;
 
       for (const capability of attempts) {
         while (!response) {
           try {
             const request = buildRequest(capability);
-            response = await this.client.messages.create(
+            response = await client.messages.create(
               request,
               this.buildMessageCreateOptions(request, model, signal),
             );

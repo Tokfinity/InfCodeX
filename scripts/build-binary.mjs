@@ -31,10 +31,19 @@
  *   - npm workspaces installed (`npm ci` at repo root)
  */
 
-import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { execFile, spawnSync } from 'node:child_process';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
@@ -49,6 +58,11 @@ const HANDLER_WORKER_SIDECAR = join(ROOT, 'dist', 'constructed-handler-worker.js
 // `packages/agent/dist/capabilities/skills/builtin/`.
 const BUILTIN_SRC = join(ROOT, 'packages', 'agent', 'dist', 'capabilities', 'skills', 'builtin');
 const OUT_ROOT = join(ROOT, 'dist', 'binary');
+const REQUIRED_BUNDLED_PROVIDER_PACKAGES = [
+  '@anthropic-ai/sdk',
+  'standardwebhooks',
+  'openai',
+];
 
 const TARGETS = {
   'win-x64':      { bun: 'bun-windows-x64',     ext: '.exe' },
@@ -144,6 +158,123 @@ function runStep(label, cmd, args, opts = {}) {
   }
 }
 
+function verifyBundledProviderPackages(metadataPath) {
+  const metadata = JSON.parse(readFileSync(metadataPath, 'utf8'));
+  const inputPaths = Object.keys(metadata.inputs ?? {})
+    .map((inputPath) => inputPath.replaceAll('\\', '/'));
+  const missingPackages = REQUIRED_BUNDLED_PROVIDER_PACKAGES.filter((packageName) => (
+    !inputPaths.some((inputPath) => inputPath.includes(`/node_modules/${packageName}/`))
+  ));
+  rmSync(metadataPath, { force: true });
+  if (missingPackages.length > 0) {
+    throw new Error(
+      `Standalone binary is missing bundled provider dependencies: ${missingPackages.join(', ')}`,
+    );
+  }
+  process.stdout.write('    ✓ bundled provider SDK dependencies\n');
+}
+
+function runCapturedCommand(command, args, options) {
+  return new Promise((resolveResult, rejectResult) => {
+    execFile(command, args, options, (error, stdout, stderr) => {
+      if (error?.killed || error?.signal) {
+        rejectResult(error);
+        return;
+      }
+      resolveResult({ status: error?.code ?? 0, stdout, stderr });
+    });
+  });
+}
+
+async function startProviderSmokeServer(requestPaths) {
+  const server = createServer((request, response) => {
+    requestPaths.push(request.url ?? '');
+    response.writeHead(401, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({
+      type: 'error',
+      error: { type: 'authentication_error', message: 'binary provider smoke' },
+    }));
+  });
+  await new Promise((resolveListen, rejectListen) => {
+    server.once('error', rejectListen);
+    server.listen(0, '127.0.0.1', resolveListen);
+  });
+
+  const address = server.address();
+  if (!address || typeof address === 'string') {
+    server.close();
+    throw new Error('Standalone provider smoke failed to allocate a loopback port.');
+  }
+  return { server, baseUrl: `http://127.0.0.1:${address.port}` };
+}
+
+async function verifyProviderRuntimeProbe(binaryPath, smokeHome, provider, requestPaths) {
+  const requestCountBefore = requestPaths.length;
+  const result = await runCapturedCommand(
+    binaryPath,
+    ['-p', 'ping', '-m', provider.name, '--no-session', '--max-iter', '1'],
+    {
+      cwd: dirname(binaryPath),
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        KODAX_HOME: smokeHome,
+        KODAX_TRACING: '0',
+        [provider.apiKeyEnv]: 'binary-smoke-key',
+      },
+      timeout: 30_000,
+      windowsHide: true,
+      maxBuffer: 4 * 1024 * 1024,
+    },
+  );
+  const output = `${result.stdout}\n${result.stderr}`;
+  if (/Cannot find (?:module|package)/i.test(output)) {
+    throw new Error(`Standalone ${provider.protocol} SDK load failed:\n${output.trim()}`);
+  }
+  if (requestPaths.length === requestCountBefore) {
+    throw new Error(
+      `Standalone ${provider.protocol} SDK smoke did not reach the loopback server `
+      + `(exit ${result.status}):\n${output.trim()}`,
+    );
+  }
+}
+
+async function verifyBundledProviderRuntime(binaryPath, smokeHome) {
+  const requestPaths = [];
+  const { server, baseUrl } = await startProviderSmokeServer(requestPaths);
+
+  try {
+    const providers = [
+      {
+        name: 'binary-smoke-anthropic',
+        protocol: 'anthropic',
+        baseUrl,
+        apiKeyEnv: 'KODAX_BINARY_SMOKE_ANTHROPIC_KEY',
+        model: 'smoke-model',
+      },
+      {
+        name: 'binary-smoke-openai',
+        protocol: 'openai',
+        baseUrl: `${baseUrl}/v1`,
+        apiKeyEnv: 'KODAX_BINARY_SMOKE_OPENAI_KEY',
+        model: 'smoke-model',
+      },
+    ];
+    writeFileSync(
+      join(smokeHome, 'config.json'),
+      JSON.stringify({ customProviders: providers }),
+      'utf8',
+    );
+
+    for (const provider of providers) {
+      await verifyProviderRuntimeProbe(binaryPath, smokeHome, provider, requestPaths);
+    }
+    process.stdout.write('    ✓ standalone smoke: bundled Anthropic and OpenAI SDK runtime\n');
+  } finally {
+    await new Promise((resolveClose) => server.close(resolveClose));
+  }
+}
+
 function buildOne(target, version) {
   const spec = TARGETS[target];
   if (!spec) {
@@ -153,6 +284,7 @@ function buildOne(target, version) {
   const outDir = join(OUT_ROOT, target);
   const binaryName = `kodax${spec.ext}`;
   const binaryPath = join(outDir, binaryName);
+  const metadataPath = join(outDir, 'bun-build-metadata.json');
 
   // Reset target dir so each build is hermetic (avoids stale builtin/ across runs).
   rmSync(outDir, { recursive: true, force: true });
@@ -179,9 +311,11 @@ function buildOne(target, version) {
       `--define`, `process.env.KODAX_BUNDLED='true'`,
       `--define`, `process.env.KODAX_MODULE_BUNDLE='true'`,
       `--define`, `process.env.KODAX_VERSION='${version}'`,
+      `--metafile=${metadataPath}`,
       '--outfile', binaryPath,
     ],
   );
+  verifyBundledProviderPackages(metadataPath);
 
   // 2. Sidecar builtin/ (skill assets resolved by KODAX_BUNDLED branch at runtime)
   if (!existsSync(BUILTIN_SRC)) {
@@ -224,11 +358,14 @@ function buildOne(target, version) {
   console.log(`    ✓ ${target}: ${binaryPath}`);
 }
 
-function verifyHostBinary(binaryPath) {
+async function verifyHostBinary(binaryPath) {
   const smokeHome = mkdtempSync(join(tmpdir(), 'kodax-binary-smoke-'));
   try {
-    const result = spawnSync(binaryPath, ['a2a', 'list'], {
-      cwd: ROOT,
+    const packageDir = join(smokeHome, 'package');
+    cpSync(dirname(binaryPath), packageDir, { recursive: true });
+    const smokeBinaryPath = join(packageDir, basename(binaryPath));
+    const result = spawnSync(smokeBinaryPath, ['a2a', 'list'], {
+      cwd: packageDir,
       encoding: 'utf8',
       env: {
         ...process.env,
@@ -264,11 +401,11 @@ function verifyHostBinary(binaryPath) {
     }
     console.log(`    ✓ standalone smoke: one A2A v2 document`);
 
-    const bunChildResult = spawnSync(binaryPath, [
+    const bunChildResult = spawnSync(smokeBinaryPath, [
       '-e',
       'process.stdout.write("kodax-bun-child")',
     ], {
-      cwd: ROOT,
+      cwd: packageDir,
       encoding: 'utf8',
       env: {
         ...process.env,
@@ -289,12 +426,12 @@ function verifyHostBinary(binaryPath) {
     }
     console.log(`    ✓ standalone smoke: JavaScript child Bun mode`);
 
-    const skillResult = spawnSync(binaryPath, [
+    const skillResult = spawnSync(smokeBinaryPath, [
       'skill',
       'validate',
-      join(dirname(binaryPath), 'builtin', 'skill-creator'),
+      join(packageDir, 'builtin', 'skill-creator'),
     ], {
-      cwd: ROOT,
+      cwd: packageDir,
       encoding: 'utf8',
       env: {
         ...process.env,
@@ -317,14 +454,14 @@ function verifyHostBinary(binaryPath) {
     console.log(`    ✓ standalone smoke: bundled skill dispatcher`);
 
     const packagePath = join(smokeHome, 'skill-creator.skill');
-    const packageResult = spawnSync(binaryPath, [
+    const packageResult = spawnSync(smokeBinaryPath, [
       'skill',
       'package',
-      join(dirname(binaryPath), 'builtin', 'skill-creator'),
+      join(packageDir, 'builtin', 'skill-creator'),
       '--output',
       packagePath,
     ], {
-      cwd: ROOT,
+      cwd: packageDir,
       encoding: 'utf8',
       env: {
         ...process.env,
@@ -346,6 +483,7 @@ function verifyHostBinary(binaryPath) {
       );
     }
     console.log(`    ✓ standalone smoke: bundled YAML and fflate dependencies`);
+    await verifyBundledProviderRuntime(smokeBinaryPath, smokeHome);
   } finally {
     rmSync(smokeHome, { recursive: true, force: true });
   }
@@ -400,7 +538,7 @@ async function main() {
   const hostTarget = (() => { try { return detectCurrentTarget(); } catch { return null; } })();
   if (hostTarget && targets.includes(hostTarget)) {
     const ext = TARGETS[hostTarget].ext;
-    verifyHostBinary(join(OUT_ROOT, hostTarget, `kodax${ext}`));
+    await verifyHostBinary(join(OUT_ROOT, hostTarget, `kodax${ext}`));
   }
   console.log(`\n✓ build complete → ${OUT_ROOT}`);
 }

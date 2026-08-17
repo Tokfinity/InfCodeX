@@ -6,6 +6,20 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Standalone Bun binaries now bundle the Anthropic and OpenAI SDK dependency
+  graphs while retaining first-use lazy loading, so provider startup no longer
+  falls back to filesystem `node_modules` resolution or fails on transitive
+  packages such as `standardwebhooks`.
+
+### Changed
+
+- Provider subclasses that access the protected SDK client directly must now
+  use `await getClient()`. Synchronous `buildClient()` overrides remain
+  supported, but the base Anthropic/OpenAI loaders are asynchronous so Bun can
+  discover and embed their literal dynamic imports.
+
 ## [0.7.90] - 2026-08-17
 
 ### Fixed

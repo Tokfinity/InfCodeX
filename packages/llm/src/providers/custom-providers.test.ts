@@ -566,7 +566,7 @@ describe('custom providers', () => {
     vi.stubEnv('CUSTOM_OPENAI_API_KEY', 'configured-key');
     const provider = createCustomProvider(cloneConfig(OPENAI_CUSTOM)) as any;
 
-    const request = await provider.client.buildRequest({
+    const request = await (await provider.getClient()).buildRequest({
       method: 'post',
       path: '/chat/completions',
       body: {
@@ -588,7 +588,7 @@ describe('custom providers', () => {
       }),
     ) as any;
 
-    const request = await provider.client.buildRequest({
+    const request = await (await provider.getClient()).buildRequest({
       method: 'post',
       path: '/chat/completions',
       body: {
@@ -605,7 +605,7 @@ describe('custom providers', () => {
     vi.stubEnv('CUSTOM_ANTHROPIC_API_KEY', 'configured-key');
     const provider = createCustomProvider(cloneConfig(ANTHROPIC_CUSTOM)) as any;
 
-    const request = await provider.client.buildRequest({
+    const request = await (await provider.getClient()).buildRequest({
       method: 'post',
       path: '/v1/messages',
       body: {
@@ -628,7 +628,7 @@ describe('custom providers', () => {
       }),
     ) as any;
 
-    const request = await provider.client.buildRequest({
+    const request = await (await provider.getClient()).buildRequest({
       method: 'post',
       path: '/v1/messages',
       body: {

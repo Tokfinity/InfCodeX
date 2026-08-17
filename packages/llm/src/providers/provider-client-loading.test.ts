@@ -1,0 +1,133 @@
+import type Anthropic from '@anthropic-ai/sdk';
+import type OpenAI from 'openai';
+import { describe, expect, it } from 'vitest';
+import type { KodaXProviderConfig } from '../types.js';
+import { KodaXAnthropicCompatProvider } from './anthropic.js';
+import { KodaXOpenAICompatProvider } from './openai.js';
+
+const CONFIG: KodaXProviderConfig = {
+  apiKeyEnv: 'TEST_API_KEY',
+  model: 'test-model',
+  supportsThinking: false,
+  contextWindow: 128_000,
+};
+
+class TestAnthropicProvider extends KodaXAnthropicCompatProvider {
+  readonly name = 'test-anthropic-client-loading';
+  protected readonly config = CONFIG;
+  buildCount = 0;
+
+  constructor(private readonly builder: () => Promise<Anthropic>) {
+    super();
+  }
+
+  protected override buildClient(): Promise<Anthropic> {
+    this.buildCount += 1;
+    return this.builder();
+  }
+
+  loadClient(): Promise<Anthropic> {
+    return this.getClient();
+  }
+
+  markConnectionStale(): void {
+    this.onStaleConnection();
+  }
+}
+
+class TestOpenAIProvider extends KodaXOpenAICompatProvider {
+  readonly name = 'test-openai-client-loading';
+  protected readonly config = CONFIG;
+  buildCount = 0;
+
+  constructor(private readonly builder: () => Promise<OpenAI>) {
+    super();
+  }
+
+  protected override buildClient(): Promise<OpenAI> {
+    this.buildCount += 1;
+    return this.builder();
+  }
+
+  loadClient(): Promise<OpenAI> {
+    return this.getClient();
+  }
+}
+
+describe('provider client loading', () => {
+  it('keeps one Anthropic replacement build when stale errors overlap', async () => {
+    const oldClient = {} as Anthropic;
+    const replacementClient = {} as Anthropic;
+    let resolveReplacement: ((client: Anthropic) => void) | undefined;
+    const replacement = new Promise<Anthropic>((resolve) => {
+      resolveReplacement = resolve;
+    });
+    let buildIndex = 0;
+    const provider = new TestAnthropicProvider(() => {
+      buildIndex += 1;
+      return buildIndex === 1 ? Promise.resolve(oldClient) : replacement;
+    });
+
+    expect(await provider.loadClient()).toBe(oldClient);
+    provider.markConnectionStale();
+    const firstReplacementLoad = provider.loadClient();
+    provider.markConnectionStale();
+    const secondReplacementLoad = provider.loadClient();
+
+    expect(provider.buildCount).toBe(2);
+    resolveReplacement?.(replacementClient);
+    await expect(firstReplacementLoad).resolves.toBe(replacementClient);
+    await expect(secondReplacementLoad).resolves.toBe(replacementClient);
+  });
+
+  it('coalesces concurrent OpenAI client initialization', async () => {
+    const client = {} as OpenAI;
+    let resolveClient: ((value: OpenAI) => void) | undefined;
+    const pendingClient = new Promise<OpenAI>((resolve) => {
+      resolveClient = resolve;
+    });
+    const provider = new TestOpenAIProvider(() => pendingClient);
+
+    const firstLoad = provider.loadClient();
+    const secondLoad = provider.loadClient();
+
+    expect(provider.buildCount).toBe(1);
+    resolveClient?.(client);
+    await expect(firstLoad).resolves.toBe(client);
+    await expect(secondLoad).resolves.toBe(client);
+    await expect(provider.loadClient()).resolves.toBe(client);
+    expect(provider.buildCount).toBe(1);
+  });
+
+  it('retries Anthropic client initialization after a rejection', async () => {
+    const client = {} as Anthropic;
+    let shouldReject = true;
+    const provider = new TestAnthropicProvider(() => {
+      if (shouldReject) {
+        shouldReject = false;
+        return Promise.reject(new Error('first load failed'));
+      }
+      return Promise.resolve(client);
+    });
+
+    await expect(provider.loadClient()).rejects.toThrow('first load failed');
+    await expect(provider.loadClient()).resolves.toBe(client);
+    expect(provider.buildCount).toBe(2);
+  });
+
+  it('retries OpenAI client initialization after a rejection', async () => {
+    const client = {} as OpenAI;
+    let shouldReject = true;
+    const provider = new TestOpenAIProvider(() => {
+      if (shouldReject) {
+        shouldReject = false;
+        return Promise.reject(new Error('first load failed'));
+      }
+      return Promise.resolve(client);
+    });
+
+    await expect(provider.loadClient()).rejects.toThrow('first load failed');
+    await expect(provider.loadClient()).resolves.toBe(client);
+    expect(provider.buildCount).toBe(2);
+  });
+});

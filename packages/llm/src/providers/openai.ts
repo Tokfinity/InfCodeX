@@ -4,7 +4,6 @@
  * 支持 OpenAI API 格式的 Provider 基类
  */
 
-import { createRequire } from 'node:module';
 import type OpenAI from 'openai';
 import { KodaXBaseProvider } from './base.js';
 import { KodaXProviderError } from '../errors.js';
@@ -47,13 +46,12 @@ import {
 import { resolvePromptCacheDisabled } from '../run-scoped-config.js';
 
 const KODAX_OPENAI_COMPAT_USER_AGENT = 'KodaX';
-const requireModule = createRequire(import.meta.url);
 
-function createOpenAISdkClient(
+async function createOpenAISdkClient(
   options: ConstructorParameters<typeof OpenAI>[0],
-): OpenAI {
-  const sdk = requireModule('openai') as { readonly default: typeof OpenAI };
-  return new sdk.default(options);
+): Promise<OpenAI> {
+  const { default: OpenAISdk } = await import('openai');
+  return new OpenAISdk(options);
 }
 
 type OpenAIReasoningAttempt =
@@ -317,6 +315,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
   readonly supportsThinking = true;
   protected abstract override readonly config: KodaXProviderConfig;
   private _client?: OpenAI;
+  private _clientPromise?: Promise<OpenAI>;
 
   override supportsEphemeralSuffix(): boolean {
     return true;
@@ -329,17 +328,32 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
    * window, model descriptors) without a key. This also keeps key-less unit
    * tests (which mock the actual LLM calls) from failing at construction time.
    */
-  protected get client(): OpenAI {
-    return (this._client ??= this.buildClient());
+  protected async getClient(): Promise<OpenAI> {
+    if (this._client) return this._client;
+    const clientPromise = this._clientPromise ??= Promise.resolve(this.buildClient());
+    try {
+      const client = await clientPromise;
+      if (this._clientPromise === clientPromise) {
+        this._client = client;
+        this._clientPromise = undefined;
+      }
+      return this._client ?? client;
+    } catch (error) {
+      if (this._clientPromise === clientPromise) {
+        this._clientPromise = undefined;
+      }
+      throw error;
+    }
   }
 
   // Lets subclasses / tests inject a client without going through buildClient
   // (and so without requiring an API key).
   protected set client(client: OpenAI) {
     this._client = client;
+    this._clientPromise = undefined;
   }
 
-  protected buildClient(): OpenAI {
+  protected buildClient(): OpenAI | Promise<OpenAI> {
     const defaultHeaders = getOpenAICompatDefaultHeaders(this.config);
     return createOpenAISdkClient({
       apiKey: this.getApiKey(),
@@ -386,7 +400,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
   }): Promise<KodaXVerifyCredentialResult> {
     const model = this.config.model;
     const wireModel = this.getWireModelId(model);
-    const client = this.client;
+    const client = await this.getClient();
     const runners: VerifyPrimitiveRunner[] = [
       {
         strategy: 'models-list',
@@ -880,6 +894,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
         };
       }
 
+      const client = await this.getClient();
       let stream: AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk> | undefined;
       let lastError: unknown;
 
@@ -899,7 +914,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
           this.applyReasoningCapability(attemptParams, model, capability, normalizedReasoning);
 
           try {
-            stream = await this.client.chat.completions.create(
+            stream = await client.chat.completions.create(
               attemptParams,
               signal ? { signal } : {},
             );
@@ -1167,6 +1182,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       let response: OpenAI.Chat.Completions.ChatCompletion | undefined;
       let lastError: unknown;
 
+      const client = await this.getClient();
       for (const capability of attempts) {
         // Mirror the stream() path: an inner `while (!response)` so a
         // forced-tool-choice rejection retries the SAME capability without
@@ -1189,7 +1205,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
           );
 
           try {
-            response = await this.client.chat.completions.create(
+            response = await client.chat.completions.create(
               attemptParams,
               signal ? { signal } : {},
             ) as OpenAI.Chat.Completions.ChatCompletion;

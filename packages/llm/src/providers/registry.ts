@@ -182,7 +182,7 @@ class AnthropicProvider extends KodaXAnthropicCompatProvider {
 
   // Anthropic proper talks to api.anthropic.com and must keep the SDK's
   // native user agent — unlike the compat base, it adds no gateway headers.
-  protected override buildClient(): Anthropic {
+  protected override buildClient(): Promise<Anthropic> {
     return createAnthropicSdkClient({ apiKey: this.getApiKey() });
   }
 }
