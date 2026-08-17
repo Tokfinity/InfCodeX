@@ -15600,7 +15600,7 @@ describe("createKodaXRuntime", () => {
         "permission request timeoutMs must be a non-negative integer no greater than 2147483647.",
       );
       expect(() => request({
-        expiresAt: new Date(Date.now() + 2_147_483_648).toISOString(),
+        expiresAt: new Date(Date.now() + 2_147_483_648 + 1_000).toISOString(),
       })).toThrow(
         "permission request expiresAt must be no more than 2147483647ms in the future.",
       );
