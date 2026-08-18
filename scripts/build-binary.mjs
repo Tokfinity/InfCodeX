@@ -162,9 +162,12 @@ function verifyBundledProviderPackages(metadataPath) {
   const metadata = JSON.parse(readFileSync(metadataPath, 'utf8'));
   const inputPaths = Object.keys(metadata.inputs ?? {})
     .map((inputPath) => inputPath.replaceAll('\\', '/'));
-  const missingPackages = REQUIRED_BUNDLED_PROVIDER_PACKAGES.filter((packageName) => (
-    !inputPaths.some((inputPath) => inputPath.includes(`/node_modules/${packageName}/`))
-  ));
+  const missingPackages = REQUIRED_BUNDLED_PROVIDER_PACKAGES.filter((packageName) => {
+    const packagePath = `node_modules/${packageName}/`;
+    return !inputPaths.some((inputPath) => (
+      inputPath.startsWith(packagePath) || inputPath.includes(`/${packagePath}`)
+    ));
+  });
   rmSync(metadataPath, { force: true });
   if (missingPackages.length > 0) {
     throw new Error(

@@ -78,6 +78,13 @@ describe('GitHub release workflow', () => {
     expect(source).toContain('verifyHostBinary(join(OUT_ROOT, hostTarget');
   });
 
+  it('recognizes bundled provider packages in npm and nested node_modules layouts', () => {
+    const source = readFileSync(resolve('scripts/build-binary.mjs'), 'utf8');
+
+    expect(source).toContain('inputPath.startsWith(packagePath)');
+    expect(source).toContain('inputPath.includes(`/${packagePath}`)');
+  });
+
   it('caches the packaged Electron smoke toolchain in CI and releases', () => {
     const release = parse(
       readFileSync(resolve('.github/workflows/release.yml'), 'utf8'),
