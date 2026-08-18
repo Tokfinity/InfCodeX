@@ -399,7 +399,9 @@ import {
   computeTranscriptCapStart,
   isTranscriptHiddenDivider,
   materializeTranscriptRenderModel,
+  sliceHistoryToRecentCanonicalItems,
   sliceHistoryToRecentRounds,
+  transcriptRenderCapForHistory,
   TRANSCRIPT_HARD_LINE_CAP,
   TRANSCRIPT_HIDDEN_DIVIDER_ID,
   TRANSCRIPT_MODE_VISIBLE_MESSAGES,
@@ -2151,6 +2153,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     const start = computeTranscriptCapStart(
       fullDisplayHistory,
       transcriptCapAnchorRef,
+      transcriptRenderCapForHistory(fullDisplayHistory),
     );
     return start === 0 ? fullDisplayHistory : fullDisplayHistory.slice(start);
   }, [fullDisplayHistory]);
@@ -3370,10 +3373,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     if (!isTranscriptMode || showAllInTranscript) {
       return rawTranscriptDisplayItems;
     }
-    if (rawTranscriptDisplayItems.length <= TRANSCRIPT_MODE_VISIBLE_MESSAGES) {
-      return rawTranscriptDisplayItems;
-    }
-    const visibleSlice = rawTranscriptDisplayItems.slice(-TRANSCRIPT_MODE_VISIBLE_MESSAGES);
+    const visibleSlice = sliceHistoryToRecentCanonicalItems(
+      rawTranscriptDisplayItems,
+      TRANSCRIPT_MODE_VISIBLE_MESSAGES,
+    );
+    if (visibleSlice.length === rawTranscriptDisplayItems.length) return rawTranscriptDisplayItems;
     const hiddenCount = rawTranscriptDisplayItems.length - visibleSlice.length;
     const divider = buildTranscriptHiddenDivider(
       hiddenCount,
@@ -6530,22 +6534,23 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   // Re-sync when history is cleared (e.g., after /compact command)
   // Only sync if history is empty to avoid duplicates (Issue 046)
   useEffect(() => {
-    if (context.messages.length > 0 && history.length === 0) {
-      if (context.uiHistory?.length) {
-        const persistedHistory = trimPersistedUiHistorySnapshot(context.uiHistory);
-        if (persistedHistory.length !== context.uiHistory.length) {
-          context.uiHistory = persistedHistory;
-        }
-        // FEATURE_212 (v0.7.45) — bulk-add in ONE dispatch. The per-item loop
-        // here triggered N dispatches → N re-renders, each re-resolving the
-        // growing transcript: O(n²) resume lag on long `kodax -c` sessions.
-        addHistoryItems(restoreHistoryItemsFromSession({
-          messages: context.messages,
-          uiHistory: persistedHistory,
-        }));
-        return;
+    if (history.length !== 0) return;
+    if (context.uiHistory?.length) {
+      const persistedHistory = trimPersistedUiHistorySnapshot(context.uiHistory);
+      if (persistedHistory.length !== context.uiHistory.length) {
+        context.uiHistory = persistedHistory;
       }
+      // FEATURE_212 (v0.7.45) — bulk-add in ONE dispatch. The per-item loop
+      // here triggered N dispatches → N re-renders, each re-resolving the
+      // growing transcript: O(n²) resume lag on long `kodax -c` sessions.
+      addHistoryItems(restoreHistoryItemsFromSession({
+        messages: context.messages,
+        uiHistory: persistedHistory,
+      }));
+      return;
+    }
 
+    if (context.messages.length > 0) {
       addHistoryItems(restoreHistoryItemsFromSession({ messages: context.messages }));
     }
   }, [context.messages, context.uiHistory, history.length, addHistoryItems]);

@@ -428,6 +428,8 @@ export interface HistoryItemBase {
   id: string;
   type: HistoryItemType;
   timestamp: number;
+  /** Ephemeral marker used so restored display-only entries cannot evict canonical transcript history. */
+  isSessionUiOnly?: boolean;
 }
 
 /**

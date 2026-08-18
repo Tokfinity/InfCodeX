@@ -115,6 +115,7 @@ describe('FEATURE_218 manual registry', () => {
     expect(sdk).toContain('crashOutcomeModel:2');
     expect(sdk).toContain('KodaXFileLockTimeoutError');
     expect(sdk).toContain('executor Promise');
+    expect(sdk).toContain('Resume reconstruction uses canonical Session messages');
     expect(tools).toContain('KodaX file lock timed out');
     expect(sandbox).toContain('version 4');
     expect(sandbox).toContain('token-scoped durable marker');

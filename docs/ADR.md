@@ -11,8 +11,10 @@
 > repo/task projections are asynchronous; Runtime uses the executor Promise, not
 > managed `onComplete`, as terminal authority. Hosts negotiate `sandboxRuntime:4`
 > and `crashOutcomeModel:2`. Idle daemons may be replaced; busy ones fail closed.
-> There is no host-side lock-file deletion path. Issue 256's lost-ancestor
-> descendant-closure boundary remains open.
+> There is no host-side lock-file deletion path. Resume reconstruction uses
+> canonical Session `messages` as the ordinary-conversation source; `uiHistory`
+> is a display overlay and cannot suppress that baseline (Issue 296). Issue
+> 256's lost-ancestor descendant-closure boundary remains open.
 >
 > **v0.7.89 release addendum:** ordinary conversation topology treats
 > replaceable managed-run/runtime-context envelopes as transparent while the

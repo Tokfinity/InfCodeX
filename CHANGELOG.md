@@ -27,6 +27,11 @@ All notable changes to this project will be documented in this file.
   Promise. `KodaXResult.managedTask` is the terminal core snapshot; maintenance
   may add repo-intelligence evidence to the eventual on-disk projection without
   mutating the already-returned result.
+- Resume reconstruction treats canonical Session `messages` as the only source
+  of ordinary conversation. A sparse, stale, or slash-command-only `uiHistory`
+  cache can overlay timestamps, compact labels, icons, and sanitized tool cards,
+  or append display-only entries such as `/quit`, but it can no longer hide
+  user/assistant history or evict the 150-item / 50-round canonical window.
 
 ### Changed
 

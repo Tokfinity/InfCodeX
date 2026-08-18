@@ -86,7 +86,7 @@ export function createHistoryItem(
  * starts with a "user" item). Shared by the single-add and bulk-add reducer
  * paths so they trim identically. No-op when under the cap.
  */
-export function trimHistoryToRounds(history: HistoryItem[]): HistoryItem[] {
+function trimCanonicalHistoryToRounds(history: HistoryItem[]): HistoryItem[] {
   if (history.length <= MAX_HISTORY_ITEMS) {
     return history;
   }
@@ -106,6 +106,26 @@ export function trimHistoryToRounds(history: HistoryItem[]): HistoryItem[] {
     .findIndex((item) => item.type === "user");
   if (nextUserOffset > 0) cutIndex += nextUserOffset;
   return history.slice(cutIndex);
+}
+
+export function trimHistoryToRounds(history: HistoryItem[]): HistoryItem[] {
+  if (!history.some((item) => item.isSessionUiOnly)) {
+    return trimCanonicalHistoryToRounds(history);
+  }
+
+  const canonicalItems = history.filter((item) => !item.isSessionUiOnly);
+  const canonicalWindow = trimCanonicalHistoryToRounds(canonicalItems);
+  const firstCanonical = canonicalWindow[0];
+  const canonicalPrefixWasTrimmed = canonicalWindow.length < canonicalItems.length;
+  const firstCanonicalIndex = canonicalPrefixWasTrimmed && firstCanonical !== undefined
+    ? history.indexOf(firstCanonical)
+    : 0;
+  const uiOnlyItems = history.filter((item, index) => (
+    item.isSessionUiOnly === true && index >= firstCanonicalIndex
+  ));
+  const uiOnlyWindow = trimCanonicalHistoryToRounds(uiOnlyItems);
+  const retained = new Set<HistoryItem>([...canonicalWindow, ...uiOnlyWindow]);
+  return history.filter((item) => retained.has(item));
 }
 
 /**

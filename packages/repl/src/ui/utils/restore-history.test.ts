@@ -120,7 +120,7 @@ describe("restore-history / timestamps", () => {
     ]);
   });
 
-  it("does not recover a timestamp from an unrelated suffix match", () => {
+  it("drops unrelated persisted text instead of treating it as canonical", () => {
     const result = restoreHistoryItemsFromSession({
       messages: [
         { role: "assistant", content: "foobar", timestamp: "2026-07-18T03:00:26.766Z" },
@@ -131,10 +131,180 @@ describe("restore-history / timestamps", () => {
       ],
     });
 
-    expect(result.map((item) => item.timestamp)).toEqual([
-      undefined,
-      Date.parse("2026-07-18T03:00:26.766Z"),
+    expect(result).toEqual([{
+      type: "assistant",
+      text: "foobar",
+      timestamp: Date.parse("2026-07-18T03:00:26.766Z"),
+    }]);
+  });
+
+  it("uses persisted display metadata without replacing canonical text", () => {
+    const result = restoreHistoryItemsFromSession({
+      messages: [
+        { role: "assistant", content: "canonical answer", timestamp: "2026-07-18T03:00:26.766Z" },
+      ],
+      uiHistory: [
+        {
+          type: "assistant",
+          text: "[Worker] canonical answer",
+          compactText: "short answer",
+          timestamp: 9_000,
+        },
+      ],
+    });
+
+    expect(result).toEqual([{
+      type: "assistant",
+      text: "canonical answer",
+      compactText: "short answer",
+      timestamp: 9_000,
+    }]);
+  });
+});
+
+describe("restore-history / canonical transcript authority", () => {
+  it("keeps canonical conversation when the persisted projection only contains /quit", () => {
+    const result = restoreHistoryItemsFromSession({
+      messages: [
+        { role: "user", content: "What changed?" },
+        { role: "assistant", content: "The restore contract changed." },
+      ],
+      uiHistory: [{ type: "user", text: "/quit" }],
+    });
+
+    expect(result.map((item) => item.type === "tool_group"
+      ? "tool_group"
+      : `${item.type}:${item.text}`)).toEqual([
+      "user:What changed?",
+      "assistant:The restore contract changed.",
+      "user:/quit",
     ]);
+  });
+
+  it("keeps the bounded canonical baseline when uiHistory is only a matching suffix", () => {
+    const result = restoreHistoryItemsFromSession({
+      messages: [
+        { role: "user", content: "first question" },
+        { role: "assistant", content: "first answer" },
+        { role: "user", content: "second question" },
+        { role: "assistant", content: "second answer" },
+      ],
+      uiHistory: [
+        { type: "user", text: "second question" },
+        { type: "assistant", text: "second answer" },
+        { type: "user", text: "/quit" },
+      ],
+    });
+
+    expect(result.map((item) => item.type === "tool_group"
+      ? "tool_group"
+      : `${item.type}:${item.text}`)).toEqual([
+      "user:first question",
+      "assistant:first answer",
+      "user:second question",
+      "assistant:second answer",
+      "user:/quit",
+    ]);
+  });
+
+  it("places an unmatched persisted tail after canonical items omitted from the cache", () => {
+    const result = restoreHistoryItemsFromSession({
+      messages: [
+        { role: "user", content: "question" },
+        { role: "assistant", content: "answer" },
+      ],
+      uiHistory: [
+        { type: "user", text: "question" },
+        { type: "user", text: "/quit" },
+      ],
+    });
+
+    expect(result.map((item) => item.type === "tool_group"
+      ? "tool_group"
+      : `${item.type}:${item.text}`)).toEqual([
+      "user:question",
+      "assistant:answer",
+      "user:/quit",
+    ]);
+  });
+
+  it("trims the canonical baseline before appending a sparse UI-only tail", () => {
+    const messages = Array.from({ length: 60 }, (_, index) => {
+      const toolId = `tool-${index}`;
+      return [
+        { role: "user" as const, content: `question-${index}` },
+        {
+          role: "assistant" as const,
+          content: [
+            { type: "tool_use" as const, id: toolId, name: "read", input: {} },
+            { type: "text" as const, text: `answer-${index}` },
+          ],
+        },
+        {
+          role: "user" as const,
+          content: [{ type: "tool_result" as const, tool_use_id: toolId, content: `output-${index}` }],
+        },
+      ];
+    }).flat();
+    const uiHistory: KodaXSessionUiHistoryItem[] = Array.from(
+      { length: 4 },
+      () => ({ type: "user", text: "/quit" }),
+    );
+
+    const result = restoreHistoryItemsFromSession({ messages, uiHistory });
+
+    expect(result).toHaveLength(154);
+    expect(result[0]).toMatchObject({ type: "user", text: "question-10" });
+    expect(result.slice(-4).map((item) => item.type === "tool_group" ? "tool" : item.text))
+      .toEqual(["/quit", "/quit", "/quit", "/quit"]);
+  });
+
+  it("does not resurrect canonical text that is outside the bounded window", () => {
+    const messages = Array.from({ length: 60 }, (_, index) => [
+      { role: "user" as const, content: `question-${index}` },
+      { role: "assistant" as const, content: `answer-${index}` },
+    ]).flat();
+
+    const result = restoreHistoryItemsFromSession({
+      messages,
+      uiHistory: [
+        { type: "user", text: "question-0" },
+        { type: "assistant", text: "answer-0" },
+        { type: "user", text: "/quit" },
+      ],
+    });
+
+    expect(result).toHaveLength(101);
+    expect(result[0]).toMatchObject({ type: "user", text: "question-10" });
+    expect(result.some((item) => item.type !== "tool_group" && item.text === "question-0"))
+      .toBe(false);
+    expect(result.at(-1)).toMatchObject({ type: "user", text: "/quit" });
+  });
+
+  it("drops unmatched ordinary text from a stale non-empty projection", () => {
+    const result = restoreHistoryItemsFromSession({
+      messages: [
+        { role: "user", content: "question" },
+        { role: "assistant", content: "canonical answer" },
+      ],
+      uiHistory: [{ type: "assistant", text: "stale answer" }],
+    });
+
+    expect(result.map((item) => item.type === "tool_group"
+      ? "tool_group"
+      : `${item.type}:${item.text}`)).toEqual([
+      "user:question",
+      "assistant:canonical answer",
+    ]);
+  });
+
+  it("does not revive ordinary text when non-empty messages yield no visible seeds", () => {
+    const result = restoreHistoryItemsFromSession({
+      messages: [{ role: "system", content: "internal scaffolding" }],
+      uiHistory: [{ type: "assistant", text: "stale answer" }],
+    });
+
+    expect(result).toEqual([]);
   });
 });
 
@@ -196,7 +366,7 @@ describe("restore-history / tool identity", () => {
       ? item.tools.map((tool) => tool.id)
       : []);
     expect(toolIds).toEqual(["tool-1", "tool-2"]);
-    expect(restored.at(-1)).toEqual({ type: "user", text: "/quit" });
+    expect(restored.at(-1)).toMatchObject({ type: "user", text: "/quit" });
 
     const repairedUiHistory: KodaXSessionUiHistoryItem[] = restored.map((item) => {
       if (item.type === "tool_group") {
@@ -221,9 +391,14 @@ describe("restore-history / tool identity", () => {
     expect(restoredAgain.flatMap((item) => item.type === "tool_group"
       ? item.tools.map((tool) => tool.id)
       : [])).toEqual(["tool-1", "tool-2"]);
+    expect(restoredAgain.map((item) => item.type === "tool_group"
+      ? item.tools.map((tool) => tool.id).join(",")
+      : `${item.type}:${item.text}`)).toEqual(restored.map((item) => item.type === "tool_group"
+      ? item.tools.map((tool) => tool.id).join(",")
+      : `${item.type}:${item.text}`));
   });
 
-  it("anchors a persisted suffix to the latest repeated canonical round", () => {
+  it("anchors a persisted suffix to the latest repeated canonical round without dropping older rounds", () => {
     const messages = [
       { role: "user" as const, content: "continue" },
       {
@@ -265,6 +440,9 @@ describe("restore-history / tool identity", () => {
       ? item.tools.map((tool) => tool.id).join(",")
       : `${item.type}:${item.text}`)).toEqual([
       "user:continue",
+      "old-tool",
+      "assistant:same answer",
+      "user:continue",
       "new-tool",
       "assistant:same answer",
     ]);
@@ -290,7 +468,7 @@ describe("restore-history / tool identity", () => {
       ],
     });
 
-    expect(restored.at(-1)).toEqual({ type: "user", text: "/quit" });
+    expect(restored.at(-1)).toMatchObject({ type: "user", text: "/quit" });
     expect(restored.map((item) => item.type === "tool_group"
       ? item.tools.map((tool) => tool.id).join(",")
       : `${item.type}:${item.text}`)).toEqual([
@@ -340,7 +518,103 @@ describe("restore-history / tool identity", () => {
       : [])).toEqual(["tool-1", "tool-2"]);
   });
 
-  it("does not reinsert tool groups from canonical rounds outside a trimmed persisted window", () => {
+  it("deduplicates repeated canonical tool ids before applying persisted overlays", () => {
+    const result = restoreHistoryItemsFromSession({
+      messages: [
+        { role: "user", content: "first" },
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "same-tool", name: "read", input: { path: "a" } },
+            { type: "text", text: "first answer" },
+          ],
+        },
+        { role: "user", content: "second" },
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "same-tool", name: "read", input: { path: "b" } },
+            { type: "text", text: "second answer" },
+          ],
+        },
+      ],
+      uiHistory: [{
+        type: "tool_group",
+        tools: [{ id: "same-tool", name: "read", status: "success", output: "persisted" }],
+      }],
+    });
+
+    expect(result.flatMap((item) => item.type === "tool_group"
+      ? item.tools.map((tool) => tool.id)
+      : [])).toEqual(["same-tool"]);
+    expect(result.filter((item) => item.type === "assistant")).toHaveLength(2);
+  });
+
+  it("deduplicates canonical tool ids inside the bounded window, not before it", () => {
+    const messages = Array.from({ length: 60 }, (_, index) => [
+      { role: "user" as const, content: `question-${index}` },
+      {
+        role: "assistant" as const,
+        content: [
+          { type: "tool_use" as const, id: "same-tool", name: "read", input: { index } },
+          { type: "text" as const, text: `answer-${index}` },
+        ],
+      },
+    ]).flat();
+
+    const result = restoreHistoryItemsFromSession({ messages });
+
+    expect(result[0]).toMatchObject({ type: "user", text: "question-10" });
+    expect(result.flatMap((item) => item.type === "tool_group"
+      ? item.tools.map((tool) => tool.id)
+      : [])).toEqual(["same-tool"]);
+  });
+
+  it("keeps an unmatched legacy-looking event that does not name a canonical tool", () => {
+    const result = restoreHistoryItemsFromSession({
+      messages: canonicalMessages.slice(0, 3),
+      uiHistory: [
+        { type: "user", text: "review" },
+        { type: "event", text: "⚙ background status", icon: "tool" },
+        { type: "assistant", text: "first answer" },
+      ],
+    });
+
+    expect(result.map((item) => item.type)).toEqual([
+      "user",
+      "event",
+      "tool_group",
+      "assistant",
+    ]);
+  });
+
+  it("keeps a same-name legacy-looking event outside the canonical tool's round", () => {
+    const result = restoreHistoryItemsFromSession({
+      messages: canonicalMessages,
+      uiHistory: [
+        { type: "user", text: "review" },
+        { type: "assistant", text: "first answer" },
+        { type: "user", text: "continue" },
+        { type: "event", text: "⚙ read(background status)", icon: "tool" },
+        { type: "assistant", text: "second answer" },
+      ],
+    });
+
+    expect(result.filter((item) => item.type === "event"
+      && item.text === "⚙ read(background status)")).toHaveLength(1);
+  });
+
+  it("keeps a same-name legacy-looking event when no text anchors establish its round", () => {
+    const result = restoreHistoryItemsFromSession({
+      messages: canonicalMessages.slice(0, 3),
+      uiHistory: [{ type: "event", text: "⚙ read(background status)", icon: "tool" }],
+    });
+
+    expect(result.filter((item) => item.type === "event"
+      && item.text === "⚙ read(background status)")).toHaveLength(1);
+  });
+
+  it("keeps canonical tool groups outside a trimmed persisted window", () => {
     const result = restoreHistoryItemsFromSession({
       messages: canonicalMessages,
       uiHistory: [
@@ -351,7 +625,7 @@ describe("restore-history / tool identity", () => {
 
     expect(result.flatMap((item) => item.type === "tool_group"
       ? item.tools.map((tool) => tool.id)
-      : [])).toEqual(["tool-2"]);
+      : [])).toEqual(["tool-1", "tool-2"]);
   });
 });
 
@@ -379,7 +653,7 @@ describe("restore-history / task-completed recovery (GOAL 1)", () => {
     expect(result.filter((i) => hasReportBody(i))).toHaveLength(1);
   });
 
-  it("CLI (uiHistory present): does NOT double-render — enrichTextOnlyUiHistory drops the derived task-completed seed", () => {
+  it("CLI (uiHistory present): keeps the canonical task-completed seed exactly once", () => {
     const result = restoreHistoryItemsFromSession({
       messages: [
         { role: "user", content: "please review" },
@@ -390,11 +664,10 @@ describe("restore-history / task-completed recovery (GOAL 1)", () => {
         { type: "assistant", text: "workflow result already shown via uiHistory" },
       ],
     });
-    // uiHistory is authoritative; the derived task-completed seed is discarded
-    // (only tool_group derived items are merged in). No duplicate render — the
-    // CLI transcript is exactly the persisted uiHistory (zero TUI regression).
-    expect(result.filter((i) => hasReportBody(i))).toHaveLength(0);
-    expect(result.map((i) => i.type)).toEqual(["user", "assistant"]);
+    // Canonical messages decide which transcript entries exist. The unmatched
+    // ordinary assistant projection is dropped without deleting the event.
+    expect(result.filter((i) => hasReportBody(i))).toHaveLength(1);
+    expect(result.map((i) => i.type)).toEqual(["user", "event"]);
   });
 
   it("other synthetic messages stay dropped on the headless path (only _source:'task-completed' is recovered)", () => {

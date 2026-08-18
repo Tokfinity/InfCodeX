@@ -147,6 +147,10 @@ remains a separate manual operator step. It includes every commit after
   and task-file projections are asynchronous maintenance; Runtime uses the
   executor Promise, not managed `onComplete`, as terminal authority;
 - `sandboxRuntime:4` and `crashOutcomeModel:2` fence idle older daemons;
+- resume reconstruction derives the TUI transcript from canonical Session
+  `messages` first; a sparse or damaged `uiHistory` may overlay display
+  metadata or append UI-only entries, but cannot hide ordinary conversation
+  (Issue 296);
 - synchronized product, architecture, detailed-design, public SDK, sandbox
   guide, release checklist, feature index, known-issue, regression-guide, and
   `kodax_manual` content.
@@ -164,8 +168,8 @@ Before tagging, all of the following must be true:
    `docs/features`, and `kodax_manual` agree on v0.7.92;
 2. focused tests cover stale same-PID ticket reclaim with an exact-lock fence,
    recorded-release owner recovery, managed Session-before-completion ordering,
-   non-authoritative managed `onComplete`, and the existing v0.7.91 regression
-   contracts;
+   non-authoritative managed `onComplete`, canonical-first resume restore
+   (Issue 296), and the existing v0.7.91 regression contracts;
 3. TypeScript, config-template checks, bundled SDK/Worker/sidecar builds, fast,
    unit, contract, and system suites pass, with any host-only Windows sandbox
    limitation documented rather than silently changing system code;

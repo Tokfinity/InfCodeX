@@ -16,6 +16,8 @@ Hosts negotiate `sandboxRuntime:4` and `crashOutcomeModel:2`. Issue 256 remains
 Open: descendant closure after an intermediate parent exits is still unproven.
 See the Issue 256 2026-08-18 slice note and
 [ISSUE_256_v0.7.92_REGRESSION_GUIDE.md](test-guides/ISSUE_256_v0.7.92_REGRESSION_GUIDE.md).
+Issue 296 also makes resumed terminal history canonical-first: a sparse
+`uiHistory` cache can enrich replay but can no longer suppress Session messages.
 
 ---
 
@@ -53,6 +55,7 @@ by the focused sandbox, lineage, REPL, and coding-runtime tests.
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 296 | High | Resolved | Sparse `uiHistory` projection suppresses canonical conversation after `-r` resume | v0.7.51 UI history replay | v0.7.92 development | 2026-08-18 | 2026-08-18 |
 | 295 | High | Resolved | Complete Runtime exit could strand a same-boot Windows ACL owner and could not resume safely after host relaunch | v0.7.79 managed Runtime shutdown | v0.7.91 release | 2026-08-17 | 2026-08-17 |
 | 293 | High | Resolved | Managed compaction context replacement makes ordinary history ambiguous and duplicates paged conversations | v0.7.80 managed-run-context stripping | v0.7.89 release | 2026-08-16 | 2026-08-16 |
 | 292 | High | Resolved | Actor settlement deadline conflates storage eligibility, canonical commit, and post-commit maintenance | v0.7.85 Actor settlement convergence | v0.7.88 release | 2026-08-15 | 2026-08-15 |
@@ -236,6 +239,56 @@ by the focused sandbox, lineage, REPL, and coding-runtime tests.
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 296: Sparse `uiHistory` projection suppresses canonical conversation after `-r` resume
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.51 UI history replay
+- **Fixed**: v0.7.92 development
+- **Created**: 2026-08-18
+- **Resolved**: 2026-08-18
+
+#### Original Problem
+
+Resuming Session `20260816_202555_lw2ea48cf61259` rendered only four historical
+`/quit` entries even though its canonical Session contained 297 messages. The
+model context and conversation cache were intact; only the terminal replay was
+truncated to the sparse four-item display cache.
+
+#### Root Cause
+
+`restoreHistoryItemsFromSession()` treated every non-empty `uiHistory` as the
+authoritative text transcript and used canonical message seeds only to insert
+tool groups. This inverted the documented ownership contract: `messages` is
+canonical, while `uiHistory` is an optional, bounded, lossy display projection.
+Any sparse projection—not only `/quit`—could therefore hide valid user and
+assistant history. The reducer's single 150-item cap would also let restored
+display-only entries evict a correctly rebuilt canonical window.
+
+#### Resolution
+
+Resume now derives and bounds the canonical TUI seed window first, then overlays
+matching persisted timestamps, compact labels, icons, and sanitized tool cards.
+Unmatched entries with an explicit display-only role remain as ephemeral
+history, positioned relative to the nearest canonical text anchor. Stale
+ordinary user, assistant, and thinking text is discarded whenever canonical
+messages exist. Canonical and display-only windows are bounded independently in
+memory, so `/quit`, info, error, hint, sidecar, and tool-only replay remains
+available without reducing the canonical 150-item / 50-round baseline.
+Persisted data and Session schemas remain backward-compatible; the display-only
+marker is ephemeral.
+
+#### Verification
+
+- Sparse `/quit`-only and matching-suffix projections retain the canonical
+  question/answer baseline and append UI-only entries.
+- Tool groups overlay by tool ID, preserve sanitized persisted results, and
+  remain idempotent across repeated resume/save projections.
+- The canonical window is trimmed before UI-only replay, and reducer tests prove
+  a four-item UI-only tail cannot evict a full 150-item canonical window.
+- The reported Session now restores 154 items: 150 bounded canonical entries
+  plus its four `/quit` entries, instead of four entries total.
 
 ### 295: Complete Runtime exit could strand a same-boot Windows ACL owner and could not resume safely after host relaunch
 
@@ -12532,11 +12585,17 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 174 (27 Open, 147 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 175 (27 Open, 148 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-08-18: Issue 296 resolved (v0.7.92 development)
+- Rebuilt resumed terminal history from the bounded canonical message projection
+  before applying lossy `uiHistory` display metadata and UI-only entries.
+- Bounded canonical and restored UI-only history independently so sparse command
+  tails cannot evict the canonical conversation window.
 
 ### 2026-08-16: Issue 293 resolved (Unreleased)
 - Made managed run/runtime context envelopes topology-transparent to ordinary

@@ -4,7 +4,8 @@ Public documentation for KodaX users and SDK integrators.
 
 The current release is `v0.7.92`. Its SDK guidance carries the filesystem-effect
 operation-token coordinator, recorded-release owners, managed Session-before-
-completion ordering, `sandboxRuntime:4`, and `crashOutcomeModel:2`. Issue 256's
+completion ordering, canonical-first resume reconstruction, `sandboxRuntime:4`,
+and `crashOutcomeModel:2`. Issue 256's
 lost-ancestor descendant-closure boundary remains open. The same guidance still
 covers the v0.7.89 Issue 293
 topology-transparent conversation projection, FEATURE_293 zero-service web
@@ -44,7 +45,10 @@ prepared-Session-tail recovery after a `data_changed` race.
 The v0.7.92 SDK guidance adds `sandboxRuntime:4` and `crashOutcomeModel:2` as
 pre-start facts. Auto-start replaces an idle older daemon and fails closed
 while it is busy. Managed `onComplete` is not terminal authority. Hosts must
-not delete ProgramData lock files to recover a stuck coordinator.
+not delete ProgramData lock files to recover a stuck coordinator. Resume
+reconstruction uses canonical Session `messages` as the transcript; `uiHistory`
+may overlay tool cards and display-only entries but cannot hide ordinary
+conversation.
 
 ## Getting Started
 

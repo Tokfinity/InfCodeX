@@ -17,18 +17,14 @@ export interface RestoreHistoryItemsFromSessionInput {
   uiHistory?: readonly KodaXSessionUiHistoryItem[];
 }
 
-export function trimPersistedUiHistorySnapshot(
-  items: readonly KodaXSessionUiHistoryItem[],
-): KodaXSessionUiHistoryItem[] {
-  if (items.length === 0) {
-    return [];
-  }
+function trimHistoryWindow<T extends { readonly type: string }>(
+  items: readonly T[],
+): T[] {
+  if (items.length === 0) return [];
 
   const userIndices: number[] = [];
   for (let index = 0; index < items.length; index += 1) {
-    if (items[index]?.type === "user") {
-      userIndices.push(index);
-    }
+    if (items[index]?.type === "user") userIndices.push(index);
   }
 
   let trimmed = [...items];
@@ -36,14 +32,17 @@ export function trimPersistedUiHistorySnapshot(
     const startIndex = userIndices[userIndices.length - MAX_PERSISTED_UI_HISTORY_ROUNDS] ?? 0;
     trimmed = items.slice(startIndex);
   }
+  if (trimmed.length <= MAX_PERSISTED_UI_HISTORY_ITEMS) return [...trimmed];
 
-  if (trimmed.length > MAX_PERSISTED_UI_HISTORY_ITEMS) {
-    const windowed = trimmed.slice(-MAX_PERSISTED_UI_HISTORY_ITEMS);
-    const firstUserIndex = windowed.findIndex((item) => item.type === "user");
-    trimmed = firstUserIndex > 0 ? windowed.slice(firstUserIndex) : windowed;
-  }
+  const windowed = trimmed.slice(-MAX_PERSISTED_UI_HISTORY_ITEMS);
+  const firstUserIndex = windowed.findIndex((item) => item.type === "user");
+  return firstUserIndex > 0 ? windowed.slice(firstUserIndex) : windowed;
+}
 
-  return [...trimmed];
+export function trimPersistedUiHistorySnapshot(
+  items: readonly KodaXSessionUiHistoryItem[],
+): KodaXSessionUiHistoryItem[] {
+  return trimHistoryWindow(items);
 }
 
 export function normalizePersistedUiHistory(
@@ -128,7 +127,7 @@ function persistedUiHistoryItemToCreatableHistoryItem(
     : undefined;
 }
 
-function dedupePersistedToolGroups(
+function dedupeToolGroups(
   items: readonly CreatableHistoryItem[],
 ): CreatableHistoryItem[] {
   const seenToolIds = new Set<string>();
@@ -171,23 +170,6 @@ function hasDisplayPrefix(displayText: string, sourceText: string): boolean {
   return /^\[[^\]\r\n]+\]\s+$/.test(prefix);
 }
 
-function recoverMissingTimestamps(
-  items: readonly CreatableHistoryItem[],
-  derivedItems: readonly CreatableHistoryItem[],
-): CreatableHistoryItem[] {
-  let derivedCursor = 0;
-  return items.map((item) => {
-    if (item.timestamp !== undefined) return item;
-    for (let index = derivedCursor; index < derivedItems.length; index += 1) {
-      const candidate = derivedItems[index];
-      if (candidate?.timestamp === undefined || !matchesTimestampSource(item, candidate)) continue;
-      derivedCursor = index + 1;
-      return { ...item, timestamp: candidate.timestamp };
-    }
-    return item;
-  });
-}
-
 function alignCanonicalTextItems(
   persistedItems: readonly CreatableHistoryItem[],
   derivedItems: readonly CreatableHistoryItem[],
@@ -196,7 +178,7 @@ function alignCanonicalTextItems(
   let persistedCursor = persistedItems.length - 1;
   // uiHistory can be a bounded suffix of the canonical transcript. Match
   // backwards so repeated queries/answers bind to their latest canonical
-  // occurrence instead of resurrecting tool groups from an older round.
+  // occurrence instead of an older round.
   for (let derivedIndex = derivedItems.length - 1; derivedIndex >= 0; derivedIndex -= 1) {
     const derived = derivedItems[derivedIndex];
     if (!derived || derived.type === "tool_group") continue;
@@ -212,122 +194,276 @@ function alignCanonicalTextItems(
   return anchors;
 }
 
-function nearestAnchors(
-  anchors: ReadonlyMap<number, number>,
-  derivedLength: number,
-): {
-  readonly previous: readonly (number | undefined)[];
-  readonly next: readonly (number | undefined)[];
-} {
-  const previous: Array<number | undefined> = new Array(derivedLength);
-  const next: Array<number | undefined> = new Array(derivedLength);
-  let nearest: number | undefined;
-  for (let index = 0; index < derivedLength; index += 1) {
-    previous[index] = nearest;
-    const anchor = anchors.get(index);
-    if (anchor !== undefined) nearest = anchor;
+function overlayCanonicalTextItem(
+  canonical: CreatableHistoryItem,
+  persisted: CreatableHistoryItem,
+): CreatableHistoryItem {
+  if (canonical.type === "tool_group" || persisted.type === "tool_group") return canonical;
+  const timestamp = persisted.timestamp ?? canonical.timestamp;
+  const withTimestamp = timestamp === undefined ? {} : { timestamp };
+  switch (canonical.type) {
+    case "assistant":
+    case "thinking":
+      return {
+        ...canonical,
+        ...withTimestamp,
+        ...(persisted.type === canonical.type && persisted.compactText
+          ? { compactText: persisted.compactText }
+          : {}),
+      };
+    case "event":
+    case "info":
+      return {
+        ...canonical,
+        ...withTimestamp,
+        ...(persisted.type === canonical.type && persisted.icon ? { icon: persisted.icon } : {}),
+        ...(persisted.type === canonical.type && persisted.compactText
+          ? { compactText: persisted.compactText }
+          : {}),
+      };
+    case "sidecar":
+      return persisted.type === "sidecar"
+        ? { ...canonical, ...withTimestamp, verdict: persisted.verdict, delivery: persisted.delivery }
+        : canonical;
+    default:
+      return { ...canonical, ...withTimestamp };
   }
-  nearest = undefined;
-  for (let index = derivedLength - 1; index >= 0; index -= 1) {
-    next[index] = nearest;
-    const anchor = anchors.get(index);
-    if (anchor !== undefined) nearest = anchor;
-  }
-  return { previous, next };
 }
 
-function enrichPersistedUiHistory(
-  persistedItems: readonly CreatableHistoryItem[],
-  derivedItems: readonly CreatableHistoryItem[],
-): CreatableHistoryItem[] {
-  const anchors = alignCanonicalTextItems(persistedItems, derivedItems);
-  const nearest = nearestAnchors(anchors, derivedItems.length);
-  const insertions = new Map<number, Extract<CreatableHistoryItem, { type: "tool_group" }>[]>();
-  const persistedTools = new Map<string, {
-    tool: Extract<CreatableHistoryItem, { type: "tool_group" }>["tools"][number];
-    timestamp?: number;
-  }>();
-  for (const item of persistedItems) {
+function isLegacyToolSummary(
+  item: CreatableHistoryItem,
+  canonicalItems: readonly CreatableHistoryItem[],
+  previousCanonicalIndex: number | undefined,
+  nextCanonicalIndex: number | undefined,
+): boolean {
+  if (item.type !== "event" || item.icon !== "tool") return false;
+  const summary = item.text.trimStart();
+  if (!summary.startsWith("⚙")) return false;
+  if (previousCanonicalIndex === undefined && nextCanonicalIndex === undefined) return false;
+  const call = summary.slice(1).trimStart();
+  const startIndex = previousCanonicalIndex === undefined ? 0 : previousCanonicalIndex + 1;
+  const endIndex = nextCanonicalIndex ?? canonicalItems.length;
+  return canonicalItems.slice(startIndex, endIndex).some((candidate) => (
+    candidate.type === "tool_group"
+    && candidate.tools.some((tool) => (
+      call === tool.name
+      || call.startsWith(`${tool.name}(`)
+      || call.startsWith(`${tool.name} `)
+    ))
+  ));
+}
+
+type CreatableToolGroup = Extract<CreatableHistoryItem, { type: "tool_group" }>;
+type PersistedToolOverlay = {
+  tool: CreatableToolGroup["tools"][number];
+  timestamp?: number;
+};
+
+function collectPersistedTools(
+  items: readonly CreatableHistoryItem[],
+): ReadonlyMap<string, PersistedToolOverlay> {
+  const toolsById = new Map<string, PersistedToolOverlay>();
+  for (const item of items) {
     if (item.type !== "tool_group") continue;
     for (const tool of item.tools) {
-      if (!persistedTools.has(tool.id)) {
-        persistedTools.set(tool.id, { tool, timestamp: item.timestamp });
-      }
+      if (!toolsById.has(tool.id)) toolsById.set(tool.id, { tool, timestamp: item.timestamp });
     }
   }
-  const positionedToolIds = new Set<string>();
-  const anchoredPersistedIndices = new Set(anchors.values());
-  const legacyToolSummaryIndices = new Set<number>();
+  return toolsById;
+}
 
-  for (let index = 0; index < derivedItems.length; index += 1) {
-    const item = derivedItems[index];
-    if (!item || item.type !== "tool_group") continue;
-    const tools = item.tools.filter((tool) => {
-      if (positionedToolIds.has(tool.id)) return false;
-      positionedToolIds.add(tool.id);
-      return true;
-    }).map((tool) => persistedTools.get(tool.id)?.tool ?? tool);
-    const before = nearest.previous[index];
-    if (before === undefined || tools.length === 0) {
-      for (const tool of tools) positionedToolIds.delete(tool.id);
-      continue;
+function collectCanonicalToolIds(
+  items: readonly CreatableHistoryItem[],
+): ReadonlySet<string> {
+  const toolIds = new Set<string>();
+  for (const item of items) {
+    if (item.type !== "tool_group") continue;
+    for (const tool of item.tools) toolIds.add(tool.id);
+  }
+  return toolIds;
+}
+
+function alignCanonicalWindow(
+  persistedItems: readonly CreatableHistoryItem[],
+  fullDerivedItems: readonly CreatableHistoryItem[],
+  windowStartIndex: number,
+): {
+  anchors: ReadonlyMap<number, number>;
+  outOfWindowPersistedIndices: ReadonlySet<number>;
+} {
+  const anchors = new Map<number, number>();
+  const outOfWindowPersistedIndices = new Set<number>();
+  const fullAnchors = alignCanonicalTextItems(persistedItems, fullDerivedItems);
+  for (const [derivedIndex, persistedIndex] of fullAnchors) {
+    if (derivedIndex < windowStartIndex) {
+      outOfWindowPersistedIndices.add(persistedIndex);
+    } else {
+      anchors.set(derivedIndex - windowStartIndex, persistedIndex);
     }
-    const after = nearest.next[index];
-    const boundary = after !== undefined && after > before ? after : before + 1;
-    const legacySearchEnd = after ?? persistedItems.findIndex((candidate, candidateIndex) => (
-      candidateIndex > before && candidate.type === "user"
-    ));
-    const boundedLegacySearchEnd = legacySearchEnd < 0 ? persistedItems.length : legacySearchEnd;
-    for (let persistedIndex = before + 1; persistedIndex < boundedLegacySearchEnd; persistedIndex += 1) {
-      const candidate = persistedItems[persistedIndex];
-      if (
-        candidate?.type === "event"
-        && candidate.icon === "tool"
-        && !anchoredPersistedIndices.has(persistedIndex)
-      ) {
-        legacyToolSummaryIndices.add(persistedIndex);
-      }
+  }
+  return { anchors, outOfWindowPersistedIndices };
+}
+
+function buildCanonicalItems(
+  persistedItems: readonly CreatableHistoryItem[],
+  derivedItems: readonly CreatableHistoryItem[],
+  anchors: ReadonlyMap<number, number>,
+  persistedTools: ReadonlyMap<string, PersistedToolOverlay>,
+): CreatableHistoryItem[] {
+  return derivedItems.map((item, index): CreatableHistoryItem => {
+    if (item.type !== "tool_group") {
+      const persistedIndex = anchors.get(index);
+      const persisted = persistedIndex === undefined ? undefined : persistedItems[persistedIndex];
+      return persisted ? overlayCanonicalTextItem(item, persisted) : item;
     }
-    const groups = insertions.get(boundary) ?? [];
-    const persistedTimestamp = tools
+    const tools = item.tools.map((tool) => persistedTools.get(tool.id)?.tool ?? tool);
+    const timestamp = tools
       .map((tool) => persistedTools.get(tool.id)?.timestamp)
-      .find((timestamp) => timestamp !== undefined);
-    groups.push({
-      ...item,
-      tools,
-      ...(persistedTimestamp === undefined ? {} : { timestamp: persistedTimestamp }),
-    });
-    insertions.set(boundary, groups);
-  }
+      .find((candidate) => candidate !== undefined) ?? item.timestamp;
+    return { ...item, tools, ...(timestamp === undefined ? {} : { timestamp }) };
+  });
+}
 
-  const merged: CreatableHistoryItem[] = [];
-  for (let boundary = 0; boundary <= persistedItems.length; boundary += 1) {
-    merged.push(...(insertions.get(boundary) ?? []));
-    const persisted = persistedItems[boundary];
-    if (!persisted) continue;
-    if (legacyToolSummaryIndices.has(boundary)) continue;
-    if (persisted.type !== "tool_group") {
-      merged.push(persisted);
+function invertAnchors(
+  anchors: ReadonlyMap<number, number>,
+): ReadonlyMap<number, number> {
+  const persistedIndexToDerived = new Map<number, number>();
+  for (const [derivedIndex, persistedIndex] of anchors) {
+    persistedIndexToDerived.set(persistedIndex, derivedIndex);
+  }
+  return persistedIndexToDerived;
+}
+
+function nextDerivedAnchors(
+  persistedLength: number,
+  persistedIndexToDerived: ReadonlyMap<number, number>,
+): readonly (number | undefined)[] {
+  const nextAnchors: Array<number | undefined> = new Array(persistedLength);
+  let nextDerivedIndex: number | undefined;
+  for (let index = persistedLength - 1; index >= 0; index -= 1) {
+    const anchored = persistedIndexToDerived.get(index);
+    if (anchored === undefined) nextAnchors[index] = nextDerivedIndex;
+    else nextDerivedIndex = anchored;
+  }
+  return nextAnchors;
+}
+
+function markUiOnlyItem(
+  item: CreatableHistoryItem,
+  canonicalToolIds: ReadonlySet<string>,
+  allowOrdinaryText: boolean,
+): CreatableHistoryItem | undefined {
+  if (item.type === "tool_group") {
+    const tools = item.tools.filter((tool) => !canonicalToolIds.has(tool.id));
+    return tools.length > 0 ? { ...item, tools, isSessionUiOnly: true } : undefined;
+  }
+  const isOrdinaryText = item.type === "assistant"
+    || item.type === "thinking"
+    || (item.type === "user" && !item.text.trimStart().startsWith("/"));
+  return isOrdinaryText && !allowOrdinaryText
+    ? undefined
+    : { ...item, isSessionUiOnly: true };
+}
+
+function collectUiOnlyInsertions(
+  persistedItems: readonly CreatableHistoryItem[],
+  anchors: ReadonlyMap<number, number>,
+  excludedIndices: ReadonlySet<number>,
+  canonicalItems: readonly CreatableHistoryItem[],
+  canonicalToolIds: ReadonlySet<string>,
+  allowOrdinaryText: boolean,
+): ReadonlyMap<number, readonly CreatableHistoryItem[]> {
+  const persistedToDerived = invertAnchors(anchors);
+  const nextAnchors = nextDerivedAnchors(persistedItems.length, persistedToDerived);
+  const lastAnchorIndex = Math.max(-1, ...persistedToDerived.keys());
+  const insertions = new Map<number, CreatableHistoryItem[]>();
+  let previousDerivedIndex: number | undefined;
+
+  for (let index = 0; index < persistedItems.length; index += 1) {
+    const anchoredDerivedIndex = persistedToDerived.get(index);
+    if (anchoredDerivedIndex !== undefined) {
+      previousDerivedIndex = anchoredDerivedIndex;
       continue;
     }
-    const tools = persisted.tools.filter((tool) => !positionedToolIds.has(tool.id));
-    if (tools.length > 0) merged.push({ ...persisted, tools });
+    const item = persistedItems[index];
+    if (!item || excludedIndices.has(index)) continue;
+    const nextDerivedIndex = nextAnchors[index];
+    if (isLegacyToolSummary(item, canonicalItems, previousDerivedIndex, nextDerivedIndex)) continue;
+    const uiOnly = markUiOnlyItem(item, canonicalToolIds, allowOrdinaryText);
+    if (!uiOnly) continue;
+    const boundary = anchors.size === 0 || index > lastAnchorIndex
+      ? canonicalItems.length
+      : previousDerivedIndex === undefined
+        ? nextDerivedIndex ?? 0
+        : previousDerivedIndex + 1;
+    const boundaryItems = insertions.get(boundary) ?? [];
+    boundaryItems.push(uiOnly);
+    insertions.set(boundary, boundaryItems);
   }
-  return recoverMissingTimestamps(merged, derivedItems);
+  return insertions;
+}
+
+function mergeAtCanonicalBoundaries(
+  canonicalItems: readonly CreatableHistoryItem[],
+  insertions: ReadonlyMap<number, readonly CreatableHistoryItem[]>,
+): CreatableHistoryItem[] {
+  const merged: CreatableHistoryItem[] = [];
+  for (let boundary = 0; boundary <= canonicalItems.length; boundary += 1) {
+    merged.push(...(insertions.get(boundary) ?? []));
+    const canonical = canonicalItems[boundary];
+    if (canonical) merged.push(canonical);
+  }
+  return merged;
+}
+
+function enrichCanonicalUiHistory(
+  persistedItems: readonly CreatableHistoryItem[],
+  derivedItems: readonly CreatableHistoryItem[],
+  fullDerivedItems: readonly CreatableHistoryItem[],
+  windowStartIndex: number,
+  allowOrdinaryText: boolean,
+): CreatableHistoryItem[] {
+  const alignment = alignCanonicalWindow(persistedItems, fullDerivedItems, windowStartIndex);
+  const canonicalItems = buildCanonicalItems(
+    persistedItems,
+    derivedItems,
+    alignment.anchors,
+    collectPersistedTools(persistedItems),
+  );
+  const insertions = collectUiOnlyInsertions(
+    persistedItems,
+    alignment.anchors,
+    alignment.outOfWindowPersistedIndices,
+    canonicalItems,
+    collectCanonicalToolIds(fullDerivedItems),
+    allowOrdinaryText,
+  );
+  return mergeAtCanonicalBoundaries(canonicalItems, insertions);
 }
 
 export function restoreHistoryItemsFromSession(
   input: RestoreHistoryItemsFromSessionInput,
 ): CreatableHistoryItem[] {
-  const derivedItems = extractHistorySeedsFromMessages(input.messages).map(seedToHistoryItem);
+  const fullDerivedItems = extractHistorySeedsFromMessages(input.messages).map(seedToHistoryItem);
+  const derivedItems = trimHistoryWindow(fullDerivedItems);
   const persistedHistory = normalizePersistedUiHistory(input.uiHistory);
   if (!persistedHistory || persistedHistory.length === 0) {
-    return derivedItems;
+    return dedupeToolGroups(derivedItems);
   }
 
-  const persistedItems = dedupePersistedToolGroups(persistedHistory
+  const persistedItems = dedupeToolGroups(persistedHistory
     .map(persistedUiHistoryItemToCreatableHistoryItem)
     .filter((item): item is CreatableHistoryItem => Boolean(item)));
 
-  return enrichPersistedUiHistory(persistedItems, derivedItems);
+  const firstWindowItem = derivedItems[0];
+  const windowStartIndex = firstWindowItem === undefined
+    ? fullDerivedItems.length
+    : fullDerivedItems.indexOf(firstWindowItem);
+  return dedupeToolGroups(enrichCanonicalUiHistory(
+    persistedItems,
+    derivedItems,
+    fullDerivedItems,
+    windowStartIndex,
+    input.messages.length === 0,
+  ));
 }

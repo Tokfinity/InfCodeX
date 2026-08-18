@@ -8,7 +8,8 @@
 This guide reflects the `v0.7.92` SDK contract. npm publication remains a
 manual maintainer step. The release adds filesystem-effect operation-token
 coordination, recorded-release owners, managed Session-before-completion
-ordering, `sandboxRuntime:4`, and `crashOutcomeModel:2`, on top of the v0.7.91
+ordering, canonical-first resume reconstruction, `sandboxRuntime:4`, and
+`crashOutcomeModel:2`, on top of the v0.7.91
 bounded owner-scoped interactions, stale prepared-Session recovery,
 crash-resumable Runtime exit settlement, effective live output segments, and
 standalone lazy provider dependency bundling.
@@ -1070,9 +1071,11 @@ const replayItems: CreatableHistoryItem[] = session
   : [];
 ```
 
-`restoreHistoryItemsFromSession()` prefers persisted `uiHistory.tool_group`
-items when present, and otherwise reconstructs sanitized terminal tool cards
-from adjacent `tool_use` / `tool_result` message blocks. The lower-level
+`restoreHistoryItemsFromSession()` always derives the ordinary transcript from
+canonical `messages` and trims that window first. Persisted `uiHistory` may
+overlay timestamps, compact labels, icons, and sanitized `tool_group` output by
+tool ID, or append display-only entries such as `/quit`. A non-empty, sparse,
+or stale cache cannot hide user/assistant history. The lower-level
 `extractHistorySeedsFromMessages()` helper is also exported from
 `@kodax-ai/kodax/session` for hosts that want to apply their own projection.
 
@@ -4482,6 +4485,11 @@ Repo-intelligence and task-file projections are asynchronous and must not keep
 the Run in `finalizing`. For `mode: 'managed_task'`, Runtime uses the executor
 Promise as terminal authority; `events.onComplete` alone does not finish the
 Run. Require `crashOutcomeModel:2` when the host depends on that ordering.
+
+Resume reconstruction is canonical-first. Hosts that call
+`restoreHistoryItemsFromSession({ messages, uiHistory })` receive the bounded
+message-derived transcript plus optional display overlays. Do not treat
+`session.uiHistory` as the set of conversations that exist.
 
 Observation boundaries such as `events.subscribe()`, `events.replay()`, and
 Session status projection flush pending events before answering, so they can

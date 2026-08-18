@@ -23,7 +23,9 @@ import {
   identifyTranscriptSection,
   isTranscriptHiddenDivider,
   materializeTranscriptRenderModel,
+  sliceHistoryToRecentCanonicalItems,
   sliceHistoryToRecentRounds,
+  transcriptRenderCapForHistory,
   THINKING_SHOW_ALL_HARD_CHAR_CAP,
   TRANSCRIPT_HARD_LINE_CAP,
   TRANSCRIPT_HIDDEN_DIVIDER_ID,
@@ -1627,6 +1629,47 @@ describe("transcript-layout", () => {
     expect(text).toContain("round 2");
     expect(text).toContain("round 3");
     expect(text).not.toContain("round 1");
+  });
+
+  it("does not count restored UI-only user commands as visible conversation rounds", () => {
+    const canonical = [
+      user("user-1", "round 1"),
+      assistant("answer 1"),
+      user("user-2", "round 2"),
+      assistant("answer 2"),
+    ];
+    const commands = Array.from({ length: 25 }, (_, index): HistoryItem => ({
+      ...user(`quit-${index}`, "/quit"),
+      isSessionUiOnly: true,
+    }));
+
+    const visible = sliceHistoryToRecentRounds([...canonical, ...commands], 2);
+
+    expect(visible.some((item) => item.id === "user-1")).toBe(true);
+    expect(visible.filter((item) => item.isSessionUiOnly)).toHaveLength(25);
+  });
+
+  it("preserves UI-only tails in addition to the transcript-mode canonical item cap", () => {
+    const canonical = Array.from({ length: 40 }, (_, index) => assistant(`answer-${index}`));
+    const commands = Array.from({ length: 25 }, (_, index): HistoryItem => ({
+      ...user(`quit-${index}`, "/quit"),
+      isSessionUiOnly: true,
+    }));
+
+    const visible = sliceHistoryToRecentCanonicalItems([...canonical, ...commands], 30);
+
+    expect(visible.filter((item) => !item.isSessionUiOnly)).toHaveLength(30);
+    expect(visible.filter((item) => item.isSessionUiOnly)).toHaveLength(25);
+  });
+
+  it("adds UI-only entries to the static transcript cap instead of charging canonical capacity", () => {
+    const canonical = Array.from({ length: 150 }, (_, index) => assistant(`answer-${index}`));
+    const commands = Array.from({ length: 50 }, (_, index): HistoryItem => ({
+      ...user(`quit-${index}`, "/quit"),
+      isSessionUiOnly: true,
+    }));
+
+    expect(transcriptRenderCapForHistory([...canonical, ...commands])).toBe(250);
   });
 
   it("caps review history by transcript row budget", () => {

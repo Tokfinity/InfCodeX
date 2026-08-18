@@ -104,9 +104,10 @@ a stale same-process ticket only when that operation no longer owns the exact
 lock, and a durable release marker retires the matching settled effect owner
 without deleting ProgramData lock files. Managed completion waits for the
 canonical Session commit, not for repo/task file projection, so Stop can
-confirm instead of remaining unknown. Hosts negotiate `sandboxRuntime:4` and
-`crashOutcomeModel:2`. Issue 256's lost-ancestor descendant-closure work
-remains open.
+confirm instead of remaining unknown. Resumed TUI history is reconstructed from
+canonical Session messages first; a sparse `uiHistory` cache can no longer hide
+that conversation. Hosts negotiate `sandboxRuntime:4` and `crashOutcomeModel:2`.
+Issue 256's lost-ancestor descendant-closure work remains open.
 
 ## 2. Target Users
 

@@ -755,6 +755,10 @@ Session behavior spans agent, coding, and repl:
 - coding runtime records snapshots, runtime session state, and result metadata.
 - `SessionData.uiHistory`: optional bounded replay cache for sanitized terminal
   tool groups. It is a display projection, not the canonical model transcript.
+  Resume must first derive and bound visible history from canonical `messages`;
+  a non-empty, sparse, or damaged `uiHistory` may enrich that baseline or add
+  explicitly display-only entries, but must never suppress canonical
+  conversation items or create ordinary user/assistant/thinking conversation.
 
 Public session APIs should preserve id-based usage while allowing storage layout
 to evolve. New storage features must be backward-compatible with old JSONL

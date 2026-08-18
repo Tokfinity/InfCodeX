@@ -1225,6 +1225,9 @@ const TOPICS: readonly KodaXManualTopic[] = [
       "`KodaXFileLockTimeoutError` means the filesystem-effect coordinator was",
       "unavailable, not that a learning job holds the lock. Do not delete ProgramData",
       "lock files by hand.",
+      "Resume reconstruction uses canonical Session messages as the ordinary",
+      "conversation; uiHistory may overlay display metadata but cannot hide that",
+      "transcript.",
       "The same release requires `liveOutputSegments:1` for new daemon consumers and",
       "bundles lazy Anthropic/OpenAI SDK dependency graphs in standalone binaries.",
       "AskUser and permission prompts have independent bounded deadlines and"

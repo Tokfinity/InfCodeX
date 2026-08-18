@@ -939,6 +939,7 @@ describe("restoreHistoryItemsFromSession", () => {
     })).toEqual([
       {
         type: "tool_group",
+        isSessionUiOnly: true,
         tools: [
           {
             id: "tool-1",

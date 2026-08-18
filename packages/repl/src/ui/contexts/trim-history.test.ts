@@ -39,6 +39,35 @@ describe("trimHistoryToRounds (FEATURE_212)", () => {
     expect(trimmed[0]!.id).toBe("118");
     expect(trimmed[trimmed.length - 1]!.id).toBe("219");
   });
+
+  it("does not let restored UI-only tail items evict the canonical window", () => {
+    const canonical = Array.from(
+      { length: 150 },
+      (_, i) => item(i, i % 3 === 0 ? "user" : "assistant"),
+    );
+    const uiOnly = Array.from({ length: 4 }, (_, i) => ({
+      ...item(150 + i, "user"),
+      text: "/quit",
+      isSessionUiOnly: true,
+    }));
+
+    const trimmed = trimHistoryToRounds([...canonical, ...uiOnly]);
+
+    expect(trimmed).toHaveLength(154);
+    expect(trimmed[0]!.id).toBe("0");
+    expect(trimmed.slice(-4).map((entry) => entry.id)).toEqual(["150", "151", "152", "153"]);
+  });
+
+  it("retains UI-only entries before and between canonical items when no canonical prefix is trimmed", () => {
+    const history = [
+      { ...item(0, "info"), isSessionUiOnly: true },
+      item(1, "user"),
+      { ...item(2, "hint"), isSessionUiOnly: true },
+      item(3, "assistant"),
+    ];
+
+    expect(trimHistoryToRounds(history).map((entry) => entry.id)).toEqual(["0", "1", "2", "3"]);
+  });
 });
 
 // FEATURE_213 (v0.7.45) — the rescue helper that stops a mid-turn user message

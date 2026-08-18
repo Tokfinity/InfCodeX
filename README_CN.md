@@ -272,8 +272,10 @@ durable release marker 允许后续调用退役已结算的 effect owner。精�
 未证实的进程树或未启动的命令继续 fail-closed。Managed 终态在 completion 之前提交
 canonical Session，repo-intelligence / task 文件投影不再拖住活跃 Run。
 `KodaXResult.managedTask` 是终态核心快照；维护工作只会增强随后落盘的投影。
-普通权限 fallback 仍走同一 effect fence。宿主必须协商 `sandboxRuntime:4` 和
-`crashOutcomeModel:2`。Issue 256 的 lost-ancestor descendant-closure 仍保持 Open。
+普通权限 fallback 仍走同一 effect fence。Resume 时 TUI 历史先从 canonical
+Session messages 重建；稀疏的 `uiHistory` 只能叠加展示信息，不能遮蔽普通对话。
+宿主必须协商 `sandboxRuntime:4` 和 `crashOutcomeModel:2`。Issue 256 的
+lost-ancestor descendant-closure 仍保持 Open。
 详见 [v0.7.92 发布清单](docs/release.md#v0792-release-preparation) 与
 [SDK Embedder Guide](public_docs/sdk/embedder-guide.md)。
 

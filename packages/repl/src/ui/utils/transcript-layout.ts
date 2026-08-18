@@ -379,7 +379,7 @@ export function buildThinkingPreview(
 
 function findActiveRoundStartIndex(items: HistoryItem[]): number {
   for (let i = items.length - 1; i >= 0; i--) {
-    if (items[i]?.type === "user") {
+    if (items[i]?.type === "user" && items[i]?.isSessionUiOnly !== true) {
       return i;
     }
   }
@@ -1628,7 +1628,7 @@ export function sliceHistoryToRecentRounds(
   let startIndex = 0;
 
   for (let i = items.length - 1; i >= 0; i--) {
-    if (items[i]?.type === "user") {
+    if (items[i]?.type === "user" && items[i]?.isSessionUiOnly !== true) {
       userCount++;
       if (userCount > maxRounds) {
         startIndex = i + 1;
@@ -1638,6 +1638,31 @@ export function sliceHistoryToRecentRounds(
   }
 
   return items.slice(startIndex);
+}
+
+export function sliceHistoryToRecentCanonicalItems(
+  items: HistoryItem[],
+  maxCanonicalItems: number,
+): HistoryItem[] {
+  if (maxCanonicalItems <= 0 || items.length === 0) return [];
+  let canonicalCount = 0;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (items[index]?.isSessionUiOnly === true) continue;
+    canonicalCount += 1;
+    if (canonicalCount > maxCanonicalItems) return items.slice(index + 1);
+  }
+  return items;
+}
+
+export function transcriptRenderCapForHistory(
+  items: readonly HistoryItem[],
+  canonicalCap: number = TRANSCRIPT_RENDER_CAP,
+): number {
+  const uiOnlyCount = items.reduce(
+    (count, item) => count + (item.isSessionUiOnly === true ? 1 : 0),
+    0,
+  );
+  return canonicalCap + uiOnlyCount;
 }
 
 export function capHistoryByTranscriptRows(
