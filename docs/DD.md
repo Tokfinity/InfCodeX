@@ -759,6 +759,9 @@ Session behavior spans agent, coding, and repl:
   a non-empty, sparse, or damaged `uiHistory` may enrich that baseline or add
   explicitly display-only entries, but must never suppress canonical
   conversation items or create ordinary user/assistant/thinking conversation.
+  Presentation-only synthetic completion events (`agent-completed` and legacy
+  `task-completed`) are the exception: a non-empty `uiHistory` owns whether the
+  CLI displayed them, while headless/no-cache restore derives them from messages.
 
 Public session APIs should preserve id-based usage while allowing storage layout
 to evolve. New storage features must be backward-compatible with old JSONL

@@ -444,9 +444,12 @@ function enrichCanonicalUiHistory(
 export function restoreHistoryItemsFromSession(
   input: RestoreHistoryItemsFromSessionInput,
 ): CreatableHistoryItem[] {
-  const fullDerivedItems = extractHistorySeedsFromMessages(input.messages).map(seedToHistoryItem);
-  const derivedItems = trimHistoryWindow(fullDerivedItems);
   const persistedHistory = normalizePersistedUiHistory(input.uiHistory);
+  const hasPersistedUiHistory = Boolean(persistedHistory?.length);
+  const fullDerivedItems = extractHistorySeedsFromMessages(input.messages)
+    .filter((seed) => !hasPersistedUiHistory || seed.type !== "task_completed")
+    .map(seedToHistoryItem);
+  const derivedItems = trimHistoryWindow(fullDerivedItems);
   if (!persistedHistory || persistedHistory.length === 0) {
     return dedupeToolGroups(derivedItems);
   }

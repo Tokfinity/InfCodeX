@@ -653,7 +653,31 @@ describe("restore-history / task-completed recovery (GOAL 1)", () => {
     expect(result.filter((i) => hasReportBody(i))).toHaveLength(1);
   });
 
-  it("CLI (uiHistory present): keeps the canonical task-completed seed exactly once", () => {
+  it("CLI does not synthesize an agent-completed presentation event missing from uiHistory", () => {
+    const result = restoreHistoryItemsFromSession({
+      messages: [
+        { role: "user", content: "please review" },
+        { role: "assistant", content: "review complete" },
+        {
+          role: "user",
+          _synthetic: true,
+          _source: "agent-completed",
+          content: '<agent-completed id="child">large child report</agent-completed>',
+        },
+      ],
+      uiHistory: [{ type: "user", text: "/quit" }],
+    });
+
+    expect(result.map((item) => item.type === "tool_group"
+      ? "tool_group"
+      : `${item.type}:${item.text}`)).toEqual([
+      "user:please review",
+      "assistant:review complete",
+      "user:/quit",
+    ]);
+  });
+
+  it("CLI (uiHistory present): leaves task-completed presentation ownership to uiHistory", () => {
     const result = restoreHistoryItemsFromSession({
       messages: [
         { role: "user", content: "please review" },
@@ -664,10 +688,30 @@ describe("restore-history / task-completed recovery (GOAL 1)", () => {
         { type: "assistant", text: "workflow result already shown via uiHistory" },
       ],
     });
-    // Canonical messages decide which transcript entries exist. The unmatched
-    // ordinary assistant projection is dropped without deleting the event.
+    // Canonical messages own ordinary conversation. Presentation-only task
+    // completion events are reconstructed only for headless/no-cache hosts.
+    expect(result.filter((i) => hasReportBody(i))).toHaveLength(0);
+    expect(result.map((i) => i.type)).toEqual(["user"]);
+  });
+
+  it("CLI retains a task-completed event explicitly recorded in uiHistory", () => {
+    const result = restoreHistoryItemsFromSession({
+      messages: [
+        { role: "user", content: "please review" },
+        taskCompletedMsg,
+      ],
+      uiHistory: [
+        { type: "user", text: "please review" },
+        { type: "event", text: taskCompletedMsg.content, icon: "tool" },
+      ],
+    });
+
     expect(result.filter((i) => hasReportBody(i))).toHaveLength(1);
-    expect(result.map((i) => i.type)).toEqual(["user", "event"]);
+    expect(result.at(-1)).toMatchObject({
+      type: "event",
+      text: taskCompletedMsg.content,
+      isSessionUiOnly: true,
+    });
   });
 
   it("other synthetic messages stay dropped on the headless path (only _source:'task-completed' is recovered)", () => {

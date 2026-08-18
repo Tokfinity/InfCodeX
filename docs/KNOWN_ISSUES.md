@@ -277,7 +277,9 @@ messages exist. Canonical and display-only windows are bounded independently in
 memory, so `/quit`, info, error, hint, sidecar, and tool-only replay remains
 available without reducing the canonical 150-item / 50-round baseline.
 Persisted data and Session schemas remain backward-compatible; the display-only
-marker is ephemeral.
+marker is ephemeral. Presentation-only synthetic completion events retain their
+existing host boundary: headless/no-cache hosts reconstruct them from messages,
+while a non-empty CLI `uiHistory` decides whether they were displayed.
 
 #### Verification
 
@@ -285,6 +287,8 @@ marker is ephemeral.
   question/answer baseline and append UI-only entries.
 - Tool groups overlay by tool ID, preserve sanitized persisted results, and
   remain idempotent across repeated resume/save projections.
+- A sparse CLI projection does not synthesize large `agent-completed` or legacy
+  `task-completed` presentation events that were absent from `uiHistory`.
 - The canonical window is trimmed before UI-only replay, and reducer tests prove
   a four-item UI-only tail cannot evict a full 150-item canonical window.
 - The reported Session now restores 154 items: 150 bounded canonical entries
