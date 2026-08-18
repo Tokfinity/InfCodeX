@@ -12,11 +12,7 @@ vi.mock('node:child_process', async (importOriginal) => ({
   execSync: execSyncMock,
 }));
 
-import {
-  setAgentConfigHome,
-  type KodaXSessionData,
-  type KodaXSessionStorage,
-} from '@kodax-ai/agent';
+import { setAgentConfigHome } from '@kodax-ai/agent';
 import type { KodaXOptions } from '../types.js';
 import { runManagedTaskViaRunner } from './runner-driven.js';
 
@@ -39,20 +35,10 @@ describe('ordinary query background-process regression', () => {
   });
 
   it('hides every synchronous Git probe across 20 ordinary queries', async () => {
-    const snapshots = new Map<string, KodaXSessionData>();
-    const storage: KodaXSessionStorage = {
-      async save(id, data) {
-        snapshots.set(id, structuredClone(data));
-      },
-      async load(id) {
-        return structuredClone(snapshots.get(id) ?? null);
-      },
-    };
     for (let index = 0; index < 20; index += 1) {
       const callsBeforeQuery = execSyncMock.mock.calls.length;
       const options: KodaXOptions = {
         provider: 'anthropic',
-        session: { id: 'windows-query-session', storage },
         context: {
           gitRoot: workspaceRoot,
           executionCwd: workspaceRoot,
