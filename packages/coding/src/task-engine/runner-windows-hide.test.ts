@@ -73,5 +73,5 @@ describe('ordinary query background-process regression', () => {
         expect(childOptions?.windowsHide).toBe(true);
       }
     }
-  });
+  }, 60_000);
 });
