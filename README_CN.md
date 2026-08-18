@@ -274,6 +274,8 @@ canonical Session，repo-intelligence / task 文件投影不再拖住活跃 Run�
 `KodaXResult.managedTask` 是终态核心快照；维护工作只会增强随后落盘的投影。
 普通权限 fallback 仍走同一 effect fence。Resume 时 TUI 历史先从 canonical
 Session messages 重建；稀疏的 `uiHistory` 只能叠加展示信息，不能遮蔽普通对话。
+展示用的 `agent-completed` / `task-completed` 在 CLI 已有非空 `uiHistory`
+时仍由宿主决定是否显示。
 宿主必须协商 `sandboxRuntime:4` 和 `crashOutcomeModel:2`。Issue 256 的
 lost-ancestor descendant-closure 仍保持 Open。
 详见 [v0.7.92 发布清单](docs/release.md#v0792-release-preparation) 与

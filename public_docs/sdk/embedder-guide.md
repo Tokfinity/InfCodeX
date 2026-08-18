@@ -1075,7 +1075,10 @@ const replayItems: CreatableHistoryItem[] = session
 canonical `messages` and trims that window first. Persisted `uiHistory` may
 overlay timestamps, compact labels, icons, and sanitized `tool_group` output by
 tool ID, or append display-only entries such as `/quit`. A non-empty, sparse,
-or stale cache cannot hide user/assistant history. The lower-level
+or stale cache cannot hide user/assistant history. Presentation-only
+`agent-completed` and legacy `task-completed` events stay host-owned when a
+non-empty CLI `uiHistory` exists; headless/no-cache restore still derives them
+from messages. The lower-level
 `extractHistorySeedsFromMessages()` helper is also exported from
 `@kodax-ai/kodax/session` for hosts that want to apply their own projection.
 
@@ -4489,7 +4492,9 @@ Run. Require `crashOutcomeModel:2` when the host depends on that ordering.
 Resume reconstruction is canonical-first. Hosts that call
 `restoreHistoryItemsFromSession({ messages, uiHistory })` receive the bounded
 message-derived transcript plus optional display overlays. Do not treat
-`session.uiHistory` as the set of conversations that exist.
+`session.uiHistory` as the set of ordinary conversations that exist.
+Presentation-only synthetic completion events remain host-owned when that
+cache is non-empty.
 
 Observation boundaries such as `events.subscribe()`, `events.replay()`, and
 Session status projection flush pending events before answering, so they can

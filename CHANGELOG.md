@@ -32,6 +32,9 @@ All notable changes to this project will be documented in this file.
   cache can overlay timestamps, compact labels, icons, and sanitized tool cards,
   or append display-only entries such as `/quit`, but it can no longer hide
   user/assistant history or evict the 150-item / 50-round canonical window.
+  Presentation-only `agent-completed` and legacy `task-completed` events stay
+  host-owned: a non-empty CLI `uiHistory` decides whether they were displayed,
+  while headless/no-cache restore still derives them from messages.
 
 ### Changed
 

@@ -78,8 +78,9 @@ require `sandboxRuntime:4` and `crashOutcomeModel:2`; an idle older daemon may
 be replaced, and a busy one fails closed. Resume reconstruction derives the
 TUI transcript from canonical Session `messages` first; `uiHistory` may overlay
 display metadata or append UI-only entries, but cannot hide ordinary
-conversation. This slice does not close Issue 256's lost-ancestor
-descendant-closure boundary.
+conversation. Presentation-only synthetic completion events stay host-owned
+when a non-empty CLI `uiHistory` exists. This slice does not close Issue 256's
+lost-ancestor descendant-closure boundary.
 
 For a Windows daemon Runtime, startup is a three-part process boundary:
 PowerShell creates the daemon suspended, assigns it to a kill-on-close Job

@@ -48,7 +48,8 @@ while it is busy. Managed `onComplete` is not terminal authority. Hosts must
 not delete ProgramData lock files to recover a stuck coordinator. Resume
 reconstruction uses canonical Session `messages` as the transcript; `uiHistory`
 may overlay tool cards and display-only entries but cannot hide ordinary
-conversation.
+conversation. Presentation-only `agent-completed` / `task-completed` events
+stay host-owned when a non-empty CLI `uiHistory` exists.
 
 ## Getting Started
 

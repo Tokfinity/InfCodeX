@@ -150,7 +150,8 @@ remains a separate manual operator step. It includes every commit after
 - resume reconstruction derives the TUI transcript from canonical Session
   `messages` first; a sparse or damaged `uiHistory` may overlay display
   metadata or append UI-only entries, but cannot hide ordinary conversation
-  (Issue 296);
+  (Issue 296). Presentation-only `agent-completed` / `task-completed` events
+  remain host-owned when a non-empty CLI `uiHistory` exists;
 - synchronized product, architecture, detailed-design, public SDK, sandbox
   guide, release checklist, feature index, known-issue, regression-guide, and
   `kodax_manual` content.

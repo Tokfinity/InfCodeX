@@ -33,6 +33,9 @@ Required assertions:
    sidecar or persisted tool cards still restore.
 6. Unmatched ordinary user/assistant/thinking text from a stale cache is
    discarded whenever canonical messages exist.
+7. A non-empty CLI `uiHistory` does not synthesize `agent-completed` or
+   legacy `task-completed` presentation events that were absent from the
+   cache. Headless/no-cache restore still derives those events from messages.
 
 ## Reported session replay
 

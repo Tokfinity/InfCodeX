@@ -1227,7 +1227,8 @@ const TOPICS: readonly KodaXManualTopic[] = [
       "lock files by hand.",
       "Resume reconstruction uses canonical Session messages as the ordinary",
       "conversation; uiHistory may overlay display metadata but cannot hide that",
-      "transcript.",
+      "transcript. Presentation-only agent-completed and task-completed events",
+      "stay host-owned when a non-empty CLI uiHistory exists.",
       "The same release requires `liveOutputSegments:1` for new daemon consumers and",
       "bundles lazy Anthropic/OpenAI SDK dependency graphs in standalone binaries.",
       "AskUser and permission prompts have independent bounded deadlines and"

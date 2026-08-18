@@ -172,7 +172,9 @@ lock; a stale same-PID ticket is reclaimed only when it no longer owns that
 lock. Managed Runs persist the canonical Session before completion, and Runtime
 uses the executor Promise rather than managed `onComplete` as terminal
 authority. Resume reconstruction uses canonical Session `messages` as the
-ordinary-conversation source; `uiHistory` is only a display overlay. See the
+ordinary-conversation source; `uiHistory` is only a display overlay, and
+presentation-only synthetic completion events stay host-owned when that cache
+is non-empty. See the
 [SDK Embedder Guide](../../public_docs/sdk/embedder-guide.md)
 for host capability requirements.
 

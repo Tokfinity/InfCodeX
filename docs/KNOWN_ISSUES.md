@@ -18,6 +18,8 @@ See the Issue 256 2026-08-18 slice note and
 [ISSUE_256_v0.7.92_REGRESSION_GUIDE.md](test-guides/ISSUE_256_v0.7.92_REGRESSION_GUIDE.md).
 Issue 296 also makes resumed terminal history canonical-first: a sparse
 `uiHistory` cache can enrich replay but can no longer suppress Session messages.
+Presentation-only `agent-completed` / `task-completed` events stay host-owned
+when a non-empty CLI `uiHistory` exists.
 
 ---
 
@@ -12600,6 +12602,8 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
   before applying lossy `uiHistory` display metadata and UI-only entries.
 - Bounded canonical and restored UI-only history independently so sparse command
   tails cannot evict the canonical conversation window.
+- Kept presentation-only `agent-completed` / `task-completed` events host-owned
+  when a non-empty CLI `uiHistory` exists.
 
 ### 2026-08-16: Issue 293 resolved (Unreleased)
 - Made managed run/runtime context envelopes topology-transparent to ordinary

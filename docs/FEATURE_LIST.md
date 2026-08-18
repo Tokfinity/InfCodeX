@@ -570,8 +570,10 @@ records a token-scoped durable marker first. Runtime treats the managed
 executor Promise as terminal authority and advertises `sandboxRuntime:4` plus
 `crashOutcomeModel:2` so idle older daemons are replaced. Issue 296 makes
 resumed TUI history canonical-first: `uiHistory` may overlay display metadata
-but cannot suppress Session messages. Issue 256 remains Open: this slice does
-not prove descendant closure after an intermediate parent exits.
+but cannot suppress Session messages. Presentation-only `agent-completed` and
+legacy `task-completed` events stay host-owned when a non-empty CLI
+`uiHistory` exists. Issue 256 remains Open: this slice does not prove
+descendant closure after an intermediate parent exits.
 
 The design and acceptance contract are
 [v0.7.92](features/v0.7.92.md),

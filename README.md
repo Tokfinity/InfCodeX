@@ -737,7 +737,9 @@ active Run. The returned `KodaXResult.managedTask` is the terminal core snapshot
 maintenance may augment the later on-disk projection. Ordinary-permission
 fallback continues to use the same effect fence. Resumed TUI history is rebuilt
 from canonical Session messages first; a sparse `uiHistory` cache can overlay
-display metadata but cannot hide ordinary conversation. Hosts must negotiate
+display metadata but cannot hide ordinary conversation. Presentation-only
+synthetic completion events stay host-owned when a non-empty CLI `uiHistory`
+exists. Hosts must negotiate
 `sandboxRuntime:4` and `crashOutcomeModel:2`. See the
 [v0.7.92 release checklist](docs/release.md#v0792-release-preparation)
 and [SDK Embedder Guide](public_docs/sdk/embedder-guide.md).
