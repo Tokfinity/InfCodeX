@@ -5,11 +5,13 @@
 > extensions, custom CLIs. If you are an end-user running the `kodax`
 > command-line tool, see the root [README.md](../../README.md) instead.
 
-This guide reflects the `v0.7.91` SDK contract. npm publication remains a
-manual maintainer step. The release adds bounded owner-scoped interactions,
-stale prepared-Session recovery, crash-resumable Runtime exit settlement,
-effective live output segments, and standalone lazy provider dependency
-bundling.
+This guide reflects the `v0.7.92` SDK contract. npm publication remains a
+manual maintainer step. The release adds filesystem-effect operation-token
+coordination, recorded-release owners, managed Session-before-completion
+ordering, `sandboxRuntime:4`, and `crashOutcomeModel:2`, on top of the v0.7.91
+bounded owner-scoped interactions, stale prepared-Session recovery,
+crash-resumable Runtime exit settlement, effective live output segments, and
+standalone lazy provider dependency bundling.
 
 This guide documents the SDK surfaces a host integrator needs that
 are NOT obvious from inspecting the type definitions alone:
@@ -2774,8 +2776,10 @@ cross-process Windows policy group; compatible owners join without global ACL
 recovery and only the last owner recovers. Incompatible policy or pre-start
 infrastructure failure returns to the already-authorized normal permission path.
 A missing lifecycle attestation after target start remains fail-closed and is
-never repaired by replaying the command. Runtime sandbox capability v3 prevents
-an older daemon policy from being reused silently.
+never repaired by replaying the command. Runtime sandbox capability v3 first
+fenced older daemon policy revisions in v0.7.86. The current contract is
+`sandboxRuntime:4`: auto-start replaces an idle older daemon and fails closed
+while it is busy.
 
 `homeDir` and `KODAX_HOME` deliberately name different levels. Runtime SDK and
 CLI daemon `--home` accept the **base directory that contains `.kodax`**;
@@ -4342,7 +4346,8 @@ const runtime = await connectKodaXRuntime({
     providerCredentialBroker: 1,
     runBoundHostTools: 1,
     coderOwnerFencing: 1,
-    crashOutcomeModel: 1,
+    crashOutcomeModel: 2,
+    sandboxRuntime: 4,
     coderFeatureMatrix: 1,
     sessionAdmission: 1,
     completeObservationSnapshot: 1,
@@ -4403,6 +4408,18 @@ observation join or reconnect. Do not append a provider's cumulative response
 again during recovery, and do not infer replacement from attempt numbers or
 text equality.
 
+`KODAX_RUNTIME_SDK_CAPABILITIES.sandboxRuntime` is now `4` and
+`crashOutcomeModel` is `2`. Windows auto-start requires `sandboxRuntime:4` so
+an idle v3-or-older daemon is replaced; a busy or multi-client daemon fails
+closed with restart guidance. Require `crashOutcomeModel:2` when the host
+depends on managed Session persistence preceding completion and on the
+executor Promise — not managed `onComplete` — as terminal authority. Do not
+delete `C:\ProgramData\KodaX\sandbox-runtime\runtime\model-filesystem-effects.lock`
+or its `.queue` tickets by hand. `KodaXFileLockTimeoutError` means the
+filesystem-effect coordinator was unavailable; it does not prove a learning job
+holds the lock. `reclaimStaleKodaXFileLock` remains an explicit stale-lock
+helper, not a general lock-deletion primitive.
+
 ### v0.7.91 crash-resumable Runtime exit settlement
 
 Hosts that own a complete Runtime exit can use the SDK transaction instead of
@@ -4442,6 +4459,29 @@ record the exact owner and management revision. After a crash, call the same
 function with only `configHome` and `profile` to resume a still-exact prepared
 ticket. Do not delete `exit-settlement.json`, clear ACL markers, or start a
 replacement owner while a settlement is `prepared` or `stop_accepted`.
+
+### v0.7.92 filesystem-effect coordinator and managed terminal authority
+
+A Worker operation can disappear while the shared Coder daemon PID remains
+alive. The coordinator queue now identifies each attempt by an operation token
+that is also the exact lock token. Waiters heartbeat their ticket. A stale
+same-process ticket is reclaimed only when that token no longer owns
+`model-filesystem-effects.lock`. Effect release writes a token-scoped
+`.released` marker first so a later transaction can drop only that settled
+owner.
+
+On Windows the coordinator state is
+`C:\ProgramData\KodaX\sandbox-runtime\runtime\`. Deleting the lock file does
+not remove leftover `.queue` tickets or `model-filesystem-effects.json`
+owners. Timeouts surface as `KodaXFileLockTimeoutError`; the historical
+`learning store lock timed out` text was a reused generic-lock message, not
+proof that a learning job held the lock.
+
+Managed Runs persist the canonical Session before publishing completion.
+Repo-intelligence and task-file projections are asynchronous and must not keep
+the Run in `finalizing`. For `mode: 'managed_task'`, Runtime uses the executor
+Promise as terminal authority; `events.onComplete` alone does not finish the
+Run. Require `crashOutcomeModel:2` when the host depends on that ordering.
 
 Observation boundaries such as `events.subscribe()`, `events.replay()`, and
 Session status projection flush pending events before answering, so they can

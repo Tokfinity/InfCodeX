@@ -69,8 +69,11 @@ Commands with the same canonical workspace, Agent Home, additional filesystem,
 toolchain, and network policy can share one Windows policy group across KodaX
 processes. An incompatible policy or sandbox infrastructure failure before
 target start returns the already-authorized command to normal permission
-execution. Runtime sandbox capability v3 prevents an older daemon policy from
-being reused silently.
+execution. Runtime sandbox capability v3 first fenced older daemon policy
+revisions in v0.7.86. The current contract is `sandboxRuntime:4`: auto-start
+replaces an idle v3-or-older daemon and fails closed while it is busy. Do not
+delete `model-filesystem-effects.lock` by hand; on Windows the coordinator
+state lives under `C:\ProgramData\KodaX\sandbox-runtime\runtime\`.
 
 ## SDK sandbox
 

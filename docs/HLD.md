@@ -2,11 +2,9 @@
 
 > Last updated: 2026-08-18
 >
-> Current published baseline: `v0.7.91`
-> (`@kodax-ai/kodax@0.7.91`; npm publication remains manual)
->
-> Current source candidate: `@kodax-ai/kodax@0.7.92`
-> (`sandboxRuntime:4`, `crashOutcomeModel:2`)
+> Current published baseline: `v0.7.92`
+> (`@kodax-ai/kodax@0.7.92`; `sandboxRuntime:4`, `crashOutcomeModel:2`;
+> npm publication remains manual)
 >
 > This HLD is intentionally current-state only. The old pre-v0.7.43
 > chain/harness model has been removed from this active design document because
@@ -65,6 +63,20 @@ startup, and the SDK helper resolves permission UI through the Runtime rather
 than trusting a late dialog result. Interactive hosts recover a stale prepared
 Session tail with a full authoritative delta, while background persistence
 errors remain visible diagnostics.
+
+The v0.7.92 Runtime treats filesystem-effect coordination as an operation
+lease, not a process-lifetime lock. Queue tickets share a token with the exact
+coordinator lock and heartbeat while waiting. A stale same-process ticket is
+reclaimed only when that token no longer owns the lock file. Effect release
+writes a token-scoped marker first so a later transaction can drop the matching
+settled owner while the shared daemon PID remains alive. An exact active lock
+or an unproven process tree stays fail-closed. Managed Runs persist the
+canonical Session before publishing completion; repo-intelligence and task-file
+projections are asynchronous maintenance. Runtime uses the managed executor
+Promise, not the legacy `onComplete` callback, as terminal authority. Hosts
+require `sandboxRuntime:4` and `crashOutcomeModel:2`; an idle older daemon may
+be replaced, and a busy one fails closed. This slice does not close Issue 256's
+lost-ancestor descendant-closure boundary.
 
 For a Windows daemon Runtime, startup is a three-part process boundary:
 PowerShell creates the daemon suspended, assigns it to a kill-on-close Job

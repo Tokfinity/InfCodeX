@@ -1,6 +1,18 @@
 # KodaX Architecture Decision Records
 
-> Last updated: 2026-08-17
+> Last updated: 2026-08-18
+>
+> **v0.7.92 release addendum:** filesystem-effect lock ownership is an operation
+> token, not process liveness. Waiters heartbeat their queue ticket; a stale
+> same-PID ticket is reclaimed only when it no longer owns the exact coordinator
+> lock. Effect release records a token-scoped durable marker first so a later
+> coordinator transaction can retire that settled owner while the daemon PID
+> remains alive. Managed Runs persist the canonical Session before completion;
+> repo/task projections are asynchronous; Runtime uses the executor Promise, not
+> managed `onComplete`, as terminal authority. Hosts negotiate `sandboxRuntime:4`
+> and `crashOutcomeModel:2`. Idle daemons may be replaced; busy ones fail closed.
+> There is no host-side lock-file deletion path. Issue 256's lost-ancestor
+> descendant-closure boundary remains open.
 >
 > **v0.7.89 release addendum:** ordinary conversation topology treats
 > replaceable managed-run/runtime-context envelopes as transparent while the

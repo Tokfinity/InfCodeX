@@ -6,6 +6,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+---
+
+## [0.7.92] - 2026-08-18
+
 ### Fixed
 
 - The shared filesystem-effect coordinator now identifies queue ownership by an
@@ -13,6 +17,9 @@ All notable changes to this project will be documented in this file.
   tickets only after the ticket heartbeat is stale and no exact coordinator lock
   is owned. A durable release marker lets a later caller remove a settled
   direct-effect owner even while the long-lived daemon PID remains alive.
+- File-lock release handoff is retryable: the owner handle is closed once, and
+  a release marker is written only when owner cleanup cannot finish, so a later
+  waiter can recover instead of stalling on a half-released lock.
 - Managed Runs commit the canonical Session before reporting managed
   completion. Repository-intelligence and managed-task file projections run as
   best-effort maintenance, and Runtime no longer treats the managed

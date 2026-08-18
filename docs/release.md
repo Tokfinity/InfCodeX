@@ -127,6 +127,60 @@ Before tagging, all of the following must be true:
 
 Only after these gates pass may the exact commit be tagged `v0.7.90`.
 
+## v0.7.92 release preparation
+
+Release state: the root package, all four workspace packages, and every
+`package-lock.json` workspace entry must be version `0.7.92`. This maintenance
+release is prepared for the `v0.7.92` tag and GitHub Release; npm publication
+remains a separate manual operator step. It includes every commit after
+`v0.7.91`:
+
+- filesystem-effect queue tickets share an operation token with the exact
+  coordinator lock, heartbeat while waiting, and are reclaimed only when stale
+  and no longer owning that lock;
+- effect release records a token-scoped durable marker so a later coordinator
+  transaction can retire the matching settled owner while the daemon PID remains
+  alive;
+- file-lock release handoff is retryable (single handle close; marker only after
+  owner cleanup fails);
+- managed Runs persist the canonical Session before completion; repo-intelligence
+  and task-file projections are asynchronous maintenance; Runtime uses the
+  executor Promise, not managed `onComplete`, as terminal authority;
+- `sandboxRuntime:4` and `crashOutcomeModel:2` fence idle older daemons;
+- synchronized product, architecture, detailed-design, public SDK, sandbox
+  guide, release checklist, feature index, known-issue, regression-guide, and
+  `kodax_manual` content.
+
+The release intentionally contains Runtime/daemon, Agent lock, and Coding
+runtime system-code changes. It does not weaken fail-closed ownership,
+permission, shell, or sandbox contracts, and it does not close Issue 256's
+lost-ancestor descendant-closure boundary. No system implementation is silently
+changed by the release-documentation pass.
+
+Before tagging, all of the following must be true:
+
+1. all package versions, `CHANGELOG.md`, README/README_CN, PRD/HLD/DD/ADR,
+   feature tracker, known-issue record, public SDK guide, this checklist,
+   `docs/features`, and `kodax_manual` agree on v0.7.92;
+2. focused tests cover stale same-PID ticket reclaim with an exact-lock fence,
+   recorded-release owner recovery, managed Session-before-completion ordering,
+   non-authoritative managed `onComplete`, and the existing v0.7.91 regression
+   contracts;
+3. TypeScript, config-template checks, bundled SDK/Worker/sidecar builds, fast,
+   unit, contract, and system suites pass, with any host-only Windows sandbox
+   limitation documented rather than silently changing system code;
+4. the packed `kodax-ai-kodax-0.7.92.tgz` is inspected and smoke-installed into
+   an empty consumer for the root package and all 12 SDK subpaths;
+5. root and `docs/features` are clean, with the submodule commit reachable from
+   its remote; `.codex*` local artifacts and alternate pnpm metadata are ignored
+   and not tracked;
+6. GitHub CI is green for the exact commit on Node 20/22, Unix Runtime,
+   Windows Shell, and packaged Electron gates; the tag-triggered Release job
+   produces all platform archives, sidecars, and `SHA256SUMS`. npm publication is
+   left to the maintainer.
+
+Only after these gates pass may the exact commit be tagged `v0.7.92`.
+
 ## v0.7.91 release preparation
 
 Release state: the root package, all four workspace packages, and every

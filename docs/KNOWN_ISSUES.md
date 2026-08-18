@@ -1,11 +1,23 @@
 # Known Issues
 
-_Last Updated: 2026-08-17_
+_Last Updated: 2026-08-18_
 
 ---
 
 > **Archive Notice**: Historical issue records are maintained in `docs/ISSUES_ARCHIVED.md`.
 > This file tracks the active issue backlog plus recently resolved issue records that have not yet been archived.
+
+## v0.7.92 Release Corrections
+
+The v0.7.92 maintenance release closes the live-daemon orphan filesystem-effect
+ticket and recorded-release owner path, and it makes managed Session persistence
+precede completion so repo/task projections cannot keep a Run in `finalizing`.
+Hosts negotiate `sandboxRuntime:4` and `crashOutcomeModel:2`. Issue 256 remains
+Open: descendant closure after an intermediate parent exits is still unproven.
+See the Issue 256 2026-08-18 slice note and
+[ISSUE_256_v0.7.92_REGRESSION_GUIDE.md](test-guides/ISSUE_256_v0.7.92_REGRESSION_GUIDE.md).
+
+---
 
 ## v0.7.91 Release Corrections
 
@@ -2952,7 +2964,7 @@ not assign a replacement target.
 
 #### 2026-08-18 v0.7.92 filesystem-effect convergence slice
 
-The v0.7.92 source candidate closes the same-process orphan-ticket and released
+The v0.7.92 release closes the same-process orphan-ticket and released
 filesystem-effect owner path observed under a long-lived daemon. Queue entries
 now heartbeat one operation token, that token fences the exact coordinator
 lock, and a durable token-scoped release proof lets later work retire only the

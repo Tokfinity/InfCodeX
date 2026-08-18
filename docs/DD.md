@@ -2,11 +2,9 @@
 
 > Last updated: 2026-08-18
 >
-> Current published baseline: `v0.7.91`
-> (`@kodax-ai/kodax@0.7.91`; npm publication remains manual)
->
-> Current source candidate: `@kodax-ai/kodax@0.7.92`
-> (`sandboxRuntime:4`, `crashOutcomeModel:2`)
+> Current published baseline: `v0.7.92`
+> (`@kodax-ai/kodax@0.7.92`; `sandboxRuntime:4`, `crashOutcomeModel:2`;
+> npm publication remains manual)
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -23,8 +21,7 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The published package is `@kodax-ai/kodax@0.7.91`; the workspace prepares the
-`@kodax-ai/kodax@0.7.92` source candidate. The v0.7.85 release
+The published package is `@kodax-ai/kodax@0.7.92`. The v0.7.85 release
 established
 controller-wide bounded Actor progress
 persistence, queue-aware terminal deadlines, root fail-closed fencing, and
@@ -89,6 +86,20 @@ before hashing the policy, waits only for workspace-local warm-up within the
 Shell abort/deadline, and asynchronously retires a cached session after lease-cleanup failure; later
 admission waits for that reset and remains fail-closed if reset is unconfirmed.
 
+The v0.7.92 filesystem-effect coordinator lives in
+`packages/agent/src/learning/store-lock.ts` (generic ticket queue) and
+`packages/coding/src/tools/_internal/file-mutation-queue.ts` (direct / shell /
+namespace leases). Queue tickets reuse the coordinator-lock token and heartbeat
+while waiting; stale same-PID tickets are reclaimed only when they do not own
+the exact lock file. Effect release writes a token-scoped `.released` marker
+before the coordinator transaction that drops that owner. Managed terminal
+ordering is owned by `packages/coding/src/task-engine/runner-driven.ts`:
+`saveManagedRunBoundary` precedes `observer.completed`, and
+`scheduleManagedTaskMaintenance` projects repo-intelligence and task artifacts
+after the Run is no longer active. `src/sdk-runtime.ts` keeps managed
+`onComplete` non-authoritative and requires `sandboxRuntime:4` plus
+`crashOutcomeModel:2` so idle older daemons are replaced.
+
 The same release implements Session-scoped event journals and cursor-bound
 replay, the F289/F290 Memory review and lesson pipelines, and F292's
 conversation-first Memory management. Terminal startup restores terminal Runs
@@ -141,7 +152,10 @@ Only `llm`, `agent`, `coding`, and `repl` are workspace package build roots.
 | Coding SDK | `packages/coding/src/agent.ts` | `runKodaX(options, prompt)` delegates through `Runner.run`. |
 | Coding preset | `packages/coding/src/coding-preset.ts` | Declares the default coding agent and substrate executor. |
 | Continuous SDK | `packages/coding/src/client.ts`, `running-session.ts` | `KodaXClient` and non-blocking session handle. |
-| Runtime SDK | `src/sdk-runtime.ts` | One service facade for inline, Worker-hosted, and daemon ownership. |
+| Runtime SDK | `src/sdk-runtime.ts` | One service facade for inline, Worker-hosted, and daemon ownership. Managed `onComplete` is not terminal authority. |
+| Filesystem-effect lock | `packages/agent/src/learning/store-lock.ts` | Operation-token queue, ticket heartbeat, exact-lock fence, retryable release handoff, `KodaXFileLockTimeoutError`. |
+| Filesystem-effect leases | `packages/coding/src/tools/_internal/file-mutation-queue.ts` | Direct / shell / namespace owners, release markers, cross-category fence. |
+| Managed terminal commit | `packages/coding/src/task-engine/runner-driven.ts` | Session snapshot before completion; repo/task projection is asynchronous. |
 | Runtime daemon | `src/runtime-daemon/` | Versioned protocol/schema, socket transport, owner state/lock, host, client, and process launcher. |
 | Runtime Worker | `src/runtime-worker/` | MessagePort host that reuses the daemon dispatcher/client and supports hard termination. |
 | Generic agent | `packages/agent/src/primitives/runner.ts`, `agent.ts` | Layer-A Runner and Agent primitives. |

@@ -726,7 +726,7 @@ permission UI, and recovers stale prepared Session tails through an
 authoritative merge. Background persistence failures are surfaced as
 diagnostics rather than hidden.
 
-**v0.7.92 source candidate:** the filesystem-effect coordinator now gives each
+**v0.7.92 release:** the filesystem-effect coordinator now gives each
 queue attempt an exact token and heartbeat. It can reclaim a stale same-daemon
 ticket only when that token no longer owns the coordinator lock, and durable
 release evidence lets a later caller retire the matching settled effect owner.
@@ -736,7 +736,9 @@ before completion and moves repo-intelligence/task-file projection outside the
 active Run. The returned `KodaXResult.managedTask` is the terminal core snapshot;
 maintenance may augment the later on-disk projection. Ordinary-permission
 fallback continues to use the same effect fence. Hosts must negotiate
-`sandboxRuntime:4` and `crashOutcomeModel:2`.
+`sandboxRuntime:4` and `crashOutcomeModel:2`. See the
+[v0.7.92 release checklist](docs/release.md#v0792-release-preparation)
+and [SDK Embedder Guide](public_docs/sdk/embedder-guide.md).
 
 **v0.7.87 GLM provider release:** `zhipu-coding` defaults to `glm-5.3` and
 retains `glm-5.2` as an explicit rollback route. `zai-coding` retained both

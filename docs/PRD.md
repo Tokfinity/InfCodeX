@@ -2,8 +2,8 @@
 
 > Last updated: 2026-08-18
 >
-> Current implementation baseline: `@kodax-ai/kodax@0.7.92` source candidate
-> (`v0.7.91` remains the current GitHub release; npm publication remains manual)
+> Current implementation baseline: `@kodax-ai/kodax@0.7.92`
+> (`v0.7.92` Git tag / GitHub Release; npm publication remains manual)
 >
 > This document describes the current product. Historical pre-v0.7.43
 > chain/harness designs have been removed from this current PRD because they no
@@ -28,11 +28,11 @@ On Windows, a daemon-backed Runtime now establishes kernel process containment
 before daemon application code runs. The daemon is placed in a kill-on-close Job
 Object, and shutdown is considered verified only after the durable cleanup
 outcome, daemon exit, and containment-supervisor exit are all observed. The
-broader Worker owner-lease boundary tracked by Issue 256 remains open after
-v0.7.89, with no replacement target assigned by this release; the v0.7.86
-daemon, per-effect Job, ACL-owner, and termination-
-attestation boundaries do not claim to close
-that remaining Worker-owned descendant gap.
+broader Worker owner-lease boundary tracked by Issue 256 remains open:
+v0.7.92 closes the stale coordinator-ticket and recorded-release slice, but
+does not prove descendant closure after an intermediate parent exits. The
+v0.7.86 daemon, per-effect Job, ACL-owner, and termination-attestation
+boundaries likewise do not claim that remaining Worker-owned descendant gap.
 
 The v0.7.84 Runtime also bounds Agent progress persistence to one in-flight
 projection plus one latest replacement. Same-owner Stop can reconcile a late
@@ -97,6 +97,16 @@ defaults are validated before admission, SDK permission hosts use
 elicitation cancels when its owner expires. Interactive Session persistence
 falls back from a stale prepared tail to an authoritative delta merge and
 surfaces background persistence failures as diagnostics.
+
+The v0.7.92 release keeps mutation tools usable on a long-lived shared daemon
+after a Worker operation disappears. The filesystem-effect coordinator reclaims
+a stale same-process ticket only when that operation no longer owns the exact
+lock, and a durable release marker retires the matching settled effect owner
+without deleting ProgramData lock files. Managed completion waits for the
+canonical Session commit, not for repo/task file projection, so Stop can
+confirm instead of remaining unknown. Hosts negotiate `sandboxRuntime:4` and
+`crashOutcomeModel:2`. Issue 256's lost-ancestor descendant-closure work
+remains open.
 
 ## 2. Target Users
 

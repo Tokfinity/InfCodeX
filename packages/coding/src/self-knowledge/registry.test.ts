@@ -106,6 +106,21 @@ describe('FEATURE_218 manual registry', () => {
     expect(sessions).toContain('authoritative full delta path');
   });
 
+  it('documents the v0.7.92 filesystem-effect and managed terminal contracts', () => {
+    const sdk = resolveKodaXManual({ topic: 'sdk' }).content;
+    const tools = resolveKodaXManual({ topic: 'tools' }).content;
+    const sandbox = resolveKodaXManual({ topic: 'sandbox' }).content;
+
+    expect(sdk).toContain('sandboxRuntime:4');
+    expect(sdk).toContain('crashOutcomeModel:2');
+    expect(sdk).toContain('KodaXFileLockTimeoutError');
+    expect(sdk).toContain('executor Promise');
+    expect(tools).toContain('KodaX file lock timed out');
+    expect(sandbox).toContain('version 4');
+    expect(sandbox).toContain('token-scoped durable marker');
+    expect(sandbox).toContain('Do not delete');
+  });
+
   it('documents the v0.7.79 provider, A2A, Session, and Runtime contracts', () => {
     const providers = resolveKodaXManual({ topic: 'providers' }).content;
     const customProviders = resolveKodaXManual({ topic: 'custom-providers' }).content;
@@ -148,7 +163,7 @@ describe('FEATURE_218 manual registry', () => {
     expect(sandbox).toContain('Run-scoped');
     expect(sandbox).toContain('case-insensitive PATH/Path');
     expect(sandbox).toContain('verbatim-argument contract');
-    expect(sandbox).toContain('capability metadata is version 3');
+    expect(sandbox).toContain('capability metadata is version 4');
     expect(sandbox).toContain('already-approved normal permission path');
     expect(sandbox).toContain('only the last owner recovers');
   });

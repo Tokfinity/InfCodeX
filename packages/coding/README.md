@@ -166,6 +166,14 @@ AbortSignals, validates timeout defaults at the Runtime boundary, and keeps
 stale prepared Session tails recoverable through an authoritative delta merge
 instead of silently losing the latest host state.
 
+The v0.7.92 release advances `sandboxRuntime` to v4 and `crashOutcomeModel` to
+v2. Filesystem-effect tickets share an operation token with the coordinator
+lock; a stale same-PID ticket is reclaimed only when it no longer owns that
+lock. Managed Runs persist the canonical Session before completion, and Runtime
+uses the executor Promise rather than managed `onComplete` as terminal
+authority. See the [SDK Embedder Guide](../../public_docs/sdk/embedder-guide.md)
+for host capability requirements.
+
 ## 安装 / 导入
 
 ```bash
