@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, rm, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -20,6 +20,7 @@ const fsMockState = vi.hoisted(() => ({
   repeatOpenFailure: false,
   injectedOpenFailure: false,
   removedTicketAfterOwnerCreate: false,
+  markerWriteFailureCount: 0,
   rmFailureCounts: {} as Record<string, number>,
 }));
 
@@ -42,6 +43,28 @@ vi.mock('node:fs/promises', async (importOriginal) => {
         });
       }
       return actual.open(target, flags, mode);
+    }),
+    writeFile: vi.fn(async (
+      target: Parameters<typeof actual.writeFile>[0],
+      data: Parameters<typeof actual.writeFile>[1],
+      options?: Parameters<typeof actual.writeFile>[2],
+    ): Promise<void> => {
+      const targetPath = String(target);
+      if (targetPath.startsWith(`${fsMockState.lockPath}.`)
+        && targetPath.endsWith('.released')) {
+        if (fsMockState.markerWriteFailureCount > 0) {
+          fsMockState.markerWriteFailureCount -= 1;
+          throw Object.assign(new Error('simulated marker write contention'), { code: 'EPERM' });
+        }
+        await actual.writeFile(target, data, options);
+        if (fsMockState.mode === 'successor-after-marker' && !fsMockState.replaced) {
+          fsMockState.replaced = true;
+          await actual.rm(fsMockState.lockPath, { force: true });
+          await actual.writeFile(fsMockState.lockPath, fsMockState.successorOwner, 'utf8');
+        }
+        return;
+      }
+      await actual.writeFile(target, data, options);
     }),
     readFile: vi.fn(async (
       target: Parameters<typeof actual.readFile>[0],
@@ -106,6 +129,11 @@ vi.mock('node:fs/promises', async (importOriginal) => {
           : targetPath.includes(`${path.sep}ticket-`)
             ? 'ticket'
             : undefined;
+      if (cleanupKind === 'owner'
+        && fsMockState.mode === 'successor-after-marker'
+        && !fsMockState.replaced) {
+        throw Object.assign(new Error('simulated owner cleanup contention'), { code: 'EPERM' });
+      }
       if (cleanupKind !== undefined && (fsMockState.rmFailureCounts[cleanupKind] ?? 0) > 0) {
         fsMockState.rmFailureCounts[cleanupKind] -= 1;
         throw Object.assign(new Error(`simulated ${cleanupKind} cleanup contention`), {
@@ -145,6 +173,7 @@ afterEach(async () => {
   fsMockState.repeatOpenFailure = false;
   fsMockState.injectedOpenFailure = false;
   fsMockState.removedTicketAfterOwnerCreate = false;
+  fsMockState.markerWriteFailureCount = 0;
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.resetModules();
@@ -477,7 +506,48 @@ describe('learning file lock stale recovery', () => {
     expect(fsMockState.rmFailureCounts).toEqual({ choosing: 0, ticket: 0, owner: 0 });
   });
 
-  for (const cleanupKind of ['choosing', 'ticket', 'owner', 'marker'] as const) {
+  it('does not remove a successor after publishing a release marker', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-store-lock-release-handoff-'));
+    tempDirs.push(root);
+    const lockPath = path.join(root, 'owner.lock');
+    const successorOwner = `${process.pid} 22222222-2222-4222-8222-222222222222\n`;
+    Object.assign(fsMockState, {
+      mode: 'successor-after-marker',
+      lockPath,
+      successorOwner,
+      replaced: false,
+      removedSuccessor: false,
+    });
+
+    const { acquireLearningFileLock } = await import('./store-lock.js');
+    const release = await acquireLearningFileLock(lockPath);
+    await release();
+
+    expect(await readFile(lockPath, 'utf8')).toBe(successorOwner);
+    expect(fsMockState.removedSuccessor).toBe(false);
+  });
+
+  it('can retry release after owner cleanup and release-marker writes both fail', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-store-lock-release-retry-'));
+    tempDirs.push(root);
+    const lockPath = path.join(root, 'owner.lock');
+    Object.assign(fsMockState, {
+      mode: 'idle',
+      lockPath,
+      markerWriteFailureCount: 8,
+      rmFailureCounts: { owner: 8 },
+    });
+
+    const { acquireLearningFileLock } = await import('./store-lock.js');
+    const release = await acquireLearningFileLock(lockPath);
+    await expect(release()).rejects.toThrow('release marker and owner cleanup both failed');
+
+    fsMockState.rmFailureCounts.owner = 0;
+    await expect(release()).resolves.toBeUndefined();
+    await expect(readFile(lockPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  for (const cleanupKind of ['choosing', 'ticket', 'owner'] as const) {
     it(`recovers a ${cleanupKind} entry after every immediate Windows cleanup retry is exhausted`, async () => {
       const root = await mkdtemp(path.join(
         os.tmpdir(),
@@ -497,9 +567,6 @@ describe('learning file lock stale recovery', () => {
       await expect(withLearningFileLock(lockPath, async () => 'second'))
         .resolves.toBe('second');
       expect(fsMockState.rmFailureCounts[cleanupKind]).toBe(0);
-      if (cleanupKind === 'marker') {
-        expect((await readdir(root)).filter((name) => name.endsWith('.released'))).toHaveLength(1);
-      }
     });
   }
 });

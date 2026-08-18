@@ -12,7 +12,6 @@ import {
 } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
-import { emitKodaXDiagnostic } from '../diagnostics.js';
 import { readProcessStartIdentity } from '../runtime/process-tree.js';
 
 const LOCK_ACQUIRE_TIMEOUT_MS = 5_000;
@@ -67,14 +66,24 @@ export async function acquireLearningFileLock(
 ): Promise<() => Promise<void>> {
   await mkdir(dirname(lockPath), { recursive: true });
   const lock = await acquireLock(lockPath, acquireTimeoutMs);
+  let handleClosed = false;
   let released = false;
+  let releasePromise: Promise<void> | undefined;
   return async () => {
     if (released) return;
-    released = true;
-    try {
-      await lock.handle.close();
-    } finally {
+    if (releasePromise !== undefined) return releasePromise;
+    releasePromise = (async () => {
+      if (!handleClosed) {
+        await lock.handle.close();
+        handleClosed = true;
+      }
       await releaseLock(lockPath, lock.token);
+      released = true;
+    })();
+    try {
+      await releasePromise;
+    } finally {
+      if (!released) releasePromise = undefined;
     }
   };
 }
@@ -413,37 +422,38 @@ async function releaseLock(lockPath: string, token: string): Promise<void> {
   try {
     const owner = parseOwner(await readFile(lockPath, 'utf8'));
     if (owner?.token !== token) return;
-    let markerError: unknown;
-    try {
-      await writeFile(releaseMarkerPath(lockPath, token), `${token}\n`, 'utf8');
-    } catch (error) {
-      markerError = error;
-    }
     try {
       await removeFileWithTransientRetry(lockPath);
-    } catch (error) {
-      if (markerError === undefined && isTransientFileContention(error)) return;
-      if (markerError === undefined) throw error;
-      throw new AggregateError(
-        [markerError, error],
-        'learning lock release marker and owner cleanup both failed',
-      );
-    }
-    try {
-      await removeFileWithTransientRetry(releaseMarkerPath(lockPath, token));
-    } catch (error) {
-      emitKodaXDiagnostic({
-        source: 'learning.store-lock',
-        level: 'warn',
-        message: 'Released learning lock left a harmless cleanup marker.',
-        detail: {
-          filePath: releaseMarkerPath(lockPath, token),
-          error: error instanceof Error ? error.message : String(error),
-        },
-      });
+      return;
+    } catch (ownerCleanupError) {
+      try {
+        await writeReleaseMarkerWithTransientRetry(lockPath, token);
+        return;
+      } catch (markerError) {
+        throw new AggregateError(
+          [ownerCleanupError, markerError],
+          'learning lock release marker and owner cleanup both failed',
+        );
+      }
     }
   } catch (error) {
     if (!isFileError(error, 'ENOENT')) throw error;
+  }
+}
+
+async function writeReleaseMarkerWithTransientRetry(
+  lockPath: string,
+  token: string,
+): Promise<void> {
+  for (let attempt = 1; attempt <= LOCK_CLEANUP_ATTEMPTS; attempt += 1) {
+    try {
+      await writeFile(releaseMarkerPath(lockPath, token), `${token}\n`, 'utf8');
+      return;
+    } catch (error) {
+      const transient = isTransientFileContention(error);
+      if (!transient || attempt === LOCK_CLEANUP_ATTEMPTS) throw error;
+      await delay(LOCK_POLL_MS);
+    }
   }
 }
 
