@@ -43,6 +43,7 @@ import {
   ELECTRON_RUN_AS_NODE_ENV,
   emitKodaXDiagnostic,
   getAgentConfigHome,
+  KodaXFileLockTimeoutError,
   killChildProcessTree,
   prepareInternalNodeLaunch,
   readProcessStartIdentity,
@@ -210,7 +211,7 @@ export interface SandboxSetupOutcome {
 }
 
 export interface KodaXSandboxCapability {
-  readonly version: 3;
+  readonly version: 4;
   readonly asrtVersion: string;
   readonly platform: NodeJS.Platform;
   readonly backend: 'windows-restricted-user' | 'macos-seatbelt' | 'linux-bubblewrap' | 'unsupported';
@@ -231,7 +232,7 @@ export function sandboxRuntimeCapability(): KodaXSandboxCapability {
         ? 'linux-bubblewrap'
         : 'unsupported';
   return {
-    version: 3,
+    version: 4,
     asrtVersion: KODAX_ASRT_VERSION,
     platform: process.platform,
     backend,
@@ -1632,7 +1633,7 @@ export async function clearWindowsSandboxAclMarkersForRuntimeOwner(
 }
 
 function isWindowsSandboxAclRecoveryLockTimeout(error: unknown): boolean {
-  return error instanceof Error && error.message.startsWith('learning store lock timed out:');
+  return error instanceof KodaXFileLockTimeoutError;
 }
 
 class ForeignWindowsSandboxAclOwnerContentionError extends WindowsSandboxAclAdmissionError {

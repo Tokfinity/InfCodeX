@@ -7,6 +7,7 @@ import {
   containWindowsEffectProcess,
   emitKodaXDiagnostic,
   isCurrentProcessWindowsJobContained,
+  KodaXFileLockTimeoutError,
   killChildProcessTree,
   killChildProcessTreeSync,
   prepareJavaScriptChildLaunch,
@@ -560,8 +561,11 @@ async function executeToolBash(
   } catch (error) {
     await cleanupSandbox();
     const message = error instanceof Error ? error.message : String(error);
+    const reason = error instanceof KodaXFileLockTimeoutError
+      ? 'the filesystem-effect coordinator was unavailable'
+      : 'another filesystem effect is active';
     return withSandboxCleanupFailure(
-      `[Error] Command was not started because another filesystem effect is active: ${message}`,
+      `[Error] Command was not started because ${reason}: ${message}`,
     );
   }
   let mutationLeaseReleased = false;

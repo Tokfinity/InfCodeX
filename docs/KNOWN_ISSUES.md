@@ -79,7 +79,7 @@ by the focused sandbox, lineage, REPL, and coding-runtime tests.
 | 259 | Medium | Resolved | REPL startup persists zero-message sessions before the first prompt | v0.7.72 Runtime REPL bridge | v0.7.79 development | 2026-08-02 | 2026-08-02 |
 | 258 | Medium | Resolved | TodoList content and labels can ignore the query and UI locale | v0.7.79 development | v0.7.79 development | 2026-08-01 | 2026-08-01 |
 | 257 | High | Resolved | Legacy compaction copies cannot be safely folded by hosts | legacy compaction/resume persistence | v0.7.79 development | 2026-08-01 | 2026-08-01 |
-| 256 | High | Open | Windows child containment cannot prove descendant closure after an intermediate parent exits | Windows LLM, MCP, daemon-startup, and Worker-owned child processes | v0.7.86 partial mitigation; post-v0.7.87 follow-up unassigned | 2026-08-01 | - |
+| 256 | High | Open | Windows child containment cannot prove descendant closure after an intermediate parent exits | Windows LLM, MCP, daemon-startup, and Worker-owned child processes | v0.7.92 stale coordinator-ticket/recorded-release slice; descendant closure follow-up unassigned | 2026-08-01 | - |
 | 255 | High | Resolved | Runtime teardown and cancellation could report completion across indeterminate lifecycle boundaries | Runtime SDK lifecycle and daemon protocol | v0.7.79 development | 2026-08-01 | 2026-08-01 |
 | 254 | High | Resolved | First v0.7.78 Session reconciliation replays historical messages as new lineage entries | v0.7.78 lineage reconciliation | v0.7.79 development | 2026-07-31 | 2026-07-31 |
 | 253 | Medium | Resolved | Parallel quality-strategy admissions conflict on unrelated Actor progress | v0.7.77 quality-strategy admission | v0.7.79 development | 2026-07-31 | 2026-07-31 |
@@ -2949,6 +2949,21 @@ The v0.7.87 release is limited to GLM provider compatibility and documentation.
 It does not add the host-issued Worker owner lease required for descendant
 closure. Issue 256 therefore remains Open after v0.7.87, and this release does
 not assign a replacement target.
+
+#### 2026-08-18 v0.7.92 filesystem-effect convergence slice
+
+The v0.7.92 source candidate closes the same-process orphan-ticket and released
+filesystem-effect owner path observed under a long-lived daemon. Queue entries
+now heartbeat one operation token, that token fences the exact coordinator
+lock, and a durable token-scoped release proof lets later work retire only the
+matching completed effect while the daemon PID remains alive. An exact active
+lock or an unproven bound process tree remains fail-closed.
+
+This resolves the stale-ticket and recorded-release slice. Managed finalization
+no longer waits for repo/task projections, so this failure cannot keep the Run
+active and thereby suppress orphan-idle daemon exit. It does not prove
+descendant closure after an intermediate parent exits or revoke an exact active
+coordinator lock owned by a live process; Issue 256 as a whole remains Open.
 
 ### 255: Runtime teardown and cancellation could report completion across indeterminate lifecycle boundaries
 

@@ -6,6 +6,33 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- The shared filesystem-effect coordinator now identifies queue ownership by an
+  operation token, refreshes live waiters, and reclaims abandoned same-process
+  tickets only after the ticket heartbeat is stale and no exact coordinator lock
+  is owned. A durable release marker lets a later caller remove a settled
+  direct-effect owner even while the long-lived daemon PID remains alive.
+- Managed Runs commit the canonical Session before reporting managed
+  completion. Repository-intelligence and managed-task file projections run as
+  best-effort maintenance, and Runtime no longer treats the managed
+  `onComplete` cleanup callback as terminal authority ahead of the executor
+  Promise. `KodaXResult.managedTask` is the terminal core snapshot; maintenance
+  may add repo-intelligence evidence to the eventual on-disk projection without
+  mutating the already-returned result.
+
+### Changed
+
+- `sandboxRuntime` advances to v4 for stale coordinator-ticket and
+  recorded-release convergence,
+  and `crashOutcomeModel` advances to v2 for the terminal-commit ordering. Both
+  capabilities are exported as pre-start SDK facts so hosts can replace an idle
+  stale daemon or fail closed while it is busy.
+- Generic file-lock timeouts now use `KodaXFileLockTimeoutError` instead of the
+  misleading learning-specific message. Sandbox-to-ordinary execution fallback
+  remains unchanged: both paths must acquire the same filesystem-effect fence,
+  so an unproven coordinator state is never bypassed or replayed.
+
 ---
 
 ## [0.7.91] - 2026-08-17

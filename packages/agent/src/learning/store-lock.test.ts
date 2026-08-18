@@ -19,6 +19,7 @@ const fsMockState = vi.hoisted(() => ({
   openFailureCode: '',
   repeatOpenFailure: false,
   injectedOpenFailure: false,
+  removedTicketAfterOwnerCreate: false,
   rmFailureCounts: {} as Record<string, number>,
 }));
 
@@ -46,6 +47,17 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       target: Parameters<typeof actual.readFile>[0],
       encoding: BufferEncoding,
     ): Promise<string> => {
+      const targetPath = String(target);
+      if (fsMockState.mode === 'remove-ticket-after-owner-create'
+        && !fsMockState.removedTicketAfterOwnerCreate
+        && targetPath.includes(`${path.sep}ticket-`)) {
+        const ownerExists = await actual.readFile(fsMockState.lockPath, 'utf8')
+          .then(() => true, () => false);
+        if (ownerExists) {
+          fsMockState.removedTicketAfterOwnerCreate = true;
+          await actual.rm(targetPath, { force: true });
+        }
+      }
       const value = await actual.readFile(target, encoding);
       if (fsMockState.mode === 'replace-on-final-read-without-ticket'
         && !fsMockState.replaced
@@ -132,12 +144,26 @@ afterEach(async () => {
   fsMockState.openFailureCode = '';
   fsMockState.repeatOpenFailure = false;
   fsMockState.injectedOpenFailure = false;
+  fsMockState.removedTicketAfterOwnerCreate = false;
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.resetModules();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
 describe('learning file lock stale recovery', () => {
+  it('does not reap its own choosing entry when the logical clock jumps forward', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-store-lock-own-choosing-'));
+    tempDirs.push(root);
+    const lockPath = path.join(root, 'owner.lock');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(Date.now() + 60_000));
+
+    const { acquireLearningFileLock } = await import('./store-lock.js');
+    const release = await acquireLearningFileLock(lockPath, 500);
+    await release();
+  });
+
   it('does not create queue artifacts when no stale lock exists', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-store-lock-no-reclaim-'));
     tempDirs.push(root);
@@ -273,6 +299,89 @@ describe('learning file lock stale recovery', () => {
 
     const { withLearningFileLock } = await import('./store-lock.js');
     await expect(withLearningFileLock(lockPath, async () => 'acquired')).resolves.toBe('acquired');
+  });
+
+  it('recovers a stale live-process ticket that no longer owns the coordinator lock', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-store-lock-orphan-operation-'));
+    tempDirs.push(root);
+    const lockPath = path.join(root, 'owner.lock');
+    const queuePath = `${lockPath}.queue`;
+    const token = '45454545-4545-4454-8454-454545454545';
+    const ticketPath = path.join(
+      queuePath,
+      `ticket-0000000000000001-${token}.lock`,
+    );
+    await mkdir(queuePath, { recursive: true });
+    await writeFile(ticketPath, `${process.pid} ${token}\n`, 'utf8');
+    const old = new Date(Date.now() - 60_000);
+    await utimes(ticketPath, old, old);
+
+    const { withLearningFileLock } = await import('./store-lock.js');
+    await expect(withLearningFileLock(lockPath, async () => 'recovered', 250))
+      .resolves.toBe('recovered');
+  });
+
+  it('recovers a stale live-process choosing entry from an abandoned operation', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-store-lock-orphan-choosing-'));
+    tempDirs.push(root);
+    const lockPath = path.join(root, 'owner.lock');
+    const queuePath = `${lockPath}.queue`;
+    const token = '47474747-4747-4474-8474-474747474747';
+    const choosingPath = path.join(queuePath, `choosing-${token}.lock`);
+    await mkdir(queuePath, { recursive: true });
+    await writeFile(choosingPath, `${process.pid} ${token}\n`, 'utf8');
+    const old = new Date(Date.now() - 60_000);
+    await utimes(choosingPath, old, old);
+
+    const { withLearningFileLock } = await import('./store-lock.js');
+    await expect(withLearningFileLock(lockPath, async () => 'recovered', 250))
+      .resolves.toBe('recovered');
+  });
+
+  it('keeps a stale live-process ticket while its exact coordinator lock is active', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-store-lock-active-operation-'));
+    tempDirs.push(root);
+    const lockPath = path.join(root, 'owner.lock');
+    const queuePath = `${lockPath}.queue`;
+    const token = '46464646-4646-4464-8464-464646464646';
+    const owner = `${process.pid} ${token}\n`;
+    const ticketPath = path.join(
+      queuePath,
+      `ticket-0000000000000001-${token}.lock`,
+    );
+    await mkdir(queuePath, { recursive: true });
+    await writeFile(ticketPath, owner, 'utf8');
+    await writeFile(lockPath, owner, 'utf8');
+    const old = new Date(Date.now() - 60_000);
+    await Promise.all([
+      utimes(ticketPath, old, old),
+      utimes(lockPath, old, old),
+    ]);
+
+    const { withLearningFileLock } = await import('./store-lock.js');
+    await expect(withLearningFileLock(lockPath, async () => undefined, 100))
+      .rejects.toMatchObject({
+        name: 'KodaXFileLockTimeoutError',
+        code: 'kodax_file_lock_timeout',
+        lockPath,
+      });
+  });
+
+  it('releases the coordinator lock when its queue ticket is lost after lock creation', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-store-lock-ticket-loss-'));
+    tempDirs.push(root);
+    const lockPath = path.join(root, 'owner.lock');
+    fsMockState.mode = 'remove-ticket-after-owner-create';
+    fsMockState.lockPath = lockPath;
+
+    const { acquireLearningFileLock } = await import('./store-lock.js');
+    await expect(acquireLearningFileLock(lockPath, 500)).rejects.toThrow(
+      /ticket lost/i,
+    );
+
+    fsMockState.mode = 'idle';
+    const release = await acquireLearningFileLock(lockPath, 500);
+    await release();
   });
 
   it('reclaims a stale lock when its PID was reused by a different process identity', async () => {

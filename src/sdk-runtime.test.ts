@@ -295,7 +295,7 @@ describe("createKodaXRuntime", () => {
       rollback: true,
     });
     expect(runtime.capabilities.sandboxRuntime).toMatchObject({
-      version: 3,
+      version: 4,
       genericCommandExecution: true,
       ordinaryCallsTriggerSetup: false,
       unavailableBehavior: "structured-no-execution",
@@ -10192,6 +10192,46 @@ describe("createKodaXRuntime", () => {
     await expect(run.result).resolves.toMatchObject({ phase: "completed" });
     await runtime.close();
     await expect(queued.result).resolves.toMatchObject({ phase: "unknown" });
+  });
+
+  it("keeps managed onComplete non-authoritative until its result Promise settles", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "sessions"),
+      defaultProvider: "mock-provider",
+    });
+    const session = await runtime.sessions.create({
+      title: "Managed terminal authority",
+    });
+    let activeEvents: KodaXOptions["events"];
+    let finishManaged: ((value: KodaXResult) => void) | undefined;
+    codingMock.runManagedTask.mockImplementation((options: KodaXOptions) => {
+      activeEvents = options.events;
+      return new Promise<KodaXResult>((resolve) => {
+        finishManaged = resolve;
+      });
+    });
+
+    const run = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "commit before terminal",
+      mode: "managed_task",
+    });
+    activeEvents?.onComplete?.();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+      phase: "running",
+    });
+    finishManaged?.({
+      success: true,
+      lastText: "durably committed",
+      messages: [],
+      sessionId: session.id,
+    });
+    await expect(run.result).resolves.toMatchObject({ phase: "completed" });
+    await runtime.close();
   });
 
   it("reports waiting-agent and recovery phases through Run and Session status", async () => {

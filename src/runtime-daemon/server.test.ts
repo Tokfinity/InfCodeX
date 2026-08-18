@@ -1384,7 +1384,7 @@ describe('runtime daemon dispatcher', () => {
           providerCredentialBroker: { version: 1 },
           runBoundHostTools: { version: 2, materializedAgentTools: true },
           coderOwnerFencing: { version: 1 },
-          crashOutcomeModel: { version: 1 },
+          crashOutcomeModel: { version: 2 },
           sessionAdmission: { version: 1, partnerDenied: true },
           completeObservationSnapshot: { version: 1, queuedInputs: true },
           connectionLifecycle: { version: 1 },

@@ -2416,7 +2416,7 @@ function runtimeDaemonCapabilities(
       maxResultBytes: reverseBridgeLimits.maxResultBytes,
     },
     coderOwnerFencing: { version: 1 },
-    crashOutcomeModel: { version: 1 },
+    crashOutcomeModel: { version: 2 },
     coderFeatureMatrix: {
       version: 1,
       managedRun: true,

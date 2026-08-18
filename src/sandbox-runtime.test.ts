@@ -573,7 +573,7 @@ vi.mock('@kodax-ai/agent', async (importOriginal) => {
           || recoveryLockMock.timeoutOnCall === recoveryLockMock.calls
         ) {
           recoveryLockMock.timeoutFailures = Math.max(0, recoveryLockMock.timeoutFailures - 1);
-          throw new Error(`learning store lock timed out: ${lockPath}`);
+          throw new actual.KodaXFileLockTimeoutError(lockPath);
         }
         await recoveryLockMock.beforeOperation?.();
       }
@@ -4828,7 +4828,7 @@ describe('ASRT workspace shell adapter', () => {
       });
       recoveryLockMock.timeoutFailures = 1;
 
-      await expect(run()).rejects.toThrow('learning store lock timed out');
+      await expect(run()).rejects.toThrow('KodaX file lock timed out');
       await expect(run()).resolves.toMatchObject({ status: 'completed', exitCode: 0 });
     },
   );
@@ -4846,7 +4846,7 @@ describe('ASRT workspace shell adapter', () => {
       });
       recoveryLockMock.timeoutOnCall = 2;
 
-      await expect(run()).rejects.toThrow('learning store lock timed out');
+      await expect(run()).rejects.toThrow('KodaX file lock timed out');
       expect(capturedBrokerRequests).toHaveLength(1);
       await resetAsrtWorkspaceSessionsForTest({ preserveAclPoison: true });
       recoveryLockMock.timeoutOnCall = undefined;

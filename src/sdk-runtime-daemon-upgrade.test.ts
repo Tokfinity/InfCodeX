@@ -215,8 +215,8 @@ describe('Runtime daemon capability upgrade', () => {
     expect(newClose).toHaveBeenCalled();
   });
 
-  it.skipIf(process.platform !== 'win32').each([1, 2])(
-    'replaces an idle sandbox v%i daemon before exposing sandbox execution v3',
+  it.skipIf(process.platform !== 'win32').each([1, 2, 3])(
+    'replaces an idle sandbox v%i daemon before exposing sandbox execution v4',
     async (sandboxVersion) => {
       const calls: string[] = [];
       const oldTransport = createLegacyTransport({
@@ -270,8 +270,84 @@ describe('Runtime daemon capability upgrade', () => {
     },
   );
 
-  it.skipIf(process.platform !== 'win32').each([1, 2])(
-    'keeps a busy sandbox v%i daemon fenced behind the sandbox v3 upgrade requirement',
+  it('replaces an idle crash-outcome v1 daemon before exposing managed terminal v2', async () => {
+    const calls: string[] = [];
+    const oldTransport = createLegacyTransport({
+      preflight: createPreflight(),
+      calls,
+      close: vi.fn(async () => undefined),
+      capabilities: {
+        crashOutcomeModel: { version: 1 },
+        daemonManagement: { version: 1 },
+        runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
+        runtimeEventCoalescing: { version: 1 },
+      },
+      onRollback: () => upgradeMocks.readLockOwner.mockReturnValue(undefined),
+    });
+    const newClose = vi.fn(async () => undefined);
+    upgradeMocks.acquireProcessLease
+      .mockResolvedValueOnce(createLease(oldTransport))
+      .mockResolvedValueOnce(createLease(createCurrentTransport(calls, newClose)));
+    upgradeMocks.readLockOwner.mockReturnValue({
+      runtimeId: RUNTIME_ID,
+      pid: 101,
+      createdAt: '2026-07-19T00:00:00.000Z',
+      kind: 'daemon',
+    });
+
+    const runtime = await connectKodaXRuntime({
+      autoStart: true,
+      profile: PROFILE,
+      homeDir: path.join('C:', 'kodax-upgrade-test'),
+    });
+
+    expect(runtime.identity.runtimeId).toBe('runtime_current');
+    expect(calls).toEqual([
+      'old:initialize',
+      'old:daemon.management.get',
+      'old:daemon.rollbackToInline',
+      'old:close',
+      'new:initialize',
+    ]);
+    await runtime.close();
+    expect(newClose).toHaveBeenCalled();
+  });
+
+  it.each([
+    ['active run', createPreflight({ blockers: ['active_runs'], canStop: false })],
+    ['additional client', createPreflight({
+      clientCount: 2,
+      blockers: ['connected_clients'],
+      canStop: false,
+    })],
+  ])('keeps a crash-outcome v1 daemon fenced while it has an %s', async (_case, preflight) => {
+    const calls: string[] = [];
+    upgradeMocks.acquireProcessLease.mockResolvedValueOnce(createLease(createLegacyTransport({
+      preflight,
+      calls,
+      close: vi.fn(async () => undefined),
+      capabilities: {
+        crashOutcomeModel: { version: 1 },
+        daemonManagement: { version: 1 },
+        runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
+        runtimeEventCoalescing: { version: 1 },
+      },
+    })));
+
+    await expect(connectKodaXRuntime({
+      autoStart: true,
+      profile: PROFILE,
+      homeDir: path.join('C:', 'kodax-upgrade-test'),
+    })).rejects.toMatchObject({
+      code: 'daemon_capability_upgrade_required',
+      capability: 'crashOutcomeModel',
+      preflight: expect.objectContaining({ blockers: preflight.blockers }),
+    });
+    expect(upgradeMocks.enableDaemonOwner).not.toHaveBeenCalled();
+  });
+
+  it.skipIf(process.platform !== 'win32').each([1, 2, 3])(
+    'keeps a busy sandbox v%i daemon fenced behind the sandbox v4 upgrade requirement',
     async (sandboxVersion) => {
       const calls: string[] = [];
       const oldTransport = createLegacyTransport({
@@ -532,12 +608,13 @@ describe('Runtime daemon capability upgrade', () => {
   it('publishes the required pre-spawn daemon capabilities', () => {
     expect(KODAX_RUNTIME_SDK_CAPABILITIES).toEqual({
       actorSettlementConvergence: 2,
+      crashOutcomeModel: 2,
       daemonOrphanExit: 1,
       daemonShutdownVerification: 1,
       liveOutputSegments: 1,
       managedRunDurability: 1,
       runtimeExitSettlement: 1,
-      sandboxRuntime: 3,
+      sandboxRuntime: 4,
       runtimeEventCoalescing: 1,
       sessionEventJournal: 1,
     });
@@ -597,7 +674,7 @@ describe('Runtime daemon capability upgrade', () => {
       managedRunDurability: { version: 1 },
       runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
       runtimeEventCoalescing: { version: 1 },
-      sandboxRuntime: { version: 3 },
+      sandboxRuntime: { version: 4 },
       sessionEventJournal: { version: 1 },
       ...(process.platform === 'win32'
         ? { daemonShutdownVerification: { version: 1 } }
@@ -670,7 +747,7 @@ describe('Runtime daemon capability upgrade', () => {
         daemonManagement: undefined,
         runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
         runtimeEventCoalescing: { version: 1 },
-        sandboxRuntime: { version: 3 },
+        sandboxRuntime: { version: 4 },
       },
     });
     upgradeMocks.acquireProcessLease.mockResolvedValueOnce(createLease(oldTransport));
@@ -702,7 +779,7 @@ describe('Runtime daemon capability upgrade', () => {
           daemonShutdownVerification: undefined,
           runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
           runtimeEventCoalescing: { version: 1 },
-          sandboxRuntime: { version: 3 },
+          sandboxRuntime: { version: 4 },
         },
       });
       upgradeMocks.acquireProcessLease.mockResolvedValueOnce(createLease(oldTransport));
@@ -745,7 +822,7 @@ describe('Runtime daemon capability upgrade', () => {
         daemonManagement: { version: 1 },
         runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
         runtimeEventCoalescing: { version: 1 },
-        sandboxRuntime: { version: 3 },
+        sandboxRuntime: { version: 4 },
       },
     });
     upgradeMocks.acquireProcessLease.mockResolvedValueOnce(createLease(oldTransport));
@@ -1179,6 +1256,7 @@ function createLegacyTransport(input: {
           RUNTIME_ID,
           {
             actorSettlementConvergence: { version: 2 },
+            crashOutcomeModel: { version: 2 },
             managedRunDurability: { version: 1 },
             sessionEventJournal: { version: 1 },
             ...(input.omitLiveOutputSegments
@@ -1234,9 +1312,10 @@ function createCurrentTransport(
       }
       return initializeResult('runtime_current', {
         actorSettlementConvergence: { version: 2 },
+        crashOutcomeModel: { version: 2 },
         managedRunDurability: { version: 1 },
         liveOutputSegments: { version: 1 },
-        sandboxRuntime: { version: 3 },
+        sandboxRuntime: { version: 4 },
         sessionEventJournal: { version: 1 },
         runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
         runtimeEventCoalescing: { version: 1 },

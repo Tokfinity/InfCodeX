@@ -230,6 +230,80 @@ describe('cross-process filesystem effect lease', () => {
       .resolves.toBe('recovered');
   });
 
+  it('recovers a released direct owner even while its daemon process remains alive', async () => {
+    const runtimeDirectory = effectRuntimeDirectory();
+    const statePath = path.join(runtimeDirectory, 'model-filesystem-effects.json');
+    const token = 'released-live-direct';
+    await fs.promises.mkdir(runtimeDirectory, { recursive: true });
+    await fs.promises.writeFile(
+      statePath,
+      JSON.stringify({
+        direct: [{ pid: process.pid, token }],
+        namespaces: [],
+        shells: [],
+      }),
+      'utf8',
+    );
+    const encodedToken = Buffer.from(token, 'utf8').toString('base64url');
+    await fs.promises.writeFile(`${statePath}.${encodedToken}.released`, `${token}\n`, 'utf8');
+
+    const releaseShell = await acquireFileSystemMutationLease();
+    await releaseShell();
+  });
+
+  it('removes its state through the coordinator when release-marker creation fails', async () => {
+    const runtimeDirectory = effectRuntimeDirectory();
+    const statePath = path.join(runtimeDirectory, 'model-filesystem-effects.json');
+    const releaseEffect = await acquireFileSystemMutationLease();
+    const state = JSON.parse(await fs.promises.readFile(statePath, 'utf8')) as {
+      readonly shells: readonly { readonly token: string }[];
+    };
+    const token = state.shells[0]?.token;
+    if (token === undefined) throw new Error('Expected the acquired shell lease token.');
+    const encodedToken = Buffer.from(token, 'utf8').toString('base64url');
+    const markerPath = `${statePath}.${encodedToken}.released`;
+    await fs.promises.mkdir(markerPath);
+
+    await expect(releaseEffect()).resolves.toBeUndefined();
+    await expect(fs.promises.readFile(statePath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await fs.promises.rm(markerPath, { recursive: true, force: true });
+  });
+
+  it('recovers the incident shape of an orphan coordinator ticket plus released direct owner', async () => {
+    const runtimeDirectory = effectRuntimeDirectory();
+    const statePath = path.join(runtimeDirectory, 'model-filesystem-effects.json');
+    const coordinatorPath = path.join(runtimeDirectory, 'model-filesystem-effects.lock');
+    const queuePath = `${coordinatorPath}.queue`;
+    const directToken = 'incident-released-direct';
+    const ticketToken = '47474747-4747-4474-8474-474747474747';
+    const ticketPath = path.join(
+      queuePath,
+      `ticket-0000000000000001-${ticketToken}.lock`,
+    );
+    await fs.promises.mkdir(queuePath, { recursive: true });
+    await fs.promises.writeFile(
+      statePath,
+      JSON.stringify({
+        direct: [{ pid: process.pid, token: directToken }],
+        namespaces: [],
+        shells: [],
+      }),
+      'utf8',
+    );
+    const encodedToken = Buffer.from(directToken, 'utf8').toString('base64url');
+    await fs.promises.writeFile(
+      `${statePath}.${encodedToken}.released`,
+      `${directToken}\n`,
+      'utf8',
+    );
+    await fs.promises.writeFile(ticketPath, `${process.pid} ${ticketToken}\n`, 'utf8');
+    const old = new Date(Date.now() - 60_000);
+    await fs.promises.utimes(ticketPath, old, old);
+
+    const releaseShell = await acquireFileSystemMutationLease();
+    await releaseShell();
+  });
+
   it('recovers a pre-bind shell marker after managed cleanup proves no child remains', async () => {
     const runtimeDirectory = effectRuntimeDirectory();
     await fs.promises.mkdir(runtimeDirectory, { recursive: true });
@@ -248,14 +322,16 @@ describe('cross-process filesystem effect lease', () => {
 
   it('keeps the fence while an abandoned owner\'s bound effect process is alive', async () => {
     const runtimeDirectory = effectRuntimeDirectory();
+    const statePath = path.join(runtimeDirectory, 'model-filesystem-effects.json');
+    const token = 'crashed-owner-live-effect';
     await fs.promises.mkdir(runtimeDirectory, { recursive: true });
     await fs.promises.writeFile(
-      path.join(runtimeDirectory, 'model-filesystem-effects.json'),
+      statePath,
       JSON.stringify({
         direct: [],
         shells: [{
           pid: 2_147_483_647,
-          token: 'crashed-owner-live-effect',
+          token,
           effectPid: process.pid,
           posixProcessGroup: false,
           windowsJobContained: false,
@@ -263,6 +339,8 @@ describe('cross-process filesystem effect lease', () => {
       }),
       'utf8',
     );
+    const encodedToken = Buffer.from(token, 'utf8').toString('base64url');
+    await fs.promises.writeFile(`${statePath}.${encodedToken}.released`, `${token}\n`, 'utf8');
 
     await expect(withFileMutation('/tmp/must-remain-fenced.txt', async () => 'unsafe'))
       .rejects.toThrow('filesystem effect is already active');
@@ -375,6 +453,8 @@ describe('cross-process filesystem effect lease', () => {
     const releaseEffect = await acquireFileSystemMutationLease();
     await releaseEffect.bindEffectProcess(process.pid, false);
     await releaseEffect.finishEffectProcess();
+    await expect(withFileMutation('/tmp/still-held-between-processes.txt', async () => 'unsafe'))
+      .rejects.toThrow('filesystem effect is already active');
     await releaseEffect.bindEffectProcess(process.pid, false);
     await releaseEffect.finishEffectProcess();
 

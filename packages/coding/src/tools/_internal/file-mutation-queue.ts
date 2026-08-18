@@ -40,6 +40,7 @@ import path from 'node:path';
 import {
   acquireKodaXFileLock,
   cleanupRegisteredManagedChildren,
+  emitKodaXDiagnostic,
   getAgentConfigHome,
   readProcessStartIdentity,
 } from '@kodax-ai/agent';
@@ -223,20 +224,67 @@ function modelEffectTreeState(
 function removeStaleEffectLeases(
   state: EffectLeaseState,
   managedCleanupSkipped: boolean,
+  releasedTokens: ReadonlySet<string>,
 ): EffectLeaseState {
   const parentAlive = new Map<EffectLeaseOwner, boolean>();
   for (const owner of [...state.direct, ...state.namespaces, ...state.shells]) {
     parentAlive.set(owner, isEffectLeaseOwnerAlive(owner));
   }
+  const hasReleaseProof = (owner: EffectLeaseOwner): boolean => (
+    releasedTokens.has(owner.token)
+    && (owner.effectPid === undefined || owner.effectFinished === true)
+  );
   const keepExternalEffect = (owner: EffectLeaseOwner): boolean => (
-    parentAlive.get(owner) === true
+    !hasReleaseProof(owner)
+    && (parentAlive.get(owner) === true
     || modelEffectTreeState(owner, managedCleanupSkipped) !== 'absent'
+    )
   );
   return {
-    direct: state.direct.filter((owner) => parentAlive.get(owner) === true),
+    direct: state.direct.filter((owner) => (
+      !hasReleaseProof(owner) && parentAlive.get(owner) === true
+    )),
     namespaces: state.namespaces.filter(keepExternalEffect),
     shells: state.shells.filter(keepExternalEffect),
   };
+}
+
+function effectReleaseMarkerPath(storage: EffectLeaseStorage, token: string): string {
+  return `${storage.statePath}.${Buffer.from(token, 'utf8').toString('base64url')}.released`;
+}
+
+async function releasedEffectTokens(
+  storage: EffectLeaseStorage,
+  state: EffectLeaseState,
+): Promise<ReadonlySet<string>> {
+  const released = new Set<string>();
+  const owners = [...state.direct, ...state.namespaces, ...state.shells];
+  await Promise.all(owners.map(async (owner) => {
+    try {
+      if ((await readFile(effectReleaseMarkerPath(storage, owner.token), 'utf8')).trim() === owner.token) {
+        released.add(owner.token);
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }));
+  return released;
+}
+
+async function removeEffectReleaseMarkerBestEffort(
+  storage: EffectLeaseStorage,
+  token: string,
+): Promise<void> {
+  try {
+    await rm(effectReleaseMarkerPath(storage, token), { force: true });
+  } catch (error) {
+    emitKodaXDiagnostic({
+      source: 'coding.filesystem-effect-coordinator',
+      level: 'warn',
+      message: 'Failed to remove a settled filesystem-effect release marker.',
+      detail: error,
+    });
+  }
 }
 
 async function reconcileAbandonedManagedEffects(storage: EffectLeaseStorage): Promise<boolean> {
@@ -334,9 +382,16 @@ async function acquireEffectLease(
   const managedCleanupSkipped = await reconcileAbandonedManagedEffects(storage);
   while (true) {
     const acquired = await withEffectLeaseCoordinator(storage, async () => {
+      const storedState = await readEffectLeaseState(storage);
+      const releasedTokens = await releasedEffectTokens(storage, storedState);
       const state = removeStaleEffectLeases(
-        await readEffectLeaseState(storage),
+        storedState,
         managedCleanupSkipped,
+        releasedTokens,
+      );
+      const retainedTokens = new Set(
+        [...state.direct, ...state.namespaces, ...state.shells]
+          .map((lease) => lease.token),
       );
       const conflicts = mode === 'shell'
         ? state.direct.length > 0
@@ -392,6 +447,11 @@ async function acquireEffectLease(
         : mode === 'direct'
           ? { direct: [...state.direct, owner], namespaces: state.namespaces, shells: state.shells }
           : { direct: state.direct, namespaces: [...state.namespaces, owner], shells: state.shells });
+      await Promise.all([...releasedTokens]
+        .filter((releasedToken) => !retainedTokens.has(releasedToken))
+        .map((releasedToken) => (
+        removeEffectReleaseMarkerBestEffort(storage, releasedToken)
+        )));
       return true;
     });
     if (acquired === true) break;
@@ -408,9 +468,12 @@ async function acquireEffectLease(
   }
 
   let released = false;
+  let releaseRecorded = false;
   let releaseAttempt: Promise<void> | undefined;
   let backgroundReleaseScheduled = false;
   let stateUpdateAttempted = false;
+  let effectProcessBound = false;
+  let effectFinished = false;
   const releaseOnce = (): Promise<void> => withEffectLeaseCoordinator(storage, async () => {
     const state = await readEffectLeaseState(storage);
     const owned = (mode === 'shell'
@@ -420,7 +483,10 @@ async function acquireEffectLease(
         : state.namespaces)
       .find((lease) => lease.token === token);
     if (owned === undefined) {
-      if (stateUpdateAttempted) return;
+      if (releaseRecorded || stateUpdateAttempted) {
+        await removeEffectReleaseMarkerBestEffort(storage, token);
+        return;
+      }
       throw new Error('Filesystem effect lease ownership was lost.');
     }
     if (owned.effectPid !== undefined && owned.effectFinished !== true) {
@@ -444,6 +510,7 @@ async function acquireEffectLease(
             namespaces: state.namespaces.filter((lease) => lease.token !== token),
             shells: state.shells,
           });
+    await removeEffectReleaseMarkerBestEffort(storage, token);
   });
   const scheduleBackgroundRelease = (): void => {
     if (released || backgroundReleaseScheduled) return;
@@ -462,10 +529,27 @@ async function acquireEffectLease(
     retry();
   };
   const releaseReliably = async (): Promise<void> => {
+    let releaseProofError: unknown;
+    if (!releaseRecorded && (!effectProcessBound || effectFinished)) {
+      try {
+        await writeFile(effectReleaseMarkerPath(storage, token), `${token}\n`, 'utf8');
+        releaseRecorded = true;
+      } catch (error) {
+        releaseProofError = error;
+      }
+    }
     let lastError: unknown;
     for (let attempt = 1; attempt <= FILE_SYSTEM_EFFECT_RELEASE_ATTEMPTS; attempt += 1) {
       try {
         await releaseOnce();
+        if (releaseProofError !== undefined) {
+          emitKodaXDiagnostic({
+            source: 'coding.filesystem-effect-coordinator',
+            level: 'warn',
+            message: 'Filesystem-effect release converged without a durable release marker.',
+            detail: releaseProofError,
+          });
+        }
         return;
       } catch (error) {
         lastError = error;
@@ -475,7 +559,12 @@ async function acquireEffectLease(
       }
     }
     scheduleBackgroundRelease();
-    throw lastError;
+    throw releaseProofError === undefined
+      ? lastError
+      : new AggregateError(
+          [releaseProofError, lastError],
+          'Filesystem-effect release marker and coordinator cleanup both failed.',
+        );
   };
   const release = async (): Promise<void> => {
     if (released) return;
@@ -523,9 +612,9 @@ async function acquireEffectLease(
         shells: mode === 'shell' ? state.shells.map(replaceOwner) : state.shells,
       });
     });
+    effectProcessBound = true;
     effectFinished = false;
   };
-  let effectFinished = false;
   let finishAttempt: Promise<void> | undefined;
   let backgroundFinishScheduled = false;
   const finishEffectProcessOnce = (): Promise<void> => withEffectLeaseCoordinator(storage, async () => {

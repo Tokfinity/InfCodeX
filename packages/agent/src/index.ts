@@ -767,6 +767,7 @@ export {
 } from './learning/index.js';
 export {
   acquireLearningFileLock as acquireKodaXFileLock,
+  KodaXFileLockTimeoutError,
   reclaimStaleLearningFileLock as reclaimStaleKodaXFileLock,
   withLearningFileLock as withKodaXFileLock,
 } from './learning/store-lock.js';

@@ -176,6 +176,55 @@ describe('managed runner queue routing', () => {
     );
   });
 
+  it('does not report managed completion before the canonical Session commit', async () => {
+    const sessionId = 'runtime-terminal-commit-order';
+    let stored: KodaXSessionData | null = null;
+    let releaseTerminalSave: (() => void) | undefined;
+    let markTerminalSaveStarted: (() => void) | undefined;
+    const terminalSaveStarted = new Promise<void>((resolve) => {
+      markTerminalSaveStarted = resolve;
+    });
+    const terminalSaveGate = new Promise<void>((resolve) => {
+      releaseTerminalSave = resolve;
+    });
+    const completedStatuses: string[] = [];
+    const run = runManagedTaskViaRunner(
+      {
+        ...makeOptions(),
+        session: {
+          id: sessionId,
+          persistedByHost: false,
+          storage: {
+            load: vi.fn(async () => stored),
+            save: vi.fn(async (_id: string, data: KodaXSessionData) => {
+              if (JSON.stringify(data.messages).includes('TERMINAL_COMMIT_ANSWER')) {
+                markTerminalSaveStarted?.();
+                await terminalSaveGate;
+              }
+              stored = structuredClone(data);
+            }),
+          },
+        },
+        events: {
+          onManagedTaskStatus(status) {
+            if (status.phase === 'completed') completedStatuses.push(status.phase);
+          },
+        },
+      },
+      'Complete after the durable boundary.',
+      async () => ({
+        textBlocks: [{ text: 'TERMINAL_COMMIT_ANSWER' }],
+        toolBlocks: [],
+      }),
+    );
+
+    await terminalSaveStarted;
+    expect(completedStatuses).toEqual([]);
+    releaseTerminalSave?.();
+    await expect(run).resolves.toMatchObject({ success: true });
+    expect(completedStatuses).toEqual(['completed']);
+  });
+
   it('persists a completed turn and delivered queued prompt before the next Runtime turn runs', async () => {
     const sessionId = 'runtime-queued-durable-boundaries';
     const queueAgentId = `actor:${sessionId}:/root`;

@@ -12,7 +12,7 @@
 | Item | Value |
 |---|---|
 | Current released version | `v0.7.91` (Git tag / GitHub Release) |
-| Current package version | `@kodax-ai/kodax@0.7.91` release (npm publication remains manual) |
+| Current package version | `@kodax-ai/kodax@0.7.92` source candidate (npm publication remains manual) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `78` |
 | InProgress | `1` |
@@ -28,7 +28,7 @@
 |---|---:|---|---|
 | Completed | 55 | `294, 293, 292, 291, 290, 289, 286, 284, 281, 277, 276, 263, 275, 274, 273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `293` and `294` are complete in the v0.7.89 release; `292`, `291`, `290`, and `289` shipped in v0.7.85. npm publication remains manual. |
 | InProgress | 1 | `225` | `225` remains the bounded v0.8.15 cleanup (moved from v0.7.105 on 2026-08-08). |
-| Planned, near-term | 0 | `-` | `v0.7.91` maintenance scope is complete; Issue 256 remains Open without a replacement target assigned by this release. |
+| Planned, near-term | 0 | `-` | `v0.7.92` closes stale coordinator-ticket, recorded-release, and terminal-commit ordering defects; the separate descendant-closure boundary remains open and npm publication remains manual. |
 | Planned, 0.8.x | 10 | `278, 279, 282, 283, 285, 280, 287, 288, 265, 105` | `v0.8.0` -> `v0.8.1` -> `v0.8.3` -> `v0.8.4` -> `v0.8.5` -> `v0.8.10` -> `v0.8.15` |
 | Planned, 0.9.x | 6 | `007, 030, 093, 113, 139, 262` | `v0.9.0` -> `v0.9.5` -> `v0.9.7` -> `v0.9.25` |
 | Reviewed out, 2026-07-12 | 6 | `244, 231, 235, 238, 232, 108` | Shelved, deferred, absorbed, or cancelled after the post-v0.7.70 roadmap review; F105 was restored by the 2026-07-29 MoA redesign. |
@@ -75,6 +75,7 @@
 | `v0.7.89` | `2` |
 | `v0.7.90` | `0` |
 | `v0.7.91` | `0` |
+| `v0.7.92` | `0` |
 | `v0.7.93` | `0` |
 | `v0.7.94` | `0` |
 | `v0.7.95` | `0` |

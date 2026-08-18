@@ -739,11 +739,12 @@ export interface ConnectKodaXRuntimeOptions {
 /** SDK facts that embedders can inspect before auto-starting a daemon. */
 export const KODAX_RUNTIME_SDK_CAPABILITIES = Object.freeze({
   actorSettlementConvergence: 2,
+  crashOutcomeModel: 2,
   daemonOrphanExit: 1,
   daemonShutdownVerification: 1,
   managedRunDurability: 1,
   runtimeExitSettlement: 1,
-  sandboxRuntime: 3,
+  sandboxRuntime: 4,
   sessionEventJournal: 1,
   runtimeEventCoalescing: 1,
   liveOutputSegments: 1,
@@ -770,7 +771,7 @@ export interface RuntimeCapabilityRequirements {
   /** v1: run-bound host tool leases. v2 additionally materializes bound host tools into the agent tool table and cached capability catalog. */
   readonly runBoundHostTools?: 1 | 2;
   readonly coderOwnerFencing?: 1;
-  readonly crashOutcomeModel?: 1;
+  readonly crashOutcomeModel?: 1 | 2;
   readonly coderFeatureMatrix?: 1;
   readonly sessionAdmission?: 1;
   readonly completeObservationSnapshot?: 1;
@@ -806,7 +807,7 @@ export interface RuntimeCapabilityRequirements {
   readonly integrationConfigResilience?: 1;
   readonly actorControlPlane?: 1;
   /** Require the sandbox-first execution chain and permission fallback revision. */
-  readonly sandboxRuntime?: 1 | 2 | 3;
+  readonly sandboxRuntime?: 1 | 2 | 3 | 4;
   /** Runtime owns Auto LLM/rules classification before shared permission brokering. */
   readonly runtimeAutoModeGuardrail?: 1 | 2 | 3 | 4;
 }
@@ -3697,11 +3698,12 @@ export async function createKodaXRuntime(
         ...(autoStart
           ? {
             actorSettlementConvergence: 2 as const,
+            crashOutcomeModel: 2 as const,
             managedRunDurability: 1 as const,
             ...(process.platform === "win32"
               ? {
                   daemonShutdownVerification: 1 as const,
-                  sandboxRuntime: 3 as const,
+                  sandboxRuntime: 4 as const,
                 }
               : {}),
             runtimeAutoModeGuardrail: 4 as const,
@@ -4831,9 +4833,10 @@ function daemonCapabilityRequirements(
     ...(options.autoStart === true
       ? {
           actorSettlementConvergence: 2,
+          crashOutcomeModel: 2,
           managedRunDurability: 1,
           ...(process.platform === "win32"
-            ? { daemonShutdownVerification: 1, sandboxRuntime: 3 }
+            ? { daemonShutdownVerification: 1, sandboxRuntime: 4 }
             : {}),
           runtimeAutoModeGuardrail: 4,
           runtimeEventCoalescing: 1,
@@ -4851,6 +4854,7 @@ function firstUpgradeableCapability(
 ): { readonly name: string; readonly version: number } | undefined {
   const upgradeOrder = [
     "actorSettlementConvergence",
+    "crashOutcomeModel",
     "managedRunDurability",
     "sessionEventJournal",
     "runtimeAutoModeGuardrail",
@@ -17438,14 +17442,14 @@ function wrapKodaXEvents(input: {
     onComplete(meta) {
       if (actorDurabilityFenced()) return;
       record.interruptInputOpen = false;
-      onExecutorTerminal("completed");
+      if (record.mode !== "managed_task") onExecutorTerminal("completed");
       emit("run.progress", { kind: "complete", meta }, meta);
       externalCallbacks()?.onComplete?.(meta);
     },
     onError(error, meta) {
       if (actorDurabilityFenced()) return;
       record.interruptInputOpen = false;
-      onExecutorTerminal("failed", error);
+      if (record.mode !== "managed_task") onExecutorTerminal("failed", error);
       const trustedManagedAbort =
         record.mode === "managed_task"
         && record.stop !== undefined

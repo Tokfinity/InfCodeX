@@ -6,6 +6,7 @@ import {
   readdir,
   rm,
   stat,
+  utimes,
   writeFile,
   type FileHandle,
 } from 'node:fs/promises';
@@ -35,9 +36,17 @@ interface LockTicket {
   readonly path: string;
   readonly name: string;
   readonly raw: string;
+  readonly token: string;
 }
 
-class LearningFileLockTimeoutError extends Error {}
+export class KodaXFileLockTimeoutError extends Error {
+  readonly code = 'kodax_file_lock_timeout';
+
+  constructor(readonly lockPath: string) {
+    super(`KodaX file lock timed out: ${lockPath}`);
+    this.name = 'KodaXFileLockTimeoutError';
+  }
+}
 
 export async function withLearningFileLock<T>(
   lockPath: string,
@@ -77,7 +86,7 @@ export async function reclaimStaleLearningFileLock(lockPath: string): Promise<bo
   try {
     release = await acquireLearningFileLock(lockPath, 0);
   } catch (error: unknown) {
-    if (error instanceof LearningFileLockTimeoutError) return false;
+    if (error instanceof KodaXFileLockTimeoutError) return false;
     throw error;
   }
   await release();
@@ -95,9 +104,28 @@ async function acquireLock(
   try {
     await waitForTicketTurn(ticket, deadline, lockPath);
     while (true) {
-      await assertTicketOwned(ticket);
+      await heartbeatLockTicket(ticket);
       try {
-        acquired = await createLock(lockPath);
+        const candidate = await createLock(lockPath, ticket.token);
+        try {
+          await assertTicketOwned(ticket);
+        } catch (error) {
+          const cleanupErrors: unknown[] = [error];
+          try {
+            await candidate.handle.close();
+          } catch (cleanupError) {
+            cleanupErrors.push(cleanupError);
+          }
+          try {
+            await releaseLock(lockPath, candidate.token);
+          } catch (cleanupError) {
+            cleanupErrors.push(cleanupError);
+          }
+          throw cleanupErrors.length === 1
+            ? error
+            : new AggregateError(cleanupErrors, 'learning lock ticket loss cleanup failed');
+        }
+        acquired = candidate;
         return acquired;
       } catch (error) {
         const contention = await classifyExistingLockContention(error, lockPath);
@@ -148,14 +176,15 @@ async function createLockTicket(lockPath: string): Promise<LockTicket> {
   await mkdir(queuePath, { recursive: true });
   await createOwnerFile(choosingPath, raw);
   try {
-    await cleanupAbandonedQueueEntries(queuePath);
+    await cleanupAbandonedQueueEntries(queuePath, lockPath, choosingPath);
+    await assertQueueEntryOwned(choosingPath, raw, 'choosing entry');
     const tickets = await listQueueTickets(queuePath);
     const nextNumber = Math.max(0, ...tickets.map((ticket) => ticket.number)) + 1;
     if (!Number.isSafeInteger(nextNumber)) throw new Error('learning lock ticket overflow');
     const name = `ticket-${String(nextNumber).padStart(TICKET_NUMBER_WIDTH, '0')}-${token}.lock`;
     const ticketPath = join(queuePath, name);
     await createOwnerFile(ticketPath, raw);
-    return { queuePath, path: ticketPath, name, raw };
+    return { queuePath, path: ticketPath, name, raw, token };
   } finally {
     await releaseQueueEntry(choosingPath, raw);
   }
@@ -167,7 +196,8 @@ async function waitForTicketTurn(
   lockPath: string,
 ): Promise<void> {
   while (true) {
-    await cleanupAbandonedQueueEntries(ticket.queuePath);
+    await heartbeatLockTicket(ticket);
+    await cleanupAbandonedQueueEntries(ticket.queuePath, lockPath, ticket.path);
     await assertTicketOwned(ticket);
     const names = await readdir(ticket.queuePath);
     const choosing = names.some((name) => name.startsWith('choosing-'));
@@ -196,13 +226,34 @@ async function createOwnerFile(filePath: string, raw: string): Promise<void> {
 }
 
 async function assertTicketOwned(ticket: LockTicket): Promise<void> {
+  await assertQueueEntryOwned(ticket.path, ticket.raw, 'ticket');
+}
+
+async function heartbeatLockTicket(ticket: LockTicket): Promise<void> {
+  await assertTicketOwned(ticket);
   try {
-    if (await readFile(ticket.path, 'utf8') !== ticket.raw) {
-      throw new Error(`learning store lock ticket lost: ${ticket.path}`);
-    }
+    const now = new Date();
+    await utimes(ticket.path, now, now);
   } catch (error) {
     if (isFileError(error, 'ENOENT')) {
       throw new Error(`learning store lock ticket lost: ${ticket.path}`);
+    }
+    throw error;
+  }
+}
+
+async function assertQueueEntryOwned(
+  entryPath: string,
+  raw: string,
+  label: string,
+): Promise<void> {
+  try {
+    if (await readFile(entryPath, 'utf8') !== raw) {
+      throw new Error(`learning store lock ${label} lost: ${entryPath}`);
+    }
+  } catch (error) {
+    if (isFileError(error, 'ENOENT')) {
+      throw new Error(`learning store lock ${label} lost: ${entryPath}`);
     }
     throw error;
   }
@@ -230,13 +281,18 @@ function compareQueueTickets(left: QueueTicketName, right: QueueTicketName): num
   return left.number - right.number || left.name.localeCompare(right.name);
 }
 
-async function cleanupAbandonedQueueEntries(queuePath: string): Promise<void> {
+async function cleanupAbandonedQueueEntries(
+  queuePath: string,
+  lockPath: string,
+  preservedEntryPath?: string,
+): Promise<void> {
   const names = await readdir(queuePath);
   await Promise.all(names
     .filter(isQueueEntryName)
     .map(async (name) => {
       const entryPath = join(queuePath, name);
-      if (await isAbandonedQueueEntry(entryPath)) {
+      if (entryPath === preservedEntryPath) return;
+      if (await isAbandonedQueueEntry(entryPath, name, lockPath)) {
         await removeFileWithTransientRetry(entryPath);
       }
     }));
@@ -246,13 +302,20 @@ function isQueueEntryName(name: string): boolean {
   return /^choosing-[0-9a-f-]+\.lock$/i.test(name) || parseQueueTicket(name) !== undefined;
 }
 
-async function isAbandonedQueueEntry(entryPath: string): Promise<boolean> {
+async function isAbandonedQueueEntry(
+  entryPath: string,
+  name: string,
+  lockPath: string,
+): Promise<boolean> {
   try {
     const snapshot = await stat(entryPath);
     const owner = parseOwner(await readFile(entryPath, 'utf8'));
     if (owner?.released === true) return true;
     if (Date.now() - snapshot.mtimeMs <= LOCK_STALE_MS) return false;
-    return owner === undefined || !isRecordedOwnerAlive(owner);
+    if (owner === undefined || !isRecordedOwnerAlive(owner)) return true;
+    if (owner.token === undefined) return false;
+    if (parseQueueTicket(name) === undefined) return true;
+    return !await queueTicketOwnsCoordinatorLock(lockPath, owner.token);
   } catch (error) {
     if (isFileError(error, 'ENOENT')) return false;
     if (['EPERM', 'EACCES', 'EBUSY'].some((code) => isFileError(error, code))) return false;
@@ -260,11 +323,24 @@ async function isAbandonedQueueEntry(entryPath: string): Promise<boolean> {
   }
 }
 
+async function queueTicketOwnsCoordinatorLock(
+  lockPath: string,
+  token: string,
+): Promise<boolean> {
+  try {
+    return parseOwner(await readFile(lockPath, 'utf8'))?.token === token;
+  } catch (error) {
+    if (isFileError(error, 'ENOENT')) return false;
+    if (['EPERM', 'EACCES', 'EBUSY'].some((code) => isFileError(error, code))) return true;
+    throw error;
+  }
+}
+
 async function createLock(
   lockPath: string,
+  token: string,
 ): Promise<{ readonly handle: FileHandle; readonly token: string }> {
   const handle = await open(lockPath, 'wx');
-  const token = randomUUID();
   try {
     await handle.writeFile(lockOwnerRecord(token), 'utf8');
     return { handle, token };
@@ -494,7 +570,7 @@ async function removeFileWithTransientRetry(filePath: string): Promise<void> {
 }
 
 function lockTimeout(lockPath: string): Error {
-  return new LearningFileLockTimeoutError(`learning store lock timed out: ${lockPath}`);
+  return new KodaXFileLockTimeoutError(lockPath);
 }
 
 async function delay(milliseconds: number): Promise<void> {

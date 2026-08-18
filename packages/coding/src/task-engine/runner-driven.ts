@@ -629,6 +629,36 @@ async function saveManagedRunBoundary(
   await saveSessionSnapshot(options, sessionId, data);
 }
 
+function scheduleManagedTaskMaintenance(
+  options: KodaXOptions,
+  task: KodaXManagedTask,
+  result: Pick<
+    KodaXResult,
+    'success' | 'lastText' | 'sessionId' | 'signal' | 'signalReason' | 'signalDebugReason'
+  >,
+): void {
+  queueMicrotask(() => {
+    void (async () => {
+      const taskWithRepoIntelligence = await attachManagedTaskRepoIntelligence(options, task)
+        .catch((error: unknown) => {
+          emitResilienceDebug('[managed-task:repo-intelligence:error]', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return task;
+        });
+      await writeManagedTaskArtifacts(
+        taskWithRepoIntelligence.evidence.workspaceDir,
+        taskWithRepoIntelligence,
+        result,
+      );
+    })().catch((error: unknown) => {
+      emitResilienceDebug('[managed-task:artifact-projection:error]', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  });
+}
+
 interface RunnerMemoryRuntime {
   readonly controller: MemoryManagementController;
   readonly identity: MemoryContextIdentity;
@@ -1102,7 +1132,7 @@ export async function runManagedTaskViaRunner(
         const messagesToPersist = recoveredMessages
           ? [...recoveredMessages] as KodaXMessage[]
           : [];
-        await saveSessionSnapshot(optionsWithSessionId, initialSessionId, {
+        void saveSessionSnapshot(optionsWithSessionId, initialSessionId, {
           messages: messagesToPersist,
           title: prompt.slice(0, 80),
           gitRoot: optionsWithSessionId.context?.gitRoot ?? undefined,
@@ -1111,9 +1141,17 @@ export async function runManagedTaskViaRunner(
             lastErrorTime: Date.now(),
             consecutiveErrors: 1,
           },
+        }).catch((snapshotError: unknown) => {
+          emitResilienceDebug('[session:error-snapshot:error]', {
+            error: snapshotError instanceof Error
+              ? snapshotError.message
+              : String(snapshotError),
+          });
         });
-      } catch {
-        // best-effort.
+      } catch (snapshotError) {
+        emitResilienceDebug('[session:error-snapshot:prepare-error]', {
+          error: snapshotError instanceof Error ? snapshotError.message : String(snapshotError),
+        });
       }
     }
     await finishRunnerMemoryRuntime(
@@ -2874,8 +2912,6 @@ async function runManagedTaskViaRunnerInner(
     toolOutputTruncationNotes: toolTruncationRef.notes,
   }), todoDriftReminderState);
 
-  observer.completed(signal, reason ?? userAnswer);
-
   // FEATURE_193 (v0.7.43): Shard 6d-k Scout suspicious-completion
   // detection block removed. The heuristic gated on
   // `recorder.scout?.payload.scout` to infer mutation intent + flag
@@ -2945,57 +2981,6 @@ async function runManagedTaskViaRunnerInner(
     result.runtimeSessionSnapshot = runtimeSessionSnapshot;
   }
 
-  // Shard 6d-i: capture task-scoped repo-intelligence snapshots
-  // (repo-overview / changed-scope / active-module / impact-estimate /
-  // summary.md) into `<workspaceDir>/repo-intelligence/` and merge the
-  // resulting `KodaXTaskEvidenceArtifact` records into the task's
-  // `evidence.artifacts`. Mirrors legacy `attachManagedTaskRepoIntelligence`
-  // (task-engine.ts:4302). Also emits the four-stage
-  // `onRepoIntelligenceTrace` events during capture.
-  //
-  // Best-effort: failure to capture must not fail the task run.
-  let managedTaskWithRepoIntel = managedTask;
-  try {
-    managedTaskWithRepoIntel = await attachManagedTaskRepoIntelligence(options, managedTask);
-  } catch {
-    // fall through with the unaugmented task.
-  }
-  // Keep the KodaXResult.managedTask aligned with the augmented copy so
-  // downstream consumers read the same artifact set whether they use the
-  // REPL managedTask event or the final result payload.
-  result.managedTask = managedTaskWithRepoIntel;
-
-  // Shard 6d-h: persist the managed-task snapshot set under the task
-  // workspace directory and leave the artifact records already attached
-  // to `managedTask.evidence.artifacts` pointing at files that actually
-  // exist on disk. Legacy behaviour (`writeManagedTaskArtifacts` at
-  // task-engine.ts:5204) — without this, `contract.json` / `managed-
-  // task.json` / `result.json` / `round-history.json` / `budget.json` /
-  // `memory-strategy.json` / `runtime-contract.json` / `runtime-
-  // execution.md` / `scorecard.json` / `continuation.json` are all
-  // missing and any downstream consumer that reads artifact paths
-  // (resume, harness UI, evaluator reshape) sees a broken ledger.
-  //
-  // Best-effort: an artifact-write failure (permission denied, disk
-  // full) must not fail the task run itself — the in-memory result is
-  // still valid.
-  try {
-    await writeManagedTaskArtifacts(
-      managedTaskWithRepoIntel.evidence.workspaceDir,
-      managedTaskWithRepoIntel,
-      {
-        success: result.success,
-        lastText: result.lastText,
-        sessionId: result.sessionId,
-        signal: result.signal,
-        signalReason: result.signalReason,
-        signalDebugReason: result.signalDebugReason,
-      },
-    );
-  } catch {
-    // best-effort; failures should not abort the task run.
-  }
-
   // Persist session snapshot to disk so `/resume <id>` and `--continue`
   // can reload the AMA conversation. The Runner-driven path has a
   // single non-error terminal (here). Runtime-owned Sessions use the
@@ -3013,6 +2998,22 @@ async function runManagedTaskViaRunnerInner(
     title: prompt.slice(0, 80),
     gitRoot: options.context?.gitRoot ?? undefined,
     runtimeSessionState,
+  });
+
+  // This is the managed terminal-commit boundary: the canonical Session
+  // snapshot is durable before downstream observers see completion. Repository
+  // intelligence and task artifact projection are maintenance work and must
+  // not keep the Runtime Run active or make Stop indeterminate. Memory outcome
+  // persistence remains part of the outer managed Promise's durable
+  // finalization contract.
+  observer.completed(signal, reason ?? userAnswer);
+  scheduleManagedTaskMaintenance(options, managedTask, {
+    success: result.success,
+    lastText: result.lastText,
+    sessionId: result.sessionId,
+    signal: result.signal,
+    signalReason: result.signalReason,
+    signalDebugReason: result.signalDebugReason,
   });
 
   return result;

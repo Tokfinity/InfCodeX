@@ -1,9 +1,12 @@
 # KodaX High-Level Design
 
-> Last updated: 2026-08-17
+> Last updated: 2026-08-18
 >
 > Current published baseline: `v0.7.91`
 > (`@kodax-ai/kodax@0.7.91`; npm publication remains manual)
+>
+> Current source candidate: `@kodax-ai/kodax@0.7.92`
+> (`sandboxRuntime:4`, `crashOutcomeModel:2`)
 >
 > This HLD is intentionally current-state only. The old pre-v0.7.43
 > chain/harness model has been removed from this active design document because

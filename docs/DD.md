@@ -1,9 +1,12 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-08-17
+> Last updated: 2026-08-18
 >
 > Current published baseline: `v0.7.91`
 > (`@kodax-ai/kodax@0.7.91`; npm publication remains manual)
+>
+> Current source candidate: `@kodax-ai/kodax@0.7.92`
+> (`sandboxRuntime:4`, `crashOutcomeModel:2`)
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -20,7 +23,8 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The published package is `@kodax-ai/kodax@0.7.91`. The v0.7.85 release
+The published package is `@kodax-ai/kodax@0.7.91`; the workspace prepares the
+`@kodax-ai/kodax@0.7.92` source candidate. The v0.7.85 release
 established
 controller-wide bounded Actor progress
 persistence, queue-aware terminal deadlines, root fail-closed fencing, and
