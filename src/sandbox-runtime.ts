@@ -1006,10 +1006,22 @@ const WINDOWS_SANDBOX_ACL_RECOVERY_LOCK_TIMEOUT_MS = 35_000;
 const WINDOWS_SANDBOX_ACL_CLEANUP_DIAGNOSTIC = '[acl_cleanup_unconfirmed]';
 
 class WindowsSandboxAclAdmissionError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
+  readonly recoveryAction?: 'restart-system' | 'manual-recovery';
+
+  constructor(
+    message: string,
+    options?: ErrorOptions & {
+      readonly recoveryAction?: 'restart-system' | 'manual-recovery';
+    },
+  ) {
     super(message, options);
     this.name = 'WindowsSandboxAclAdmissionError';
+    this.recoveryAction = options?.recoveryAction;
   }
+}
+
+function isCanonicalWindowsBootIdentity(value: string): boolean {
+  return /^windows-boot-\d+$/.test(value);
 }
 
 function doctorHasWindowsSandboxAclCleanupBlock(
@@ -1077,7 +1089,10 @@ function parseWindowsSandboxAclPoisonOwner(text: string): WindowsSandboxAclPoiso
     )
     || (
       owner.windowsBootIdentity !== undefined
-      && typeof owner.windowsBootIdentity !== 'string'
+      && (
+        typeof owner.windowsBootIdentity !== 'string'
+        || !isCanonicalWindowsBootIdentity(owner.windowsBootIdentity)
+      )
     )
   ) {
     throw new Error('Windows sandbox ACL poison marker has an invalid owner identity.');
@@ -1136,7 +1151,7 @@ function readWindowsSandboxAclPoisonOwners(configHome = getAgentConfigHome()): A
       throw new WindowsSandboxAclAdmissionError(
         `Windows sandbox ACL cleanup was not confirmed because its poison marker is unreadable: ${file}. `
         + windowsSandboxAclManualRecoveryInstruction(),
-        { cause: error },
+        { cause: error, recoveryAction: 'manual-recovery' },
       );
     }
     });
@@ -1579,6 +1594,58 @@ export async function recoverWindowsSandboxAclsForRuntimeOwner(
   );
 }
 
+/** @internal Recover ACLs only for markers proven to predate the current Windows boot. */
+export async function recoverPreviousBootWindowsSandboxAcls(
+  configHome: string,
+  timeoutMs = 70_000,
+): Promise<number> {
+  if (process.platform !== 'win32') return 0;
+  const deadline = Date.now() + timeoutMs;
+  return withKodaXFileLock(
+    windowsSandboxAclRecoveryLockFile(),
+    async () => {
+      const markers = readWindowsSandboxAclPoisonOwners(configHome);
+      if (markers.length === 0) return 0;
+      assertPreviousBootWindowsSandboxAclMarkers(markers);
+      await waitForWindowsSandboxRunnerPreparation(
+        prepareWindowsSandboxRunner(),
+        Math.max(1, deadline - Date.now()),
+      );
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        throw new Error('Windows sandbox ACL recovery deadline expired before mutation.');
+      }
+      recoverWindowsSandboxAcls(remainingMs);
+      return markers.length;
+    },
+    Math.max(1, Math.min(WINDOWS_SANDBOX_ACL_RECOVERY_LOCK_TIMEOUT_MS, timeoutMs)),
+  );
+}
+
+function assertPreviousBootWindowsSandboxAclMarkers(
+  markers: ReadonlyArray<{ readonly owner: WindowsSandboxAclPoisonOwner }>,
+): void {
+  const currentBootIdentity = readWindowsBootIdentity();
+  if (currentBootIdentity === undefined || !isCanonicalWindowsBootIdentity(currentBootIdentity)) {
+    throw new WindowsSandboxAclAdmissionError(
+      'Windows sandbox ACL recovery could not verify the current boot identity.',
+      { recoveryAction: 'restart-system' },
+    );
+  }
+  if (markers.some(({ owner }) => owner.windowsBootIdentity === undefined)) {
+    throw new WindowsSandboxAclAdmissionError(
+      'Windows sandbox ACL recovery found an unverifiable owner marker.',
+      { recoveryAction: 'manual-recovery' },
+    );
+  }
+  if (markers.some(({ owner }) => owner.windowsBootIdentity === currentBootIdentity)) {
+    throw new WindowsSandboxAclAdmissionError(
+      'Windows sandbox ACL recovery found a current-boot owner marker.',
+      { recoveryAction: 'restart-system' },
+    );
+  }
+}
+
 async function waitForWindowsSandboxRunnerPreparation(
   preparation: Promise<PreparedWindowsSandboxRunner>,
   timeoutMs: number,
@@ -1627,6 +1694,25 @@ export async function clearWindowsSandboxAclMarkersForRuntimeOwner(
       }
       for (const marker of matching) rmSync(marker.file, { force: true });
       return matching.length;
+    },
+    Math.max(1, Math.min(WINDOWS_SANDBOX_ACL_RECOVERY_LOCK_TIMEOUT_MS, timeoutMs)),
+  );
+}
+
+/** @internal Clear only previous-boot markers whose ACL recovery is durably recorded. */
+export async function clearPreviousBootWindowsSandboxAclMarkers(
+  configHome: string,
+  timeoutMs = 40_000,
+): Promise<number> {
+  if (process.platform !== 'win32') return 0;
+  return withKodaXFileLock(
+    windowsSandboxAclRecoveryLockFile(),
+    async () => {
+      const markers = readWindowsSandboxAclPoisonOwners(configHome);
+      if (markers.length === 0) return 0;
+      assertPreviousBootWindowsSandboxAclMarkers(markers);
+      for (const marker of markers) rmSync(marker.file, { force: true });
+      return markers.length;
     },
     Math.max(1, Math.min(WINDOWS_SANDBOX_ACL_RECOVERY_LOCK_TIMEOUT_MS, timeoutMs)),
   );

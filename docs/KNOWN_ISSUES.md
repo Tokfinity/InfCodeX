@@ -57,6 +57,7 @@ by the focused sandbox, lineage, REPL, and coding-runtime tests.
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 299 | High | Resolved in source | Previous-boot foreign Windows ACL markers blocked SDK-owned Runtime exit settlement | v0.7.91 Runtime exit settlement | Unreleased source after v0.7.92 | 2026-08-19 | 2026-08-19 |
 | 298 | High | Resolved in source | Provider SDK abort wrapper bypasses managed Stop classification and becomes a credential failure | v0.7.69 managed run-scoped credentials | Unreleased source after v0.7.92 | 2026-08-19 | 2026-08-19 |
 | 297 | Medium | Resolved in source | Durable Windows cleanup failure still consumed the full orderly daemon-exit window before exact recovery | v0.7.91 Runtime exit settlement | Unreleased source | 2026-08-19 | 2026-08-19 |
 | 296 | High | Resolved | Sparse `uiHistory` projection suppresses canonical conversation after `-r` resume | v0.7.51 UI history replay | v0.7.92 development | 2026-08-18 | 2026-08-18 |
@@ -243,6 +244,69 @@ by the focused sandbox, lineage, REPL, and coding-runtime tests.
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 299: Previous-boot foreign Windows ACL markers blocked SDK-owned Runtime exit settlement
+
+- **Priority**: High
+- **Status**: Resolved in source
+- **Introduced**: v0.7.91 Runtime exit settlement
+- **Fixed**: Unreleased source after v0.7.92
+- **Created**: 2026-08-19
+- **Resolved**: 2026-08-19
+
+#### Original Problem
+
+After Windows restarted, a retained Runtime exit ticket could be exact and its
+Job containment was no longer live, while the machine-wide sandbox ACL marker
+set still contained another KodaX owner's marker from the same previous boot.
+The exact-owner recovery API rejected the entire set as foreign, so every Space
+relaunch remained blocked even though the new Windows boot was authoritative
+proof that none of those recorded process trees could still be active.
+
+#### Root Cause
+
+Runtime exit settlement reused the same exact-owner ACL recovery primitive for
+same-boot recovery and post-reboot recovery. The sandbox setup path already had
+a machine-lock rule for recovering a set whose every marker had a non-current
+boot identity, but settlement had no recovery-only path for that proof.
+
+#### Resolution
+
+The sandbox runtime now exposes an internal recovery-only operation that takes
+the machine-global ACL lock, rereads primary and legacy markers, and mutates ACLs
+only when every marker has a canonical boot identity different from the current
+Windows boot. It invokes no account, WFP, Setup, installer, or elevation path.
+`settleKodaXRuntimeExit()` uses this operation only after its durable ticket also
+proves a Windows boot change, records the `previous-boot` recovery scope, repair
+fact, and recovery boot identity, and only then removes the revalidated marker
+set. Native failure or a crash before durable recording retains all evidence
+for an idempotent retry. If Windows restarts again before clear, settlement
+repeats native recovery and records the new boot before deleting any marker.
+Same-boot, mixed, missing, corrupt, or concurrently introduced current-boot
+markers remain blocked.
+
+#### Files Changed
+
+- `src/sandbox-runtime.ts`
+- `src/sandbox-runtime.test.ts`
+- `src/runtime-daemon/exit-settlement.ts`
+- `src/runtime-daemon/exit-settlement.test.ts`
+
+#### Tests Added
+
+- Multiple previous-boot owners across primary and legacy marker roots recover
+  once under the machine lock without invoking Setup.
+- Current-boot and identity-free markers preserve the complete marker set and
+  perform no native recovery.
+- Native recovery failure preserves marker evidence.
+- Marker removal follows the durable recovered ticket; a retry resumes marker
+  clearing without losing or repeating the recorded repair fact.
+- A changed-boot settlement uses the previous-boot recovery operation, skips
+  exact-owner recovery, avoids reused-PID termination, and returns
+  `recovered` with `windows_sandbox_acl`.
+
+See
+[`ISSUE_299_UNRELEASED_REGRESSION_GUIDE.md`](test-guides/ISSUE_299_UNRELEASED_REGRESSION_GUIDE.md).
 
 ### 298: Provider SDK abort wrapper bypasses managed Stop classification and becomes a credential failure
 
@@ -12710,11 +12774,17 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 177 (27 Open, 148 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 178 (27 Open, 148 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-08-19: Issue 299 resolved in source (Unreleased)
+- Added a machine-lock-scoped recovery-only path for ACL marker sets with
+  canonical non-current Windows boot identities.
+- Kept same-boot, mixed, missing-identity, corrupt, and native-recovery failure
+  paths fail-closed while settlement remains the only host recovery authority.
 
 ### 2026-08-19: Issue 298 resolved in source (Unreleased)
 - Used lazily loaded Anthropic/OpenAI SDK class identity to normalize typed

@@ -105,7 +105,9 @@ function dependencies(
     waitForProcessExit: vi.fn(async () => true),
     killPidTree: vi.fn(async () => 'already-exited'),
     recoverWindowsSandboxAcls: vi.fn(async () => 1),
+    recoverPreviousBootWindowsSandboxAcls: vi.fn(async () => 1),
     clearWindowsSandboxAclMarkers: vi.fn(async () => 1),
+    clearPreviousBootWindowsSandboxAclMarkers: vi.fn(async () => 1),
     removeRuntimeExitIntentFile: vi.fn((intentPath) => {
       fs.rmSync(intentPath, { force: true });
     }),
@@ -1114,6 +1116,14 @@ describe('runtime exit settlement', () => {
     }, first);
 
     const kill = vi.fn(async () => 'terminated' as const);
+    const exactRecover = vi.fn(async () => {
+      throw new Error('exact-owner recovery must not run after a verified reboot');
+    });
+    const previousBootRecover = vi.fn(async () => 2);
+    const exactClear = vi.fn(async () => {
+      throw new Error('exact-owner marker clear must not run after previous-boot recovery');
+    });
+    const previousBootClear = vi.fn(async () => 2);
     const resumed = await settleRuntimeDaemonExitForTest({
       configHome,
       profile: 'coder',
@@ -1123,10 +1133,81 @@ describe('runtime exit settlement', () => {
       isPidAlive: vi.fn(() => true),
       waitForProcessExit: vi.fn(async () => false),
       killPidTree: kill,
+      recoverWindowsSandboxAcls: exactRecover,
+      recoverPreviousBootWindowsSandboxAcls: previousBootRecover,
+      clearWindowsSandboxAclMarkers: exactClear,
+      clearPreviousBootWindowsSandboxAclMarkers: previousBootClear,
     }));
 
-    expect(resumed.status).toBe('recovered');
+    expect(resumed).toEqual({
+      status: 'recovered',
+      repairs: ['windows_sandbox_acl'],
+    });
     expect(kill).not.toHaveBeenCalled();
+    expect(exactRecover).not.toHaveBeenCalled();
+    expect(previousBootRecover).toHaveBeenCalledOnce();
+    expect(exactClear).not.toHaveBeenCalled();
+    expect(previousBootClear).toHaveBeenCalledOnce();
+  });
+
+  it('durably records previous-boot ACL recovery before clearing its marker set', async () => {
+    const configHome = tempConfigHome();
+    const expectedOwner = owner();
+    seedDaemon(configHome, expectedOwner);
+    const paths = resolveRuntimeDaemonPathsFromConfigHome(configHome, 'coder');
+    commitRuntimeDaemonRollbackPolicy(paths, expectedOwner.runtimeId, 0);
+    await settleRuntimeDaemonExitForTest({
+      configHome,
+      profile: 'coder',
+      timeoutMs: TEST_TRANSACTION_TIMEOUT_MS,
+    }, dependencies({
+      readWindowsBootIdentity: vi.fn(() => 'windows-boot-100'),
+      recoverWindowsSandboxAcls: vi.fn(async () => {
+        throw new Error('crash before recovery');
+      }),
+    }));
+
+    const recover = vi.fn(async () => 2);
+    const first = await settleRuntimeDaemonExitForTest({
+      configHome,
+      profile: 'coder',
+      timeoutMs: TEST_TRANSACTION_TIMEOUT_MS,
+    }, dependencies({
+      readWindowsBootIdentity: vi.fn(() => 'windows-boot-200'),
+      recoverPreviousBootWindowsSandboxAcls: recover,
+      clearPreviousBootWindowsSandboxAclMarkers: vi.fn(async () => {
+        throw new Error('crash before previous-boot marker clear');
+      }),
+    }));
+
+    expect(first).toMatchObject({ status: 'blocked', reason: 'cleanup_failed' });
+    expect(readRuntimeExitSettlementIntent(configHome, 'coder')).toMatchObject({
+      phase: 'recovered',
+      repairs: ['windows_sandbox_acl'],
+      windowsAclRecoveryScope: 'previous-boot',
+      windowsAclRecoveredOnBootIdentity: 'windows-boot-200',
+    });
+
+    const resumed = await settleRuntimeDaemonExitForTest({
+      configHome,
+      profile: 'coder',
+      timeoutMs: TEST_TRANSACTION_TIMEOUT_MS,
+    }, dependencies({
+      readWindowsBootIdentity: vi.fn(() => 'windows-boot-300'),
+      recoverPreviousBootWindowsSandboxAcls: recover,
+      clearPreviousBootWindowsSandboxAclMarkers: vi.fn(async () => {
+        expect(readRuntimeExitSettlementIntent(configHome, 'coder')).toMatchObject({
+          windowsAclRecoveredOnBootIdentity: 'windows-boot-300',
+        });
+        return 2;
+      }),
+    }));
+
+    expect(resumed).toEqual({
+      status: 'recovered',
+      repairs: ['windows_sandbox_acl'],
+    });
+    expect(recover).toHaveBeenCalledTimes(2);
   });
 
   it('uses a changed POSIX boot identity to recover exact retained ownership after reboot', async () => {

@@ -6,8 +6,10 @@ import path from 'node:path';
 import { killPidTree, readProcessStartIdentity, withKodaXFileLock } from '@kodax-ai/agent';
 
 import {
+  clearPreviousBootWindowsSandboxAclMarkers,
   clearWindowsSandboxAclMarkersForRuntimeOwner,
   readWindowsSandboxBootIdentity,
+  recoverPreviousBootWindowsSandboxAcls,
   recoverWindowsSandboxAclsForRuntimeOwner,
 } from '../sandbox-runtime.js';
 import { isRuntimeDaemonPidAlive } from './lifecycle.js';
@@ -122,10 +124,18 @@ export interface RuntimeExitSettlementDependencies {
     windowsBootIdentity: string,
     timeoutMs: number,
   ) => Promise<number>;
+  readonly recoverPreviousBootWindowsSandboxAcls: (
+    configHome: string,
+    timeoutMs: number,
+  ) => Promise<number>;
   readonly clearWindowsSandboxAclMarkers: (
     configHome: string,
     owner: RuntimeDaemonLockOwner,
     windowsBootIdentity: string,
+    timeoutMs: number,
+  ) => Promise<number>;
+  readonly clearPreviousBootWindowsSandboxAclMarkers: (
+    configHome: string,
     timeoutMs: number,
   ) => Promise<number>;
   readonly removeRuntimeExitIntentFile: (intentPath: string, rootDir: string) => void;
@@ -142,6 +152,8 @@ export interface RuntimeExitSettlementIntent {
   readonly updatedAt: string;
   readonly lastError?: string;
   readonly repairs?: readonly ('windows_process_tree' | 'windows_sandbox_acl')[];
+  readonly windowsAclRecoveryScope?: 'exact-owner' | 'previous-boot';
+  readonly windowsAclRecoveredOnBootIdentity?: string;
 }
 
 // The daemon's orderly cleanup contract includes a 130-second ASRT workspace
@@ -172,7 +184,9 @@ const defaultDependencies: RuntimeExitSettlementDependencies = {
     return result.status;
   },
   recoverWindowsSandboxAcls: recoverWindowsSandboxAclsForRuntimeOwner,
+  recoverPreviousBootWindowsSandboxAcls,
   clearWindowsSandboxAclMarkers: clearWindowsSandboxAclMarkersForRuntimeOwner,
+  clearPreviousBootWindowsSandboxAclMarkers,
   removeRuntimeExitIntentFile(intentPath, rootDir) {
     fs.rmSync(intentPath, { force: true });
     fsyncDirectory(rootDir);
@@ -662,7 +676,14 @@ async function settleAcceptedRuntimeExit(
     }
     const ownerValidation = validateWindowsOwner(intent, 'restart-system');
     if (ownerValidation !== undefined) return ownerValidation;
-    return finalizeRecoveredExit(paths, intent, deadline, dependencies);
+    const refreshed = await refreshPreviousBootAclRecovery(
+      paths,
+      intent,
+      deadline,
+      dependencies,
+    );
+    if ('status' in refreshed) return refreshed;
+    return finalizeRecoveredExit(paths, refreshed, deadline, dependencies);
   }
 
   if (dependencies.platform === 'win32') {
@@ -815,16 +836,21 @@ async function settleAcceptedRuntimeExit(
       remainingTimeoutMs(deadline),
     );
     if (recoveryBudgetMs <= 0) return settlementDeadlineBlocked(dependencies.platform);
-    recoveredMarkers = await dependencies.recoverWindowsSandboxAcls(
-      paths.configHome,
-      owner,
-      intent.windowsBootIdentity!,
-      recoveryBudgetMs,
-    );
+    recoveredMarkers = previousWindowsBoot
+      ? await dependencies.recoverPreviousBootWindowsSandboxAcls(
+        paths.configHome,
+        recoveryBudgetMs,
+      )
+      : await dependencies.recoverWindowsSandboxAcls(
+        paths.configHome,
+        owner,
+        intent.windowsBootIdentity!,
+        recoveryBudgetMs,
+      );
   } catch (error: unknown) {
     return blocked(
       'cleanup_failed',
-      'restart-system',
+      windowsAclRecoveryNextAction(error),
       error instanceof Error ? error.message : String(error),
     );
   }
@@ -834,6 +860,10 @@ async function settleAcceptedRuntimeExit(
     phase: 'recovered',
     updatedAt: new Date().toISOString(),
     repairs,
+    windowsAclRecoveryScope: previousWindowsBoot ? 'previous-boot' : 'exact-owner',
+    ...(previousWindowsBoot
+      ? { windowsAclRecoveredOnBootIdentity: currentBootIdentity! }
+      : {}),
   });
   return finalizeRecoveredExit(paths, recovered, deadline, dependencies, repairs);
 }
@@ -859,6 +889,46 @@ function remainingTimeoutMs(deadline: number): number {
   return Math.max(0, deadline - Date.now());
 }
 
+async function refreshPreviousBootAclRecovery(
+  paths: RuntimeDaemonPaths,
+  intent: RuntimeExitSettlementIntent,
+  deadline: number,
+  dependencies: RuntimeExitSettlementDependencies,
+): Promise<RuntimeExitSettlementIntent | RuntimeExitSettlement> {
+  if (intent.windowsAclRecoveryScope !== 'previous-boot') return intent;
+  const currentBootIdentity = dependencies.readWindowsBootIdentity();
+  if (currentBootIdentity === undefined) {
+    return blocked(
+      'containment_unavailable',
+      'restart-system',
+      'The current Windows boot identity could not be verified.',
+    );
+  }
+  if (currentBootIdentity === intent.windowsAclRecoveredOnBootIdentity) return intent;
+  const recoveryBudgetMs = Math.min(
+    WINDOWS_ACL_RECOVERY_TIMEOUT_MS,
+    remainingTimeoutMs(deadline),
+  );
+  if (recoveryBudgetMs <= 0) return settlementDeadlineBlocked(dependencies.platform);
+  try {
+    await dependencies.recoverPreviousBootWindowsSandboxAcls(
+      paths.configHome,
+      recoveryBudgetMs,
+    );
+  } catch (error: unknown) {
+    return blocked(
+      'cleanup_failed',
+      windowsAclRecoveryNextAction(error),
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+  return writeRuntimeExitIntent(paths, {
+    ...intent,
+    updatedAt: new Date().toISOString(),
+    windowsAclRecoveredOnBootIdentity: currentBootIdentity,
+  });
+}
+
 async function finalizeRecoveredExit(
   paths: RuntimeDaemonPaths,
   intent: RuntimeExitSettlementIntent,
@@ -872,16 +942,23 @@ async function finalizeRecoveredExit(
       remainingTimeoutMs(deadline),
     );
     if (clearBudgetMs <= 0) return settlementDeadlineBlocked(dependencies.platform);
-    await dependencies.clearWindowsSandboxAclMarkers(
-      paths.configHome,
-      intent.owner,
-      intent.windowsBootIdentity!,
-      clearBudgetMs,
-    );
+    if (intent.windowsAclRecoveryScope === 'previous-boot') {
+      await dependencies.clearPreviousBootWindowsSandboxAclMarkers(
+        paths.configHome,
+        clearBudgetMs,
+      );
+    } else {
+      await dependencies.clearWindowsSandboxAclMarkers(
+        paths.configHome,
+        intent.owner,
+        intent.windowsBootIdentity!,
+        clearBudgetMs,
+      );
+    }
   } catch (error: unknown) {
     return blocked(
       'cleanup_failed',
-      'restart-system',
+      windowsAclRecoveryNextAction(error),
       error instanceof Error ? error.message : String(error),
     );
   }
@@ -899,6 +976,14 @@ async function finalizeRecoveredExit(
   }
   clearRuntimeExitIntent(paths, intent, dependencies);
   return { status: 'recovered', repairs };
+}
+
+function windowsAclRecoveryNextAction(
+  error: unknown,
+): 'restart-system' | 'manual-recovery' {
+  if (error === null || typeof error !== 'object') return 'restart-system';
+  const recoveryAction = Reflect.get(error, 'recoveryAction');
+  return recoveryAction === 'manual-recovery' ? 'manual-recovery' : 'restart-system';
 }
 
 function removeExactOwnership(paths: RuntimeDaemonPaths, owner: RuntimeDaemonLockOwner): boolean {
@@ -1114,6 +1199,14 @@ function isRuntimeExitSettlementIntent(value: unknown): value is RuntimeExitSett
     && typeof intent.createdAt === 'string'
     && typeof intent.updatedAt === 'string'
     && (intent.lastError === undefined || typeof intent.lastError === 'string')
+    && (intent.windowsAclRecoveryScope === undefined
+      || intent.windowsAclRecoveryScope === 'exact-owner'
+      || intent.windowsAclRecoveryScope === 'previous-boot')
+    && (intent.windowsAclRecoveredOnBootIdentity === undefined
+      || (typeof intent.windowsAclRecoveredOnBootIdentity === 'string'
+        && /^windows-boot-\d+$/.test(intent.windowsAclRecoveredOnBootIdentity)))
+    && (intent.windowsAclRecoveryScope !== 'previous-boot'
+      || typeof intent.windowsAclRecoveredOnBootIdentity === 'string')
     && (intent.repairs === undefined || (
       Array.isArray(intent.repairs)
       && intent.repairs.every((repair) => (

@@ -658,8 +658,10 @@ import {
   createAsrtShellSandbox,
   createAsrtSkillScriptRunner,
   doctorSandboxRuntime,
+  clearPreviousBootWindowsSandboxAclMarkers,
   overrideWorkspaceSessionRpcTimeoutsForTest,
   prepareSandboxRuntimeForSetup,
+  recoverPreviousBootWindowsSandboxAcls,
   recoverWindowsSandboxAclsForRuntimeOwner,
   runKodaXSandboxed,
   runAsrtBrokerProcess,
@@ -894,6 +896,163 @@ describe('ASRT workspace shell adapter', () => {
       expect(capturedSyncSpawns.filter(({ args }) => (
         args.includes('acl') && args.includes('recover')
       ))).toHaveLength(0);
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'recovers every verified previous-boot ACL marker under one recovery lock',
+    async () => {
+      const configHome = path.resolve(process.env.KODAX_HOME!);
+      const primaryDirectory = path.join(
+        path.resolve(process.env.ProgramData!),
+        'KodaX',
+        'sandbox-runtime',
+        'acl-poison',
+      );
+      const legacyDirectory = path.join(configHome, 'sandbox-runtime', 'acl-poison');
+      await mkdir(primaryDirectory, { recursive: true });
+      await mkdir(legacyDirectory, { recursive: true });
+      await writeFile(path.join(primaryDirectory, 'unconfirmed-owner-a.json'), JSON.stringify({
+        version: 1,
+        state: 'unconfirmed',
+        holderPid: 4101,
+        holderProcessStartIdentity: 'process-start-4101',
+        windowsBootIdentity: 'windows-boot-90',
+      }), 'utf8');
+      await writeFile(path.join(legacyDirectory, 'unconfirmed-owner-b.json'), JSON.stringify({
+        version: 1,
+        state: 'unconfirmed',
+        holderPid: 5101,
+        holderProcessStartIdentity: 'process-start-5101',
+        windowsBootIdentity: 'windows-boot-80',
+      }), 'utf8');
+
+      const recovered = await recoverPreviousBootWindowsSandboxAcls(configHome);
+
+      expect(recovered).toBe(2);
+      await expect(readdir(primaryDirectory)).resolves.toHaveLength(1);
+      await expect(readdir(legacyDirectory)).resolves.toHaveLength(1);
+      const cleared = await clearPreviousBootWindowsSandboxAclMarkers(configHome);
+      expect(cleared).toBe(2);
+      await expect(readdir(primaryDirectory)).resolves.toEqual([]);
+      await expect(readdir(legacyDirectory)).resolves.toEqual([]);
+      expect(recoveryLockMock.calls).toBe(2);
+      expect(windowsSandboxMock.installCalls).toBe(0);
+      expect(capturedSyncSpawns.filter(({ args }) => (
+        args.includes('acl') && args.includes('recover')
+      ))).toHaveLength(1);
+    },
+  );
+
+  it.runIf(process.platform === 'win32').each([
+    ['current-boot', 'windows-boot-100', 'restart-system'],
+    ['unverifiable', undefined, 'manual-recovery'],
+    ['malformed', 'not-a-windows-boot', 'manual-recovery'],
+  ] as const)(
+    'keeps all ACL markers when previous-boot recovery finds a %s owner',
+    async (_label, markerBootIdentity, expectedRecoveryAction) => {
+      const configHome = path.resolve(process.env.KODAX_HOME!);
+      const primaryDirectory = path.join(
+        path.resolve(process.env.ProgramData!),
+        'KodaX',
+        'sandbox-runtime',
+        'acl-poison',
+      );
+      await mkdir(primaryDirectory, { recursive: true });
+      const oldMarker = path.join(primaryDirectory, 'unconfirmed-owner-old.json');
+      const unsafeMarker = path.join(primaryDirectory, 'unconfirmed-owner-unsafe.json');
+      await writeFile(oldMarker, JSON.stringify({
+        version: 1,
+        state: 'unconfirmed',
+        holderPid: 4101,
+        holderProcessStartIdentity: 'process-start-4101',
+        windowsBootIdentity: 'windows-boot-90',
+      }), 'utf8');
+      await writeFile(unsafeMarker, JSON.stringify({
+        version: 1,
+        state: 'unconfirmed',
+        holderPid: 5101,
+        holderProcessStartIdentity: 'process-start-5101',
+        windowsBootIdentity: markerBootIdentity,
+      }), 'utf8');
+
+      const error = await recoverPreviousBootWindowsSandboxAcls(configHome).then(
+        () => undefined,
+        (candidate: unknown) => candidate,
+      );
+
+      expect(error).toBeInstanceOf(Error);
+      expect(Reflect.get(error as object, 'recoveryAction')).toBe(expectedRecoveryAction);
+      await expect(stat(oldMarker)).resolves.toBeDefined();
+      await expect(stat(unsafeMarker)).resolves.toBeDefined();
+      expect(capturedSyncSpawns.filter(({ args }) => (
+        args.includes('acl') && args.includes('recover')
+      ))).toHaveLength(0);
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'keeps previous-boot ACL markers when native recovery fails',
+    async () => {
+      const configHome = path.resolve(process.env.KODAX_HOME!);
+      const primaryDirectory = path.join(
+        path.resolve(process.env.ProgramData!),
+        'KodaX',
+        'sandbox-runtime',
+        'acl-poison',
+      );
+      await mkdir(primaryDirectory, { recursive: true });
+      const marker = path.join(primaryDirectory, 'unconfirmed-owner-old.json');
+      await writeFile(marker, JSON.stringify({
+        version: 1,
+        state: 'unconfirmed',
+        holderPid: 4101,
+        holderProcessStartIdentity: 'process-start-4101',
+        windowsBootIdentity: 'windows-boot-90',
+      }), 'utf8');
+      windowsSandboxMock.aclRecoveryOutcome = 'failure';
+
+      await expect(recoverPreviousBootWindowsSandboxAcls(configHome))
+        .rejects.toThrow(/ACL recovery failed/i);
+
+      await expect(stat(marker)).resolves.toBeDefined();
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'keeps every marker when a current-boot owner appears before durable clear',
+    async () => {
+      const configHome = path.resolve(process.env.KODAX_HOME!);
+      const primaryDirectory = path.join(
+        path.resolve(process.env.ProgramData!),
+        'KodaX',
+        'sandbox-runtime',
+        'acl-poison',
+      );
+      await mkdir(primaryDirectory, { recursive: true });
+      const oldMarker = path.join(primaryDirectory, 'unconfirmed-owner-old.json');
+      const currentMarker = path.join(primaryDirectory, 'unconfirmed-owner-current.json');
+      await writeFile(oldMarker, JSON.stringify({
+        version: 1,
+        state: 'unconfirmed',
+        holderPid: 4101,
+        holderProcessStartIdentity: 'process-start-4101',
+        windowsBootIdentity: 'windows-boot-90',
+      }), 'utf8');
+      await expect(recoverPreviousBootWindowsSandboxAcls(configHome)).resolves.toBe(1);
+      await writeFile(currentMarker, JSON.stringify({
+        version: 1,
+        state: 'unconfirmed',
+        holderPid: 5101,
+        holderProcessStartIdentity: 'process-start-5101',
+        windowsBootIdentity: 'windows-boot-100',
+      }), 'utf8');
+
+      await expect(clearPreviousBootWindowsSandboxAclMarkers(configHome))
+        .rejects.toThrow(/current-boot owner marker/i);
+
+      await expect(stat(oldMarker)).resolves.toBeDefined();
+      await expect(stat(currentMarker)).resolves.toBeDefined();
     },
   );
 

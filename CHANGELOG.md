@@ -8,6 +8,13 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Runtime exit settlement now recovers Windows sandbox ACL markers from multiple
+  owners only after a changed boot identity and a machine-lock recheck prove
+  that every marker has a canonical non-current boot identity. Recovery is
+  durably recorded with the recovery boot before marker removal. A further
+  reboot repeats native recovery before clear; same-boot, mixed, unreadable, or
+  identity-free markers remain fail-closed, and the path never enters sandbox
+  provisioning or elevation.
 - Anthropic and OpenAI SDK abort wrappers whose runtime `name` remains `Error`
   are now recognized by their lazily loaded `APIUserAbortError` class identity
   when the request signal is already aborted. Managed Runtime Stop therefore
