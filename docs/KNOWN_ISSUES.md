@@ -57,6 +57,7 @@ by the focused sandbox, lineage, REPL, and coding-runtime tests.
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 298 | High | Resolved in source | Provider SDK abort wrapper bypasses managed Stop classification and becomes a credential failure | v0.7.69 managed run-scoped credentials | Unreleased source after v0.7.92 | 2026-08-19 | 2026-08-19 |
 | 297 | Medium | Resolved in source | Durable Windows cleanup failure still consumed the full orderly daemon-exit window before exact recovery | v0.7.91 Runtime exit settlement | Unreleased source | 2026-08-19 | 2026-08-19 |
 | 296 | High | Resolved | Sparse `uiHistory` projection suppresses canonical conversation after `-r` resume | v0.7.51 UI history replay | v0.7.92 development | 2026-08-18 | 2026-08-18 |
 | 295 | High | Resolved | Complete Runtime exit could strand a same-boot Windows ACL owner and could not resume safely after host relaunch | v0.7.79 managed Runtime shutdown | v0.7.91 release | 2026-08-17 | 2026-08-17 |
@@ -242,6 +243,66 @@ by the focused sandbox, lineage, REPL, and coding-runtime tests.
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 298: Provider SDK abort wrapper bypasses managed Stop classification and becomes a credential failure
+
+- **Priority**: High
+- **Status**: Resolved in source
+- **Introduced**: v0.7.69 managed run-scoped credentials
+- **Observed**: KodaX v0.7.92 / KodaX Space v0.1.43
+- **Fixed**: Unreleased source after v0.7.92
+- **Created**: 2026-08-19
+- **Resolved**: 2026-08-19
+
+#### Original Problem
+
+In KodaX Space v0.1.43 with KodaX v0.7.92, sending a prompt and pressing Stop
+while the first Provider request was in flight could terminate the Run as
+`failed` with `Provider run failed while using a run-scoped credential.` The
+Runtime Stop record still said `runtime run aborted`; the UI should instead
+receive the authoritative interrupted terminal and display
+`Runtime run interrupted`.
+
+#### Root Cause
+
+Anthropic and OpenAI expose `APIUserAbortError` classes whose instances inherit
+the runtime `name` value `Error`. The base Provider boundary checked only
+`error.name === "APIUserAbortError"` or `AbortError`, so it wrapped the abort as
+an ordinary `KodaXProviderError`. Runtime could no longer prove the trusted
+Stop/Abort conjunction and correctly applied credential-safe redaction to what
+now looked like an independent Provider failure.
+
+#### Resolution
+
+The base Provider boundary now lazily loads the Anthropic and OpenAI
+`APIUserAbortError` classes and uses class identity, but only when the request's
+AbortSignal is already aborted. It converts that typed SDK cancellation into
+the existing DOM `AbortError` contract before Provider wrapping. Class identity
+survives standalone identifier minification. Runtime's existing trusted
+managed-Stop classification then emits `run.interrupted`; unrelated Provider
+failures and unrequested abort-shaped errors remain on their existing paths.
+
+#### Files Changed
+
+- `packages/llm/src/providers/base.ts`
+- `packages/llm/src/providers/base.test.ts`
+- `CHANGELOG.md`
+- `docs/KNOWN_ISSUES.md`
+- `docs/test-guides/ISSUE_298_UNRELEASED_REGRESSION_GUIDE.md`
+
+#### Tests Added
+
+- Real Anthropic and OpenAI `APIUserAbortError` objects with an aborted request
+  signal are normalized to `AbortError` and are not retried, including when the
+  constructor name is minified.
+- A plain same-message `Error` remains a Provider failure even when Stop races
+  with that independent error.
+- The existing managed Runtime credential regression confirms that a trusted
+  Stop ends as `run.interrupted` without persisting the credential or the
+  generic credential-failure message.
+
+See
+[`ISSUE_298_UNRELEASED_REGRESSION_GUIDE.md`](test-guides/ISSUE_298_UNRELEASED_REGRESSION_GUIDE.md).
 
 ### 297: Durable Windows cleanup failure still consumed the full orderly daemon-exit window before exact recovery
 
@@ -12649,11 +12710,19 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 175 (27 Open, 148 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 177 (27 Open, 148 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-08-19: Issue 298 resolved in source (Unreleased)
+- Used lazily loaded Anthropic/OpenAI SDK class identity to normalize typed
+  `APIUserAbortError` objects to the existing `AbortError` contract when the
+  request signal is already aborted, including when standalone minification
+  renames the SDK class.
+- Preserved managed Stop interruption before credential redaction without
+  reclassifying independent same-message Provider failures.
 
 ### 2026-08-18: Issue 296 resolved (v0.7.92 development)
 - Rebuilt resumed terminal history from the bounded canonical message projection

@@ -6,6 +6,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Anthropic and OpenAI SDK abort wrappers whose runtime `name` remains `Error`
+  are now recognized by their lazily loaded `APIUserAbortError` class identity
+  when the request signal is already aborted. Managed Runtime Stop therefore
+  retains its trusted interrupted terminal cause before run-scoped credential
+  redaction, including in minified standalone builds, without reclassifying
+  independent same-message Provider failures.
+
 ---
 
 ## [0.7.92] - 2026-08-18

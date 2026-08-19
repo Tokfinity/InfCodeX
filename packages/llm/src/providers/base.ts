@@ -83,6 +83,17 @@ function abortError(): DOMException {
   return new DOMException('Request aborted', 'AbortError');
 }
 
+async function isProviderSdkAbortError(error: Error): Promise<boolean> {
+  const [anthropic, openai] = await Promise.all([
+    import('@anthropic-ai/sdk'),
+    import('openai'),
+  ]);
+  return (
+    error instanceof anthropic.APIUserAbortError ||
+    error instanceof openai.APIUserAbortError
+  );
+}
+
 function waitForRetryDelay(delayMs: number, signal?: AbortSignal): Promise<void> {
   if (delayMs <= 0) return Promise.resolve();
   if (signal?.aborted) return Promise.reject(abortError());
@@ -971,7 +982,10 @@ export abstract class KodaXBaseProvider {
         }
         // Non-rate-limit errors
         if (e instanceof Error) {
-          if ((e.name === 'AbortError' || e.name === 'APIUserAbortError') && signal?.aborted) {
+          if (
+            signal?.aborted &&
+            (e.name === 'AbortError' || (await isProviderSdkAbortError(e)))
+          ) {
             if (e.name === 'AbortError') {
               throw e;
             }

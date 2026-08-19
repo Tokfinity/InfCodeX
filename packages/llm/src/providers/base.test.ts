@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { APIUserAbortError as AnthropicAPIUserAbortError } from '@anthropic-ai/sdk';
+import { APIUserAbortError as OpenAIAPIUserAbortError } from 'openai';
 import { KodaXBaseProvider } from './base.js';
 import type { KodaXOnRetryAfterCallback } from './base.js';
 import { runWithScopedConfig } from '../run-scoped-config.js';
@@ -620,6 +622,66 @@ describe('KodaXBaseProvider', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('normalizes a provider SDK abort when the request signal is aborted', async () => {
+    const provider = new TestProvider();
+    const controller = new AbortController();
+    const task = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValue(new AnthropicAPIUserAbortError());
+
+    controller.abort();
+
+    await expect(
+      provider.exposeWithRateLimit(task, controller.signal),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(task).toHaveBeenCalledTimes(1);
+  });
+
+  it('normalizes a provider SDK abort when its class name is minified', async () => {
+    const provider = new TestProvider();
+    const controller = new AbortController();
+    const sdkError = new AnthropicAPIUserAbortError();
+    Object.defineProperty(sdkError, 'constructor', { value: class a {} });
+    const task = vi.fn<() => Promise<string>>().mockRejectedValue(sdkError);
+
+    controller.abort();
+
+    await expect(
+      provider.exposeWithRateLimit(task, controller.signal),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(task).toHaveBeenCalledTimes(1);
+  });
+
+  it('normalizes an OpenAI SDK abort when the request signal is aborted', async () => {
+    const provider = new TestProvider();
+    const controller = new AbortController();
+    const task = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValue(new OpenAIAPIUserAbortError());
+
+    controller.abort();
+
+    await expect(
+      provider.exposeWithRateLimit(task, controller.signal),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(task).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps an independent same-message error on the provider failure path', async () => {
+    const provider = new TestProvider();
+    const controller = new AbortController();
+    const task = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValue(new Error('Request was aborted.'));
+
+    controller.abort();
+
+    await expect(
+      provider.exposeWithRateLimit(task, controller.signal),
+    ).rejects.toMatchObject({ name: 'KodaXProviderError' });
+    expect(task).toHaveBeenCalledTimes(1);
   });
 
   it('FEATURE_130: classifies overloaded errors with reason="overloaded"', async () => {
