@@ -559,6 +559,20 @@ The release checklist is [docs/release.md](release.md#v0790-release-preparation)
 
 ---
 
+## Post-v0.7.92 Maintenance
+
+Issue 297 keeps the 170-second orderly daemon-exit budget for genuinely slow
+cleanup, but no longer spends that window after the exact Windows daemon has
+already persisted a terminal failed shutdown outcome. Settlement observes that
+durable evidence while waiting for process exit and enters the existing exact
+PID/start-identity, Job-containment, and ACL-recovery path immediately. The
+change is source-complete and not part of the published v0.7.92 package.
+
+The regression contract is
+[Issue 297](test-guides/ISSUE_297_UNRELEASED_REGRESSION_GUIDE.md).
+
+---
+
 ## v0.7.92 Release Record
 
 `v0.7.92` is a non-Feature maintenance release. It closes the live-daemon

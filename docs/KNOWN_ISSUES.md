@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-08-18_
+_Last Updated: 2026-08-19_
 
 ---
 
@@ -57,6 +57,7 @@ by the focused sandbox, lineage, REPL, and coding-runtime tests.
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 297 | Medium | Resolved in source | Durable Windows cleanup failure still consumed the full orderly daemon-exit window before exact recovery | v0.7.91 Runtime exit settlement | Unreleased source | 2026-08-19 | 2026-08-19 |
 | 296 | High | Resolved | Sparse `uiHistory` projection suppresses canonical conversation after `-r` resume | v0.7.51 UI history replay | v0.7.92 development | 2026-08-18 | 2026-08-18 |
 | 295 | High | Resolved | Complete Runtime exit could strand a same-boot Windows ACL owner and could not resume safely after host relaunch | v0.7.79 managed Runtime shutdown | v0.7.91 release | 2026-08-17 | 2026-08-17 |
 | 293 | High | Resolved | Managed compaction context replacement makes ordinary history ambiguous and duplicates paged conversations | v0.7.80 managed-run-context stripping | v0.7.89 release | 2026-08-16 | 2026-08-16 |
@@ -241,6 +242,63 @@ by the focused sandbox, lineage, REPL, and coding-runtime tests.
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 297: Durable Windows cleanup failure still consumed the full orderly daemon-exit window before exact recovery
+
+- **Priority**: Medium
+- **Status**: Resolved in source
+- **Introduced**: v0.7.91 Runtime exit settlement
+- **Fixed**: Unreleased source after v0.7.92
+- **Created**: 2026-08-19
+- **Resolved**: 2026-08-19
+
+#### Original Problem
+
+`settleKodaXRuntimeExit()` could keep its host waiting for approximately the
+full 170-second orderly daemon-exit window after the daemon had already written
+an exact durable `failed` shutdown outcome. The daemon remained alive because
+Windows sandbox cleanup had failed, so process-exit polling could not complete.
+Only after the generic orderly wait expired did settlement enter its existing
+exact PID/start-identity, Job-containment, and ACL-recovery path.
+
+#### Root Cause
+
+The accepted-exit path waited only for daemon process death. It did not observe
+the authoritative shutdown-outcome file during that wait. A durable cleanup
+failure is terminal evidence that more graceful waiting cannot turn that daemon
+instance into a clean shutdown, but settlement treated it like an ordinary slow
+cleanup.
+
+#### Resolution
+
+On Windows, the orderly wait now observes process exit and the exact owner's
+durable shutdown outcome concurrently. A pre-existing or newly persisted
+`failed` outcome ends the graceful wait immediately and enters the unchanged
+recovery boundary. Exact process start identity and Windows Job containment are
+still required before tree termination; ACL recovery and ownership cleanup keep
+their existing exact-owner and global-lock checks. The normal 170-second budget
+is unchanged for slow cleanup without terminal failure evidence, and POSIX
+behavior is unchanged. The losing process-exit observation is cancelled so a
+fail-closed identity or containment result does not retain a background timer
+for the remainder of the orderly window.
+
+#### Files Changed
+
+- `src/runtime-daemon/exit-settlement.ts`
+- `src/runtime-daemon/exit-settlement.test.ts`
+
+#### Tests Added
+
+- A pre-existing exact durable failure does not consume the 170-second wait.
+- A failure persisted while process-exit polling is pending enters exact
+  recovery without waiting for the process timeout.
+- A durable failure followed by identity mismatch cancels the losing process
+  observation before returning the fail-closed result.
+- Existing clean, timeout, PID-reuse, Job, ACL, POSIX, and resume settlement
+  suites remain green.
+
+See
+[`ISSUE_297_UNRELEASED_REGRESSION_GUIDE.md`](test-guides/ISSUE_297_UNRELEASED_REGRESSION_GUIDE.md).
 
 ### 296: Sparse `uiHistory` projection suppresses canonical conversation after `-r` resume
 

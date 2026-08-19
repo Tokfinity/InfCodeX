@@ -106,7 +106,11 @@ export interface RuntimeExitSettlementDependencies {
   readonly readSystemBootIdentity: () => string | undefined;
   readonly isPidAlive: (pid: number) => boolean;
   readonly readProcessStartIdentity: (pid: number) => string | undefined;
-  readonly waitForProcessExit: (pid: number, timeoutMs: number) => Promise<boolean>;
+  readonly waitForProcessExit: (
+    pid: number,
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ) => Promise<boolean>;
   readonly killPidTree: (
     pid: number,
     expectedProcessStartIdentity: string,
@@ -706,12 +710,14 @@ async function settleAcceptedRuntimeExit(
     return settlementDeadlineBlocked(dependencies.platform);
   }
   const gracefullyExited = previousBoot
-    || await dependencies.waitForProcessExit(
-      owner.pid,
+    || await waitForOrderlyDaemonExit(
+      paths,
+      owner,
       Math.min(
         ORDERLY_DAEMON_EXIT_TIMEOUT_MS,
         daemonExitBudgetMs(deadline, dependencies.platform),
       ),
+      dependencies,
     );
   const repairs: Array<'windows_process_tree' | 'windows_sandbox_acl'> = [];
   if (!gracefullyExited && dependencies.isPidAlive(owner.pid)) {
@@ -1181,11 +1187,86 @@ function assertSettlementInput(
   }
 }
 
-async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boolean> {
+async function waitForProcessExit(
+  pid: number,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (isRuntimeDaemonPidAlive(pid)) {
     if (Date.now() >= deadline) return false;
-    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    if (signal?.aborted) return false;
+    await waitForExitPoll(signal);
   }
   return true;
+}
+
+async function waitForExitPoll(signal?: AbortSignal): Promise<void> {
+  if (signal === undefined) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, 25);
+    signal.addEventListener('abort', onAbort, { once: true });
+    if (signal.aborted) onAbort();
+  });
+}
+
+async function waitForOrderlyDaemonExit(
+  paths: RuntimeDaemonPaths,
+  owner: RuntimeDaemonLockOwner,
+  timeoutMs: number,
+  dependencies: RuntimeExitSettlementDependencies,
+): Promise<boolean> {
+  if (dependencies.platform !== 'win32') {
+    return dependencies.waitForProcessExit(owner.pid, timeoutMs);
+  }
+  if (readRuntimeDaemonShutdownOutcome(paths, owner)?.status === 'failed') return false;
+
+  const processExitController = new AbortController();
+  let stopWatchingOutcome = false;
+  const processExit = dependencies.waitForProcessExit(
+    owner.pid,
+    timeoutMs,
+    processExitController.signal,
+  ).then(
+    (exited) => ({ kind: 'process-exit' as const, exited }),
+  );
+  const cleanupFailure = waitForDurableCleanupFailure(
+    paths,
+    owner,
+    timeoutMs,
+    () => stopWatchingOutcome,
+  ).then((failed) => ({ kind: 'cleanup-failure' as const, failed }));
+  try {
+    const observation = await Promise.race([processExit, cleanupFailure]);
+    return observation.kind === 'process-exit' ? observation.exited : false;
+  } finally {
+    stopWatchingOutcome = true;
+    processExitController.abort();
+  }
+}
+
+async function waitForDurableCleanupFailure(
+  paths: RuntimeDaemonPaths,
+  owner: RuntimeDaemonLockOwner,
+  timeoutMs: number,
+  isCancelled: () => boolean,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (!isCancelled()) {
+    if (readRuntimeDaemonShutdownOutcome(paths, owner)?.status === 'failed') return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+  }
+  return false;
 }

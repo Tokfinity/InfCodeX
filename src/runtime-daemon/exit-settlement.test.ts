@@ -899,6 +899,139 @@ describe('runtime exit settlement', () => {
     expect(readRuntimeOwnerPolicy(paths).mode).toBe('daemon');
   });
 
+  it('does not spend the orderly shutdown window after a durable Windows cleanup failure', async () => {
+    const configHome = tempConfigHome();
+    const expectedOwner = owner();
+    seedDaemon(configHome, expectedOwner);
+    const paths = resolveRuntimeDaemonPathsFromConfigHome(configHome, 'coder');
+    writeRuntimeDaemonShutdownOutcome(paths, {
+      version: 1,
+      runtimeId: expectedOwner.runtimeId,
+      pid: expectedOwner.pid,
+      status: 'failed',
+      completedAt: '2026-08-17T00:00:01.000Z',
+      error: 'workspace sandbox cleanup failed',
+    });
+    const alive = new Set([expectedOwner.pid, expectedOwner.supervisorPid!]);
+    const waitBudgets: number[] = [];
+
+    const result = await settleRuntimeDaemonExitForTest({
+      configHome,
+      profile: 'coder',
+      runtime: runtime(expectedOwner),
+      timeoutMs: TEST_TRANSACTION_TIMEOUT_MS,
+    }, dependencies({
+      isPidAlive: vi.fn((pid) => alive.has(pid)),
+      readProcessStartIdentity: vi.fn(() => expectedOwner.processStartIdentity),
+      waitForProcessExit: vi.fn(async (pid, timeoutMs) => {
+        waitBudgets.push(timeoutMs);
+        return !alive.has(pid);
+      }),
+      killPidTree: vi.fn(async () => {
+        alive.clear();
+        return 'terminated';
+      }),
+      recoverWindowsSandboxAcls: vi.fn(async () => 0),
+    }));
+
+    expect(result).toEqual({
+      status: 'recovered',
+      repairs: ['windows_process_tree'],
+    });
+    expect(waitBudgets).not.toContain(170_000);
+  });
+
+  it('observes a late durable Windows cleanup failure without waiting for process timeout', async () => {
+    const configHome = tempConfigHome();
+    const expectedOwner = owner();
+    seedDaemon(configHome, expectedOwner);
+    const paths = resolveRuntimeDaemonPathsFromConfigHome(configHome, 'coder');
+    const managedRuntime = runtime(expectedOwner);
+    managedRuntime.daemon.stopForInline = vi.fn(async () => {
+      setTimeout(() => {
+        writeRuntimeDaemonShutdownOutcome(paths, {
+          version: 1,
+          runtimeId: expectedOwner.runtimeId,
+          pid: expectedOwner.pid,
+          status: 'failed',
+          completedAt: '2026-08-17T00:00:01.000Z',
+          error: 'workspace sandbox cleanup failed',
+        });
+      }, 10);
+      return { accepted: true as const };
+    });
+    const alive = new Set([expectedOwner.pid, expectedOwner.supervisorPid!]);
+    const kill = vi.fn(async () => {
+      alive.clear();
+      return 'terminated' as const;
+    });
+
+    const result = await settleRuntimeDaemonExitForTest({
+      configHome,
+      profile: 'coder',
+      runtime: managedRuntime,
+      timeoutMs: TEST_TRANSACTION_TIMEOUT_MS,
+    }, dependencies({
+      isPidAlive: vi.fn((pid) => alive.has(pid)),
+      readProcessStartIdentity: vi.fn(() => expectedOwner.processStartIdentity),
+      waitForProcessExit: vi.fn((pid) => (
+        alive.has(pid) ? new Promise<boolean>(() => undefined) : Promise.resolve(true)
+      )),
+      killPidTree: kill,
+      recoverWindowsSandboxAcls: vi.fn(async () => 0),
+    }));
+
+    expect(result).toEqual({
+      status: 'recovered',
+      repairs: ['windows_process_tree'],
+    });
+    expect(kill).toHaveBeenCalledOnce();
+  });
+
+  it('cancels process-exit observation when a durable failure cannot pass identity recovery', async () => {
+    const configHome = tempConfigHome();
+    const expectedOwner = owner();
+    seedDaemon(configHome, expectedOwner);
+    const paths = resolveRuntimeDaemonPathsFromConfigHome(configHome, 'coder');
+    const managedRuntime = runtime(expectedOwner);
+    managedRuntime.daemon.stopForInline = vi.fn(async () => {
+      setTimeout(() => {
+        writeRuntimeDaemonShutdownOutcome(paths, {
+          version: 1,
+          runtimeId: expectedOwner.runtimeId,
+          pid: expectedOwner.pid,
+          status: 'failed',
+          completedAt: '2026-08-17T00:00:01.000Z',
+          error: 'workspace sandbox cleanup failed',
+        });
+      }, 10);
+      return { accepted: true as const };
+    });
+    let observationAborted = false;
+
+    const result = await settleRuntimeDaemonExitForTest({
+      configHome,
+      profile: 'coder',
+      runtime: managedRuntime,
+      timeoutMs: TEST_TRANSACTION_TIMEOUT_MS,
+    }, dependencies({
+      isPidAlive: vi.fn(() => true),
+      readProcessStartIdentity: vi.fn(() => 'different-process-start-identity'),
+      waitForProcessExit: vi.fn((_pid, _timeoutMs, signal) => new Promise<boolean>((resolve) => {
+        signal?.addEventListener('abort', () => {
+          observationAborted = true;
+          resolve(false);
+        }, { once: true });
+      })),
+    }));
+
+    expect(result).toMatchObject({
+      status: 'blocked',
+      reason: 'owner_identity_mismatch',
+    });
+    expect(observationAborted).toBe(true);
+  });
+
   it('reserves a Windows Job containment tail after the orderly daemon wait', async () => {
     const configHome = tempConfigHome();
     const expectedOwner = owner();
