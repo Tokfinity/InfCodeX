@@ -127,6 +127,56 @@ Before tagging, all of the following must be true:
 
 Only after these gates pass may the exact commit be tagged `v0.7.90`.
 
+## v0.7.93 release preparation
+
+Release state: the root package, all four workspace packages, and every
+`package-lock.json` workspace entry must be version `0.7.93`. This maintenance
+release is prepared for the `v0.7.93` tag and GitHub Release; npm publication
+remains a separate manual operator step. It includes every commit after
+`v0.7.92`:
+
+- a durable Windows `failed` shutdown outcome ends the 170-second orderly
+  daemon-exit wait and enters the existing exact recovery path immediately
+  (Issue 297);
+- after a verified Windows boot change, settlement may recover shared previous-
+  boot ACL markers under the machine lock, records the recovery scope, and only
+  then clears revalidated markers (Issue 299);
+- Anthropic/OpenAI `APIUserAbortError` objects are classified by isolated SDK
+  class identity when the request signal is already aborted, so managed Stop
+  stays `interrupted` before credential redaction (Issue 298);
+- synchronized product, architecture, detailed-design, public SDK, release
+  checklist, feature index, known-issue, regression-guide, and `kodax_manual`
+  content.
+
+The release does not add a Feature slot, does not change
+`sandboxRuntime` / `crashOutcomeModel` versions, and does not close Issue 256's
+lost-ancestor descendant-closure boundary. Same-boot ACL and POSIX recovery
+remain fail-closed. No system implementation is silently changed by the
+release-documentation pass.
+
+Before tagging, all of the following must be true:
+
+1. all package versions, `CHANGELOG.md`, README/README_CN, PRD/HLD/DD/ADR,
+   feature tracker, known-issue record, public SDK guide, this checklist,
+   `docs/features`, and `kodax_manual` agree on v0.7.93;
+2. focused tests cover failed-outcome fast settlement, previous-boot ACL
+   recovery, isolated provider abort classification (Issues 297/298/299), and
+   the existing v0.7.92 regression contracts;
+3. TypeScript, config-template checks, bundled SDK/Worker/sidecar builds, fast,
+   unit, contract, and system suites pass, with any host-only Windows sandbox
+   limitation documented rather than silently changing system code;
+4. the packed `kodax-ai-kodax-0.7.93.tgz` is inspected and smoke-installed into
+   an empty consumer for the root package and all 12 SDK subpaths;
+5. root and `docs/features` are clean, with the submodule commit reachable from
+   its remote; `.codex*` local artifacts and alternate pnpm metadata are ignored
+   and not tracked;
+6. GitHub CI is green for the exact commit on Node 20/22, Unix Runtime,
+   Windows Shell, and packaged Electron gates; the tag-triggered Release job
+   produces all platform archives, sidecars, and `SHA256SUMS`. npm publication is
+   left to the maintainer.
+
+Only after these gates pass may the exact commit be tagged `v0.7.93`.
+
 ## v0.7.92 release preparation
 
 Release state: the root package, all four workspace packages, and every

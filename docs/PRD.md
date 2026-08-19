@@ -1,9 +1,9 @@
 # KodaX Product Requirements
 
-> Last updated: 2026-08-18
+> Last updated: 2026-08-19
 >
-> Current implementation baseline: `@kodax-ai/kodax@0.7.92`
-> (`v0.7.92` Git tag / GitHub Release; npm publication remains manual)
+> Current implementation baseline: `@kodax-ai/kodax@0.7.93`
+> (`v0.7.93` Git tag / GitHub Release; npm publication remains manual)
 >
 > This document describes the current product. Historical pre-v0.7.43
 > chain/harness designs have been removed from this current PRD because they no
@@ -110,6 +110,12 @@ that conversation. Presentation-only synthetic completion events stay
 host-owned when a non-empty CLI `uiHistory` exists. Hosts negotiate
 `sandboxRuntime:4` and `crashOutcomeModel:2`.
 Issue 256's lost-ancestor descendant-closure work remains open.
+
+The v0.7.93 maintenance release keeps those contracts. Complete Windows exit
+no longer waits the full orderly window after a durable `failed` shutdown
+outcome, can recover previous-boot shared ACL markers after a verified boot
+change, and preserves managed Stop interruption when an Anthropic or OpenAI
+SDK abort wrapper does not carry the `APIUserAbortError` runtime name.
 
 ## 2. Target Users
 

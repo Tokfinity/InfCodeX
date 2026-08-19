@@ -5,14 +5,16 @@
 > extensions, custom CLIs. If you are an end-user running the `kodax`
 > command-line tool, see the root [README.md](../../README.md) instead.
 
-This guide reflects the `v0.7.92` SDK contract. npm publication remains a
-manual maintainer step. The release adds filesystem-effect operation-token
-coordination, recorded-release owners, managed Session-before-completion
-ordering, canonical-first resume reconstruction, `sandboxRuntime:4`, and
-`crashOutcomeModel:2`, on top of the v0.7.91
-bounded owner-scoped interactions, stale prepared-Session recovery,
-crash-resumable Runtime exit settlement, effective live output segments, and
-standalone lazy provider dependency bundling.
+This guide reflects the `v0.7.93` SDK contract. npm publication remains a
+manual maintainer step. The release keeps `sandboxRuntime:4` and
+`crashOutcomeModel:2`, and adds failed-exit fast settlement, previous-boot
+ACL recovery, and isolated Anthropic/OpenAI abort classification on top of the
+v0.7.92 filesystem-effect operation-token coordinator, recorded-release
+owners, managed Session-before-completion ordering, and canonical-first resume
+reconstruction. v0.7.91 still supplies bounded owner-scoped interactions,
+stale prepared-Session recovery, crash-resumable Runtime exit settlement,
+effective live output segments, and standalone lazy provider dependency
+bundling.
 
 This guide documents the SDK surfaces a host integrator needs that
 are NOT obvious from inspecting the type definitions alone:
@@ -4460,14 +4462,17 @@ PID reuse, foreign markers, corrupt tickets, and replacement owners return
 ACL-recovery primitive. The transaction has a fixed bounded deadline and does
 not accept caller-supplied short timeouts.
 
-Unreleased after v0.7.92: after a verified Windows boot change, settlement may
-also recover shared ACL state when a machine-lock recheck proves that every
-primary and legacy marker has a canonical non-current boot identity. The
-recovered scope, repair fact, and recovery boot identity are durably recorded
-before a second lock-scoped recheck removes markers. If Windows restarts again
-before clear, native recovery repeats against the new boot before the recorded
-identity advances. Same-boot or unverifiable markers remain `blocked`. This is
-not part of the published v0.7.92 contract.
+After a verified Windows boot change, settlement may also recover shared ACL
+state when a machine-lock recheck proves that every primary and legacy marker
+has a canonical non-current boot identity. The recovered scope, repair fact,
+and recovery boot identity are durably recorded before a second lock-scoped
+recheck removes markers. If Windows restarts again before clear, native
+recovery repeats against the new boot before the recorded identity advances.
+Same-boot or unverifiable markers remain `blocked`. A durable Windows
+`failed` shutdown outcome ends the 170-second orderly wait and enters exact
+recovery immediately. Anthropic/OpenAI `APIUserAbortError` objects are
+classified by isolated SDK class identity when the request signal is already
+aborted, so managed Stop stays interrupted before credential redaction.
 
 When the host is about to close, pass the connected Runtime so the SDK can
 record the exact owner and management revision. After a crash, call the same

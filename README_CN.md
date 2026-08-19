@@ -266,6 +266,15 @@ SDK 系统代码契约更新，但没有放宽 shell/sandbox 的 fail-closed 边
 `handleRuntimePermissionRequest()` 管理 SDK 权限 UI，并在 prepared Session 尾部遇到
 `data_changed` 时通过权威 delta 合并恢复；后台持久化失败会显示为诊断，不再静默丢失。
 
+**v0.7.93 发布**：Windows 退出结算在精确 owner 已写入 durable `failed`
+shutdown outcome 后不再空等 170 秒有序窗口，改为立即进入既有精确恢复路径。
+验证 boot 变化后，可在 machine lock 下回收上一启动留下的共享 ACL marker，
+并在记录 recovery 之后才清除。Anthropic/OpenAI 的 abort 包装在请求 signal
+已中止时按隔离加载的 SDK class identity 识别，managed Stop 在凭据脱敏前
+仍保持 interrupted。能力版本不变。Issue 256 仍保持 Open。
+详见 [v0.7.93 发布清单](docs/release.md#v0793-release-preparation) 与
+[SDK Embedder Guide](public_docs/sdk/embedder-guide.md)。
+
 **v0.7.92 发布**：文件系统效应协调器为每次排队使用精确 token 并 heartbeat。
 只有当该 token 不再持有 coordinator lock 时，才会回收同一长期 daemon PID 上的过期票；
 durable release marker 允许后续调用退役已结算的 effect owner。精确仍持有的 lock、

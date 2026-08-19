@@ -1,6 +1,16 @@
 # KodaX Architecture Decision Records
 
-> Last updated: 2026-08-18
+> Last updated: 2026-08-19
+>
+> **v0.7.93 release addendum:** Runtime exit settlement observes a durable
+> Windows `failed` shutdown outcome during the orderly wait and enters exact
+> recovery immediately instead of spending the 170-second window (Issue 297).
+> After a verified boot change, settlement may recover previous-boot shared ACL
+> markers under the machine lock, record the recovery, and only then clear
+> revalidated markers (Issue 299). Anthropic/OpenAI abort wrappers are classified
+> by isolated SDK class identity when the request signal is already aborted, so
+> managed Stop stays interrupted before credential redaction (Issue 298).
+> Capability versions are unchanged. Issue 256 remains open.
 >
 > **v0.7.92 release addendum:** filesystem-effect lock ownership is an operation
 > token, not process liveness. Waiters heartbeat their queue ticket; a stale

@@ -7,6 +7,24 @@ _Last Updated: 2026-08-19_
 > **Archive Notice**: Historical issue records are maintained in `docs/ISSUES_ARCHIVED.md`.
 > This file tracks the active issue backlog plus recently resolved issue records that have not yet been archived.
 
+## v0.7.93 Release Corrections
+
+The v0.7.93 maintenance release closes Issues 297, 298, and 299. A durable
+Windows `failed` shutdown outcome ends the 170-second orderly wait and enters
+exact recovery immediately. After a verified boot change, settlement may
+recover previous-boot shared ACL markers under the machine lock and record
+that recovery before clearing revalidated markers. Anthropic/OpenAI abort
+wrappers are classified by isolated SDK class identity when the request
+signal is already aborted, so managed Stop stays interrupted before
+credential redaction. Capability versions and Issue 256 remain unchanged.
+See
+[ISSUE_297_v0.7.93_REGRESSION_GUIDE.md](test-guides/ISSUE_297_v0.7.93_REGRESSION_GUIDE.md),
+[ISSUE_298_v0.7.93_REGRESSION_GUIDE.md](test-guides/ISSUE_298_v0.7.93_REGRESSION_GUIDE.md),
+and
+[ISSUE_299_v0.7.93_REGRESSION_GUIDE.md](test-guides/ISSUE_299_v0.7.93_REGRESSION_GUIDE.md).
+
+---
+
 ## v0.7.92 Release Corrections
 
 The v0.7.92 maintenance release closes the live-daemon orphan filesystem-effect
@@ -57,9 +75,9 @@ by the focused sandbox, lineage, REPL, and coding-runtime tests.
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
-| 299 | High | Resolved in source | Previous-boot foreign Windows ACL markers blocked SDK-owned Runtime exit settlement | v0.7.91 Runtime exit settlement | Unreleased source after v0.7.92 | 2026-08-19 | 2026-08-19 |
-| 298 | High | Resolved in source | Provider SDK abort wrapper bypasses managed Stop classification and becomes a credential failure | v0.7.69 managed run-scoped credentials | Unreleased source after v0.7.92 | 2026-08-19 | 2026-08-19 |
-| 297 | Medium | Resolved in source | Durable Windows cleanup failure still consumed the full orderly daemon-exit window before exact recovery | v0.7.91 Runtime exit settlement | Unreleased source | 2026-08-19 | 2026-08-19 |
+| 299 | High | Resolved | Previous-boot foreign Windows ACL markers blocked SDK-owned Runtime exit settlement | v0.7.91 Runtime exit settlement | v0.7.93 | 2026-08-19 | 2026-08-19 |
+| 298 | High | Resolved | Provider SDK abort wrapper bypasses managed Stop classification and becomes a credential failure | v0.7.69 managed run-scoped credentials | v0.7.93 | 2026-08-19 | 2026-08-19 |
+| 297 | Medium | Resolved | Durable Windows cleanup failure still consumed the full orderly daemon-exit window before exact recovery | v0.7.91 Runtime exit settlement | v0.7.93 | 2026-08-19 | 2026-08-19 |
 | 296 | High | Resolved | Sparse `uiHistory` projection suppresses canonical conversation after `-r` resume | v0.7.51 UI history replay | v0.7.92 development | 2026-08-18 | 2026-08-18 |
 | 295 | High | Resolved | Complete Runtime exit could strand a same-boot Windows ACL owner and could not resume safely after host relaunch | v0.7.79 managed Runtime shutdown | v0.7.91 release | 2026-08-17 | 2026-08-17 |
 | 293 | High | Resolved | Managed compaction context replacement makes ordinary history ambiguous and duplicates paged conversations | v0.7.80 managed-run-context stripping | v0.7.89 release | 2026-08-16 | 2026-08-16 |
@@ -248,9 +266,9 @@ by the focused sandbox, lineage, REPL, and coding-runtime tests.
 ### 299: Previous-boot foreign Windows ACL markers blocked SDK-owned Runtime exit settlement
 
 - **Priority**: High
-- **Status**: Resolved in source
+- **Status**: Resolved
 - **Introduced**: v0.7.91 Runtime exit settlement
-- **Fixed**: Unreleased source after v0.7.92
+- **Fixed**: v0.7.93
 - **Created**: 2026-08-19
 - **Resolved**: 2026-08-19
 
@@ -306,15 +324,15 @@ markers remain blocked.
   `recovered` with `windows_sandbox_acl`.
 
 See
-[`ISSUE_299_UNRELEASED_REGRESSION_GUIDE.md`](test-guides/ISSUE_299_UNRELEASED_REGRESSION_GUIDE.md).
+[`ISSUE_299_v0.7.93_REGRESSION_GUIDE.md`](test-guides/ISSUE_299_v0.7.93_REGRESSION_GUIDE.md).
 
 ### 298: Provider SDK abort wrapper bypasses managed Stop classification and becomes a credential failure
 
 - **Priority**: High
-- **Status**: Resolved in source
+- **Status**: Resolved
 - **Introduced**: v0.7.69 managed run-scoped credentials
 - **Observed**: KodaX v0.7.92 / KodaX Space v0.1.43
-- **Fixed**: Unreleased source after v0.7.92
+- **Fixed**: v0.7.93
 - **Created**: 2026-08-19
 - **Resolved**: 2026-08-19
 
@@ -354,7 +372,7 @@ unrequested abort-shaped errors remain on their existing paths.
 - `packages/llm/src/providers/base-abort-import-isolation.test.ts`
 - `CHANGELOG.md`
 - `docs/KNOWN_ISSUES.md`
-- `docs/test-guides/ISSUE_298_UNRELEASED_REGRESSION_GUIDE.md`
+- `docs/test-guides/ISSUE_298_v0.7.93_REGRESSION_GUIDE.md`
 
 #### Tests Added
 
@@ -368,14 +386,14 @@ unrequested abort-shaped errors remain on their existing paths.
   trusted Stop that already surfaces as `AbortError`.
 
 See
-[`ISSUE_298_UNRELEASED_REGRESSION_GUIDE.md`](test-guides/ISSUE_298_UNRELEASED_REGRESSION_GUIDE.md).
+[`ISSUE_298_v0.7.93_REGRESSION_GUIDE.md`](test-guides/ISSUE_298_v0.7.93_REGRESSION_GUIDE.md).
 
 ### 297: Durable Windows cleanup failure still consumed the full orderly daemon-exit window before exact recovery
 
 - **Priority**: Medium
-- **Status**: Resolved in source
+- **Status**: Resolved
 - **Introduced**: v0.7.91 Runtime exit settlement
-- **Fixed**: Unreleased source after v0.7.92
+- **Fixed**: v0.7.93
 - **Created**: 2026-08-19
 - **Resolved**: 2026-08-19
 
@@ -425,7 +443,7 @@ for the remainder of the orderly window.
   suites remain green.
 
 See
-[`ISSUE_297_UNRELEASED_REGRESSION_GUIDE.md`](test-guides/ISSUE_297_UNRELEASED_REGRESSION_GUIDE.md).
+[`ISSUE_297_v0.7.93_REGRESSION_GUIDE.md`](test-guides/ISSUE_297_v0.7.93_REGRESSION_GUIDE.md).
 
 ### 296: Sparse `uiHistory` projection suppresses canonical conversation after `-r` resume
 
@@ -12776,25 +12794,19 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 178 (27 Open, 148 Resolved, 3 Resolved in source, 0 Partially Resolved, 0 Won't Fix)
+- Total: 178 (27 Open, 151 Resolved, 0 Resolved in source, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
 
-### 2026-08-19: Issue 299 resolved in source (Unreleased)
-- Added a machine-lock-scoped recovery-only path for ACL marker sets with
-  canonical non-current Windows boot identities.
-- Kept same-boot, mixed, missing-identity, corrupt, and native-recovery failure
-  paths fail-closed while settlement remains the only host recovery authority.
-
-### 2026-08-19: Issue 298 resolved in source (Unreleased)
-- Used lazily loaded Anthropic/OpenAI SDK class identity to normalize typed
-  `APIUserAbortError` objects to the existing `AbortError` contract when the
-  request signal is already aborted. Each SDK load is isolated so a sibling
-  import failure cannot replace the original error.
-- Preserved managed Stop interruption before credential redaction without
-  reclassifying independent same-message Provider failures.
+### 2026-08-19: Issues 297, 298, and 299 resolved (v0.7.93)
+- Ended the 170-second orderly Windows exit wait when the exact owner already
+  persisted a terminal `failed` shutdown outcome.
+- Added a machine-lock-scoped recovery-only path for previous-boot ACL marker
+  sets and kept same-boot or unverifiable markers fail-closed.
+- Classified isolated Anthropic/OpenAI `APIUserAbortError` objects as
+  `AbortError` so managed Stop stays interrupted before credential redaction.
 
 ### 2026-08-18: Issue 296 resolved (v0.7.92 development)
 - Rebuilt resumed terminal history from the bounded canonical message projection

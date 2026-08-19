@@ -2,7 +2,10 @@
 
 Public documentation for KodaX users and SDK integrators.
 
-The current release is `v0.7.92`. Its SDK guidance carries the filesystem-effect
+The current release is `v0.7.93`. Its SDK guidance carries failed-exit fast
+settlement, previous-boot ACL recovery, and isolated provider abort
+classification on top of the v0.7.92 filesystem-effect
+operation-token coordinator, recorded-release owners, managed Session-before-
 operation-token coordinator, recorded-release owners, managed Session-before-
 completion ordering, canonical-first resume reconstruction, `sandboxRuntime:4`,
 and `crashOutcomeModel:2`. Issue 256's
@@ -41,6 +44,12 @@ standalone lazy provider dependency bundling. It also documents bounded
 AskUser/permission deadlines, owner AbortSignal propagation,
 `handleRuntimePermissionRequest()`, validated default answers, and stale
 prepared-Session-tail recovery after a `data_changed` race.
+
+The v0.7.93 SDK guidance documents that a durable Windows `failed` shutdown
+outcome ends the orderly exit wait, previous-boot shared ACL markers may be
+recovered after a verified boot change, and Anthropic/OpenAI abort wrappers
+are classified by isolated SDK class identity. Capability versions are
+unchanged.
 
 The v0.7.92 SDK guidance adds `sandboxRuntime:4` and `crashOutcomeModel:2` as
 pre-start facts. Auto-start replaces an idle older daemon and fails closed

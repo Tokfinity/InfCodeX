@@ -726,6 +726,15 @@ permission UI, and recovers stale prepared Session tails through an
 authoritative merge. Background persistence failures are surfaced as
 diagnostics rather than hidden.
 
+**v0.7.93 release:** Runtime exit settlement no longer spends the 170-second
+Windows orderly-exit window after a durable `failed` shutdown outcome, can
+recover previous-boot shared ACL markers after a verified boot change, and
+keeps managed Stop interrupted when an Anthropic or OpenAI abort wrapper
+does not carry the `APIUserAbortError` runtime name. Capability versions are
+unchanged. Issue 256 remains open. See the
+[v0.7.93 release checklist](docs/release.md#v0793-release-preparation)
+and [SDK Embedder Guide](public_docs/sdk/embedder-guide.md).
+
 **v0.7.92 release:** the filesystem-effect coordinator now gives each
 queue attempt an exact token and heartbeat. It can reclaim a stale same-daemon
 ticket only when that token no longer owns the coordinator lock, and durable

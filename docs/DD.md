@@ -1,9 +1,9 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-08-18
+> Last updated: 2026-08-19
 >
-> Current published baseline: `v0.7.92`
-> (`@kodax-ai/kodax@0.7.92`; `sandboxRuntime:4`, `crashOutcomeModel:2`;
+> Current published baseline: `v0.7.93`
+> (`@kodax-ai/kodax@0.7.93`; `sandboxRuntime:4`, `crashOutcomeModel:2`;
 > npm publication remains manual)
 >
 > This DD describes current implementation structure. Retired V1 chain details
@@ -21,7 +21,11 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The published package is `@kodax-ai/kodax@0.7.92`. The v0.7.85 release
+The published package is `@kodax-ai/kodax@0.7.93`. The v0.7.93 maintenance
+slice observes a durable Windows `failed` shutdown outcome during orderly
+exit wait, recovers previous-boot shared ACL markers only after a verified
+boot change, and classifies Anthropic/OpenAI abort wrappers by isolated SDK
+class identity. The v0.7.85 release
 established
 controller-wide bounded Actor progress
 persistence, queue-aware terminal deadlines, root fail-closed fencing, and

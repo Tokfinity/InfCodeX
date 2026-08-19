@@ -6,8 +6,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+---
+
+## [0.7.93] - 2026-08-19
+
 ### Fixed
 
+- Runtime exit settlement no longer spends the 170-second orderly Windows
+  daemon-exit window after the exact owner has already persisted a terminal
+  `failed` shutdown outcome. Settlement observes that durable evidence while
+  waiting for process exit and enters the existing exact PID/start-identity,
+  Job-containment, and ACL-recovery path immediately. Slow cleanup without a
+  terminal failure still keeps the full budget; POSIX behavior is unchanged.
 - Runtime exit settlement now recovers Windows sandbox ACL markers from multiple
   owners only after a changed boot identity and a machine-lock recheck prove
   that every marker has a canonical non-current boot identity. Recovery is

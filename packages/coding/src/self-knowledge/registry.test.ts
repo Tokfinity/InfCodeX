@@ -106,6 +106,15 @@ describe('FEATURE_218 manual registry', () => {
     expect(sessions).toContain('authoritative full delta path');
   });
 
+  it('documents the v0.7.93 exit settlement and abort classification contracts', () => {
+    const sdk = resolveKodaXManual({ topic: 'sdk' }).content;
+
+    expect(sdk).toContain('v0.7.93 SDK keeps `sandboxRuntime:4`');
+    expect(sdk).toContain('durable Windows failed shutdown outcome');
+    expect(sdk).toContain('previous-boot shared ACL markers');
+    expect(sdk).toContain('isolated SDK class');
+  });
+
   it('documents the v0.7.92 filesystem-effect and managed terminal contracts', () => {
     const sdk = resolveKodaXManual({ topic: 'sdk' }).content;
     const tools = resolveKodaXManual({ topic: 'tools' }).content;

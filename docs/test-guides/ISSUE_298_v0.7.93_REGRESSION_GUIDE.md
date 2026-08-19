@@ -3,7 +3,7 @@
 ## 功能概述
 
 **功能名称**: Provider 请求期间 Stop 保留 Runtime interruption 终态
-**版本**: Unreleased source after v0.7.92
+**版本**: v0.7.93
 **测试日期**: 2026-08-19
 **测试人员**: 待填写
 

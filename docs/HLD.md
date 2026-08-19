@@ -1,9 +1,9 @@
 # KodaX High-Level Design
 
-> Last updated: 2026-08-18
+> Last updated: 2026-08-19
 >
-> Current published baseline: `v0.7.92`
-> (`@kodax-ai/kodax@0.7.92`; `sandboxRuntime:4`, `crashOutcomeModel:2`;
+> Current published baseline: `v0.7.93`
+> (`@kodax-ai/kodax@0.7.93`; `sandboxRuntime:4`, `crashOutcomeModel:2`;
 > npm publication remains manual)
 >
 > This HLD is intentionally current-state only. The old pre-v0.7.43
@@ -81,6 +81,15 @@ display metadata or append UI-only entries, but cannot hide ordinary
 conversation. Presentation-only synthetic completion events stay host-owned
 when a non-empty CLI `uiHistory` exists. This slice does not close Issue 256's
 lost-ancestor descendant-closure boundary.
+
+The v0.7.93 Runtime keeps those contracts and closes three follow-up gaps.
+A durable Windows `failed` shutdown outcome ends the orderly daemon-exit wait
+and uses the existing exact recovery path immediately. After a verified boot
+change, shared previous-boot ACL markers may be recovered under the machine
+lock without entering Setup or elevation. Provider Stop classification uses
+isolated Anthropic/OpenAI abort-class identity so a typed SDK abort is not
+redacted as a credential failure. Same-boot ACL and POSIX recovery remain
+fail-closed.
 
 For a Windows daemon Runtime, startup is a three-part process boundary:
 PowerShell creates the daemon suspended, assigns it to a kill-on-close Job

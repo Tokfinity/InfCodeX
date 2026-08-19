@@ -166,15 +166,11 @@ AbortSignals, validates timeout defaults at the Runtime boundary, and keeps
 stale prepared Session tails recoverable through an authoritative delta merge
 instead of silently losing the latest host state.
 
-The v0.7.92 release advances `sandboxRuntime` to v4 and `crashOutcomeModel` to
-v2. Filesystem-effect tickets share an operation token with the coordinator
-lock; a stale same-PID ticket is reclaimed only when it no longer owns that
-lock. Managed Runs persist the canonical Session before completion, and Runtime
-uses the executor Promise rather than managed `onComplete` as terminal
-authority. Resume reconstruction uses canonical Session `messages` as the
-ordinary-conversation source; `uiHistory` is only a display overlay, and
-presentation-only synthetic completion events stay host-owned when that cache
-is non-empty. See the
+The v0.7.93 release keeps `sandboxRuntime:4` and `crashOutcomeModel:2`. Runtime
+exit settlement ends the 170-second orderly wait after a durable Windows
+`failed` shutdown outcome, can recover previous-boot shared ACL markers after a
+verified boot change, and classifies Anthropic/OpenAI abort wrappers by
+isolated SDK class identity so managed Stop stays interrupted. See the
 [SDK Embedder Guide](../../public_docs/sdk/embedder-guide.md)
 for host capability requirements.
 

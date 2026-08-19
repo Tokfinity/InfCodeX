@@ -1,4 +1,4 @@
-# Issue 297 / Unreleased Runtime Exit Fast-Failure Regression Guide
+# Issue 297 / v0.7.93 Runtime Exit Fast-Failure Regression Guide
 
 ## Automated checks
 
