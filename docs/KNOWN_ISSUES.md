@@ -339,17 +339,19 @@ now looked like an independent Provider failure.
 #### Resolution
 
 The base Provider boundary now lazily loads the Anthropic and OpenAI
-`APIUserAbortError` classes and uses class identity, but only when the request's
-AbortSignal is already aborted. It converts that typed SDK cancellation into
-the existing DOM `AbortError` contract before Provider wrapping. Class identity
-survives standalone identifier minification. Runtime's existing trusted
-managed-Stop classification then emits `run.interrupted`; unrelated Provider
-failures and unrequested abort-shaped errors remain on their existing paths.
+`APIUserAbortError` classes independently and uses class identity, but only
+when the request's AbortSignal is already aborted. It converts that typed SDK
+cancellation into the existing DOM `AbortError` contract before Provider
+wrapping. A missing or broken sibling SDK cannot replace the original error or
+force an abort classification. Runtime's existing trusted managed-Stop
+classification then emits `run.interrupted`; unrelated Provider failures and
+unrequested abort-shaped errors remain on their existing paths.
 
 #### Files Changed
 
 - `packages/llm/src/providers/base.ts`
 - `packages/llm/src/providers/base.test.ts`
+- `packages/llm/src/providers/base-abort-import-isolation.test.ts`
 - `CHANGELOG.md`
 - `docs/KNOWN_ISSUES.md`
 - `docs/test-guides/ISSUE_298_UNRELEASED_REGRESSION_GUIDE.md`
@@ -357,13 +359,13 @@ failures and unrequested abort-shaped errors remain on their existing paths.
 #### Tests Added
 
 - Real Anthropic and OpenAI `APIUserAbortError` objects with an aborted request
-  signal are normalized to `AbortError` and are not retried, including when the
-  constructor name is minified.
+  signal are normalized to `AbortError` and are not retried.
 - A plain same-message `Error` remains a Provider failure even when Stop races
   with that independent error.
-- The existing managed Runtime credential regression confirms that a trusted
-  Stop ends as `run.interrupted` without persisting the credential or the
-  generic credential-failure message.
+- One SDK failing to load does not replace the original error or block the
+  other SDK's abort classification.
+- The existing managed Runtime credential regression remains green for a
+  trusted Stop that already surfaces as `AbortError`.
 
 See
 [`ISSUE_298_UNRELEASED_REGRESSION_GUIDE.md`](test-guides/ISSUE_298_UNRELEASED_REGRESSION_GUIDE.md).
@@ -12774,7 +12776,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 178 (27 Open, 148 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 178 (27 Open, 148 Resolved, 3 Resolved in source, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
@@ -12789,8 +12791,8 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ### 2026-08-19: Issue 298 resolved in source (Unreleased)
 - Used lazily loaded Anthropic/OpenAI SDK class identity to normalize typed
   `APIUserAbortError` objects to the existing `AbortError` contract when the
-  request signal is already aborted, including when standalone minification
-  renames the SDK class.
+  request signal is already aborted. Each SDK load is isolated so a sibling
+  import failure cannot replace the original error.
 - Preserved managed Stop interruption before credential redaction without
   reclassifying independent same-message Provider failures.
 

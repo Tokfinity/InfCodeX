@@ -4453,17 +4453,21 @@ if (outcome.status === 'blocked') {
 handshake requirement. The SDK writes an exact owner/process-start and platform
 boot identity before cooperative stop, then returns `clean` only after the
 durable shutdown outcome and required exits are verified. `recovered` may repair
-identity-scoped Windows process/Job/ACL residue. After a verified Windows boot
-change, it may also recover the shared ACL state only when a machine-lock recheck
-proves that every primary and legacy marker has a canonical non-current boot
-identity. The recovered scope, repair fact, and recovery boot identity are
-durably recorded before a second lock-scoped recheck removes markers. If Windows
-restarts again before clear, native recovery repeats against the new boot before
-the recorded identity advances. Same-boot or unverifiable markers, same-boot
-POSIX uncertainty, active work, PID reuse, corrupt tickets, and replacement
-owners return `blocked`; the SDK never exposes a bare-PID kill, raw marker
-deletion, or forced ACL-recovery primitive. The transaction has a fixed bounded
-deadline and does not accept caller-supplied short timeouts.
+only identity-scoped Windows process/Job/ACL residue, or exact POSIX owner/state
+residue after a boot-identity change. Same-boot POSIX uncertainty, active work,
+PID reuse, foreign markers, corrupt tickets, and replacement owners return
+`blocked`; the SDK never exposes a bare-PID kill, raw marker deletion, or forced
+ACL-recovery primitive. The transaction has a fixed bounded deadline and does
+not accept caller-supplied short timeouts.
+
+Unreleased after v0.7.92: after a verified Windows boot change, settlement may
+also recover shared ACL state when a machine-lock recheck proves that every
+primary and legacy marker has a canonical non-current boot identity. The
+recovered scope, repair fact, and recovery boot identity are durably recorded
+before a second lock-scoped recheck removes markers. If Windows restarts again
+before clear, native recovery repeats against the new boot before the recorded
+identity advances. Same-boot or unverifiable markers remain `blocked`. This is
+not part of the published v0.7.92 contract.
 
 When the host is about to close, pass the connected Runtime so the SDK can
 record the exact owner and management revision. After a crash, call the same

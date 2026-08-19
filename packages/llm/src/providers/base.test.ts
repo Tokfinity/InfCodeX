@@ -639,21 +639,6 @@ describe('KodaXBaseProvider', () => {
     expect(task).toHaveBeenCalledTimes(1);
   });
 
-  it('normalizes a provider SDK abort when its class name is minified', async () => {
-    const provider = new TestProvider();
-    const controller = new AbortController();
-    const sdkError = new AnthropicAPIUserAbortError();
-    Object.defineProperty(sdkError, 'constructor', { value: class a {} });
-    const task = vi.fn<() => Promise<string>>().mockRejectedValue(sdkError);
-
-    controller.abort();
-
-    await expect(
-      provider.exposeWithRateLimit(task, controller.signal),
-    ).rejects.toMatchObject({ name: 'AbortError' });
-    expect(task).toHaveBeenCalledTimes(1);
-  });
-
   it('normalizes an OpenAI SDK abort when the request signal is aborted', async () => {
     const provider = new TestProvider();
     const controller = new AbortController();

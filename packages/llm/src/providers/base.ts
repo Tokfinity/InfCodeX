@@ -84,13 +84,15 @@ function abortError(): DOMException {
 }
 
 async function isProviderSdkAbortError(error: Error): Promise<boolean> {
-  const [anthropic, openai] = await Promise.all([
+  const [anthropic, openai] = await Promise.allSettled([
     import('@anthropic-ai/sdk'),
     import('openai'),
   ]);
   return (
-    error instanceof anthropic.APIUserAbortError ||
-    error instanceof openai.APIUserAbortError
+    (anthropic.status === 'fulfilled'
+      && error instanceof anthropic.value.APIUserAbortError)
+    || (openai.status === 'fulfilled'
+      && error instanceof openai.value.APIUserAbortError)
   );
 }
 
