@@ -27,9 +27,9 @@
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
 | Completed | 55 | `294, 293, 292, 291, 290, 289, 286, 284, 281, 277, 276, 263, 275, 274, 273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `293` and `294` are complete in the v0.7.89 release; `292`, `291`, `290`, and `289` shipped in v0.7.85. npm publication remains manual. |
-| InProgress | 1 | `225` | `225` remains the bounded v0.8.15 cleanup (moved from v0.7.105 on 2026-08-08). |
+| InProgress | 1 | `225` | `225` remains the bounded v0.8.25 cleanup (moved from v0.7.105 on 2026-08-08; slid v0.8.15 -> v0.8.25 on 2026-08-20). |
 | Planned, near-term | 0 | `-` | `v0.7.93` released failed-exit fast settlement, previous-boot ACL recovery, and provider abort classification (Issues 297/298/299); Issue 256 descendant-closure remains open and npm publication remains manual. |
-| Planned, 0.8.x | 10 | `278, 279, 282, 283, 285, 280, 287, 288, 265, 105` | `v0.8.0` -> `v0.8.1` -> `v0.8.3` -> `v0.8.4` -> `v0.8.5` -> `v0.8.10` -> `v0.8.15` |
+| Planned, 0.8.x | 10 | `278, 279, 282, 283, 285, 280, 287, 288, 265, 105` | `v0.8.10` -> `v0.8.11` -> `v0.8.13` -> `v0.8.14` -> `v0.8.15` -> `v0.8.20` -> `v0.8.25` |
 | Planned, 0.9.x | 6 | `007, 030, 093, 113, 139, 262` | `v0.9.0` -> `v0.9.5` -> `v0.9.7` -> `v0.9.25` |
 | Reviewed out, 2026-07-12 | 6 | `244, 231, 235, 238, 232, 108` | Shelved, deferred, absorbed, or cancelled after the post-v0.7.70 roadmap review; F105 was restored by the 2026-07-29 MoA redesign. |
 
@@ -81,13 +81,13 @@
 | `v0.7.95` | `0` |
 | `v0.7.100` | `0` |
 | `v0.7.105` | `0` |
-| `v0.8.0` | `5` |
-| `v0.8.1` | `1` |
-| `v0.8.3` | `1` |
-| `v0.8.4` | `1` |
-| `v0.8.5` | `1` |
-| `v0.8.10` | `1` |
+| `v0.8.10` | `5` |
+| `v0.8.11` | `1` |
+| `v0.8.13` | `1` |
+| `v0.8.14` | `1` |
 | `v0.8.15` | `1` |
+| `v0.8.20` | `1` |
+| `v0.8.25` | `1` |
 | `v0.9.0` | `1` |
 | `v0.9.5` | `3` |
 | `v0.9.7` | `1` |
@@ -1365,16 +1365,16 @@ fixed GitHub binary archive sidecar omission before tagging.
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `287` | Advisor Mode Virtual Provider | Enhancement / LLM Provider + Session Quality | High | `v0.8.3` | [v0.8.3](features/v0.8.3.md#feature_287-advisor-mode-virtual-provider) |
-| `288` | CLI-Space Daemon Profile Alignment | Enhancement / Runtime + Multi-Client UX | High | `v0.8.4` | [v0.8.4](features/v0.8.4.md#feature_288-cli-space-daemon-profile-alignment) |
-| `278` | Durable AskUser History Projection + Compact SDK/REPL Visualization | Enhancement / SDK + Session UX | High | `v0.8.0` | [v0.8.0](features/v0.8.0.md#feature_278-durable-askuser-history-projection--compact-sdkrepl-visualization) |
-| `279` | Same-Runtime Root Task Messaging + Durable Safe-Boundary Inbox | Enhancement / Runtime + Agent Collaboration | High | `v0.8.0` | [v0.8.0](features/v0.8.0.md#feature_279-same-runtime-root-task-messaging--durable-safe-boundary-inbox) |
-| `282` | Bounded Active Query Recovery + Durable Physical-Capacity Emergency Compaction | Core / Context Management + Reliability | Critical | `v0.8.0` | [v0.8.0](features/v0.8.0.md#feature_282-bounded-active-query-recovery--durable-physical-capacity-emergency-compaction) |
-| `283` | Local Hybrid Session History Retrieval + Builtin Adaptive LLM Rerank | Enhancement / Session Retrieval + LLM | High | `v0.8.0` | [v0.8.0](features/v0.8.0.md#feature_283-local-hybrid-session-history-retrieval--builtin-adaptive-llm-rerank) |
-| `285` | Capability-Aware Auto Classifier Model Selection | Enhancement / LLM Provider + Auto Permission Reliability | High | `v0.8.0` | [v0.8.0](features/v0.8.0.md#feature_285-capability-aware-auto-classifier-model-selection) |
-| `280` | Cache-Stable Prompt and Tool Surface Optimization | Internal / LLM Cost + Tool Reliability | High | `v0.8.1` | [v0.8.1](features/v0.8.1.md#feature_280-cache-stable-prompt-and-tool-surface-optimization) |
-| `265` | Work Fast Path + Coding Assurance Budget | Core / Performance + Agent Quality | High | `v0.8.5` | [v0.8.5](features/v0.8.5.md#feature_265-work-fast-path--coding-assurance-budget) |
-| `105` | Mixture-of-Agents Virtual Provider (MoA mode, reuses F287 skeleton) | Core / LLM Provider + Test-Time Scaling | High | `v0.8.10` | [v0.8.10](features/v0.8.10.md#feature_105-mixture-of-agents-virtual-provider) |
+| `287` | Advisor Mode Virtual Provider | Enhancement / LLM Provider + Session Quality | High | `v0.8.13` | [v0.8.13](features/v0.8.13.md#feature_287-advisor-mode-virtual-provider) |
+| `288` | CLI-Space Daemon Profile Alignment | Enhancement / Runtime + Multi-Client UX | High | `v0.8.14` | [v0.8.14](features/v0.8.14.md#feature_288-cli-space-daemon-profile-alignment) |
+| `278` | Durable AskUser History Projection + Compact SDK/REPL Visualization | Enhancement / SDK + Session UX | High | `v0.8.10` | [v0.8.10](features/v0.8.10.md#feature_278-durable-askuser-history-projection--compact-sdkrepl-visualization) |
+| `279` | Same-Runtime Root Task Messaging + Durable Safe-Boundary Inbox | Enhancement / Runtime + Agent Collaboration | High | `v0.8.10` | [v0.8.10](features/v0.8.10.md#feature_279-same-runtime-root-task-messaging--durable-safe-boundary-inbox) |
+| `282` | Bounded Active Query Recovery + Durable Physical-Capacity Emergency Compaction | Core / Context Management + Reliability | Critical | `v0.8.10` | [v0.8.10](features/v0.8.10.md#feature_282-bounded-active-query-recovery--durable-physical-capacity-emergency-compaction) |
+| `283` | Local Hybrid Session History Retrieval + Builtin Adaptive LLM Rerank | Enhancement / Session Retrieval + LLM | High | `v0.8.10` | [v0.8.10](features/v0.8.10.md#feature_283-local-hybrid-session-history-retrieval--builtin-adaptive-llm-rerank) |
+| `285` | Capability-Aware Auto Classifier Model Selection | Enhancement / LLM Provider + Auto Permission Reliability | High | `v0.8.10` | [v0.8.10](features/v0.8.10.md#feature_285-capability-aware-auto-classifier-model-selection) |
+| `280` | Cache-Stable Prompt and Tool Surface Optimization | Internal / LLM Cost + Tool Reliability | High | `v0.8.11` | [v0.8.11](features/v0.8.11.md#feature_280-cache-stable-prompt-and-tool-surface-optimization) |
+| `265` | Work Fast Path + Coding Assurance Budget | Core / Performance + Agent Quality | High | `v0.8.15` | [v0.8.15](features/v0.8.15.md#feature_265-work-fast-path--coding-assurance-budget) |
+| `105` | Mixture-of-Agents Virtual Provider (MoA mode, reuses F287 skeleton) | Core / LLM Provider + Test-Time Scaling | High | `v0.8.20` | [v0.8.20](features/v0.8.20.md#feature_105-mixture-of-agents-virtual-provider) |
 | `007` | Theme System Consolidation | Enhancement | Medium | `v0.9.5` | [v0.9.5](features/v0.9.5.md#feature_007-theme-system-consolidation) |
 | `030` | Multi-Surface Delivery | Enhancement | High | `v0.9.5` | [v0.9.5](features/v0.9.5.md#feature_030-multi-surface-delivery) |
 | `093` | Coding and REPL Internal Circular Dependency Decoupling | Internal | Medium | `v0.9.5` | [v0.9.5](features/v0.9.5.md#feature_093-coding-and-repl-internal-circular-dependency-decoupling) |
@@ -1506,7 +1506,8 @@ Design documents relocated to their new version homes
 (`docs/features/v0.8.x.md`, `v0.9.x.md`) with updated Status/Target fields; the prior
 version files retain their headers and historical content with a relocation pointer.
 The `v0.8.5.md` vision document (F007/030/093) slid wholesale to `v0.9.5.md`; the
-`v0.8.5.md` filename is now the FEATURE_265 home. Displaced tombstones (`v0.9.5`
+`v0.8.5.md` filename became the FEATURE_265 home in that 2026-08-08 slide (and
+the later 2026-08-20 +10 slide moved that home to `v0.8.15.md`). Displaced tombstones (`v0.9.5`
 archived staging, `v0.8.15` cancelled FEATURE_125 design) were preserved verbatim in
 `FEATURES_ARCHIVED.md`.
 
@@ -1521,3 +1522,25 @@ archived staging, `v0.8.15` cancelled FEATURE_125 design) were preserved verbati
   bindings with colliding names are rejected up front, and A2A can
   authorize `host:` capability ids. Capability `runBoundHostTools` bumps
   to `2` (`materializedAgentTools`).
+
+## 2026-08-20 v0.8.x +10 Slot Slide
+
+At explicit user direction, every `0.8.x` version slot from `v0.8.0` onward
+slides 10 minor slots later. `0.9.x` targets are unchanged.
+
+- `FEATURE_278` / `FEATURE_279` / `FEATURE_282` / `FEATURE_283` / `FEATURE_285`:
+  `v0.8.0` -> `v0.8.10`.
+- `FEATURE_280`: `v0.8.1` -> `v0.8.11`.
+- `FEATURE_287`: `v0.8.3` -> `v0.8.13`.
+- `FEATURE_288`: `v0.8.4` -> `v0.8.14`.
+- `FEATURE_265`: `v0.8.5` -> `v0.8.15`.
+- `FEATURE_105`: `v0.8.10` -> `v0.8.20`.
+- `FEATURE_225` (InProgress): `v0.8.15` -> `v0.8.25`.
+
+Design documents were renamed with updated headers and Target fields. The two
+relocation tombstones slid with their slots (`v0.8.7` -> `v0.8.17`,
+`v0.8.25` -> `v0.8.35`) and remain free slots. Vacated `0.8.x` numbers
+(`v0.8.0`-`v0.8.9`, `v0.8.12`, `v0.8.16`-`v0.8.19`, `v0.8.21`-`v0.8.24`,
+`v0.8.26`-`v0.8.34`) return to free debug/patch capacity. A pre-existing
+control-character defect in the old `v0.8.5.md` Version header was repaired
+during the rename.
