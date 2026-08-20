@@ -1,15 +1,12 @@
-import fs from 'fs/promises';
-import fsSync from 'fs';
-import path from 'path';
 import { KodaXToolExecutionContext } from '../types.js';
 import { generateDiff, countChanges } from './diff.js';
 import { resolveExecutionPath } from '../runtime-paths.js';
 import { memoryMutationDenial } from './memory-mutation-guard.js';
 import { formatDiffPreview } from './truncate.js';
-import { recordFileBackup, withFileMutation } from './_internal/file-mutation-queue.js';
 import { buildStaleWriteReason } from '../multi-instance/content-hash-cache.js';
 import { formatActiveFileWarning } from '../multi-instance/active-file-warning.js';
 import { appendLspDiagnostics } from './_internal/lsp-reflux.js';
+import { withTextFileMutation, writeTextFileForMutation } from './_internal/text-file-mutation.js';
 
 export async function toolWrite(input: Record<string, unknown>, ctx: KodaXToolExecutionContext): Promise<string> {
   const filePath = resolveExecutionPath(input.path as string, ctx);
@@ -20,9 +17,9 @@ export async function toolWrite(input: Record<string, unknown>, ctx: KodaXToolEx
   // FEATURE_131 Part A: serialize same-file mutations across the
   // process so concurrent children (Pattern B fan-out) can't race
   // the read-modify-write cycle and silently lose one side's changes.
-  const result = await withFileMutation(filePath, async () => {
-    let oldContent = '';
-    const isNewFile = !fsSync.existsSync(filePath);
+  const result = await withTextFileMutation(filePath, 'write', input, ctx, async (snapshot) => {
+    const isNewFile = snapshot.state === 'missing';
+    const oldContent = snapshot.content;
 
     // FEATURE_125 v0.7.41 — Layer 4 hard gate: stale-write check. Only
     // applies to existing files (new-file creation has nothing to be
@@ -32,19 +29,19 @@ export async function toolWrite(input: Record<string, unknown>, ctx: KodaXToolEx
     // the existing tool-error parsing route the message back to the
     // model without exception propagation.
     if (!isNewFile && ctx.contentHashCache) {
-      const stale = ctx.contentHashCache.checkStale(filePath);
+      const stale = ctx.contentHashCache.checkStaleContent(filePath, oldContent);
       if (stale.stale) {
         return `[Tool Error] ${buildStaleWriteReason(filePath, stale)}`;
       }
     }
 
-    if (!isNewFile) {
-      oldContent = await fs.readFile(filePath, 'utf-8');
-      recordFileBackup(ctx.backups, filePath, oldContent);
-    }
-
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, content, 'utf-8');
+    await writeTextFileForMutation(
+      snapshot,
+      content,
+      true,
+      ctx,
+      isNewFile ? undefined : oldContent,
+    );
 
     // FEATURE_125 v0.7.41 — record post-write hash so the LLM's own
     // subsequent edit on this file doesn't false-alarm against its own

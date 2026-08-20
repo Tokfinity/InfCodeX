@@ -212,6 +212,30 @@ describe('executeChildAgents — guardrails propagation (FEATURE_092 phase 2b.7b
     expect(childOptions.context?.shellExecution).toEqual(shellExecution);
   });
 
+  it.each([['read', true], ['write', false]] as const)(
+    'inherits runtime-owned shell and text sandboxes into %s native children',
+    async (_kind, readOnly) => {
+      mockRunKodaX.mockResolvedValue(okResult('inspected'));
+      const shellSandbox = { prepare: vi.fn() };
+      const textFileMutationSandbox = { read: vi.fn(), write: vi.fn() };
+
+      await executeChildAgents(
+        [createBundle({ readOnly })],
+        { ...createCtx(), shellSandbox, textFileMutationSandbox },
+        createOptions(),
+      );
+
+      const childOptions = mockRunKodaX.mock.calls[0]?.[0] as {
+        readonly context?: {
+          readonly shellSandbox?: unknown;
+          readonly textFileMutationSandbox?: unknown;
+        };
+      };
+      expect(childOptions.context?.shellSandbox).toBe(shellSandbox);
+      expect(childOptions.context?.textFileMutationSandbox).toBe(textFileMutationSandbox);
+    },
+  );
+
   it('inherits the SDK sandbox environment pass list into native child runtimes', async () => {
     mockRunKodaX.mockResolvedValue(okResult('inspected'));
     const sandbox = { envPass: ['GH_TOKEN'] } as const;

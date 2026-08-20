@@ -16,8 +16,6 @@
  * prevent the "LLM runs Python to generate files" escape pattern.
  */
 
-import fs from 'fs/promises';
-import fsSync from 'fs';
 import type { KodaXToolExecutionContext } from '../types.js';
 import { generateDiff, countChanges } from './diff.js';
 import { resolveExecutionPath } from '../runtime-paths.js';
@@ -27,11 +25,11 @@ import {
   findUniqueNormalizedBlockMatch,
   findUniqueUnicodeNormalizedBlockMatch,
 } from './text-anchor.js';
-import { recordFileBackup, withFileMutation } from './_internal/file-mutation-queue.js';
 import { buildStaleWriteReason } from '../multi-instance/content-hash-cache.js';
 import { memoryMutationDenial } from './memory-mutation-guard.js';
 import { formatActiveFileWarning } from '../multi-instance/active-file-warning.js';
 import { appendLspDiagnostics } from './_internal/lsp-reflux.js';
+import { withTextFileMutation, writeTextFileForMutation } from './_internal/text-file-mutation.js';
 
 const MAX_SAFE_EDIT_CHARS = 64 * 1024;
 const MAX_SAFE_EDIT_LINES = 400;
@@ -49,10 +47,6 @@ export async function toolMultiEdit(
   const filePath = resolveExecutionPath(input.path as string, ctx);
   const memoryDenial = memoryMutationDenial(filePath);
   if (memoryDenial !== undefined) return memoryDenial;
-  if (!fsSync.existsSync(filePath)) {
-    return `[Tool Error] multi_edit: File not found: ${filePath}`;
-  }
-
   const rawEdits = input.edits;
   if (!Array.isArray(rawEdits) || rawEdits.length === 0) {
     return '[Tool Error] multi_edit: `edits` must be a non-empty array of { old_string, new_string, replace_all? } objects.';
@@ -85,18 +79,21 @@ export async function toolMultiEdit(
   }
 
   // FEATURE_131 Part A: serialize same-file mutations.
-  const result = await withFileMutation(filePath, async () => {
+  const result = await withTextFileMutation(filePath, 'multi_edit', input, ctx, async (snapshot) => {
+    if (snapshot.state === 'missing') {
+      return `[Tool Error] multi_edit: File not found: ${filePath}`;
+    }
     // FEATURE_125 v0.7.41 — Layer 4 hard gate. Check BEFORE reading
     // the file so a peer-modified file is detected without paying the
     // read cost. checkStale itself re-reads the file to hash, but
     // that's a single read regardless of how many edits are batched.
     if (ctx.contentHashCache) {
-      const stale = ctx.contentHashCache.checkStale(filePath);
+      const stale = ctx.contentHashCache.checkStaleContent(filePath, snapshot.content);
       if (stale.stale) {
         return `[Tool Error] multi_edit: ${buildStaleWriteReason(filePath, stale)}`;
       }
     }
-    const originalContent = await fs.readFile(filePath, 'utf-8');
+    const originalContent = snapshot.content;
 
     // Apply sequentially in memory. Any failure aborts the whole batch
     // with NO disk write — atomicity is the main contract this tool
@@ -117,8 +114,7 @@ export async function toolMultiEdit(
       return `[Tool Error] multi_edit: all ${edits.length} edits produced no net change. Check old_string / new_string values.`;
     }
 
-    recordFileBackup(ctx.backups, filePath, originalContent);
-    await fs.writeFile(filePath, runningContent, 'utf-8');
+    await writeTextFileForMutation(snapshot, runningContent, false, ctx, originalContent);
 
     // FEATURE_125 v0.7.41 — update content-hash cache with the post-batch
     // content so subsequent edits in the same task don't false-alarm.

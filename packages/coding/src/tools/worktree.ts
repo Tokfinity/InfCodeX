@@ -23,6 +23,7 @@ import {
 } from '../permissions/agent-home-policy.js';
 import {
   withHostFileSystemNamespaceMutation,
+  withPathMutation,
   type FileSystemMutationLeaseRelease,
 } from './_internal/file-mutation-queue.js';
 
@@ -108,32 +109,38 @@ function execGitFile(
     let stderr = '';
     let spawnError: Error | undefined;
     let windowsEffectJob: WindowsEffectJob | undefined;
-    const drainEffectTree = async (): Promise<boolean> => {
+    const waitForEffectDrain = async (): Promise<void> => {
       if (windowsEffectJob !== undefined) {
+        // A rejected Job proof is permanent and cannot be replaced by a root-
+        // only process check. Propagate it without marking the namespace effect
+        // finished; later effects remain fail-closed until reconciliation.
         await windowsEffectJob.drained;
-      } else {
-        const result = await killChildProcessTree(child);
-        if (result.status === 'unknown') return false;
+        await finishEffectProcess();
+        unregister();
+        return;
       }
-      await finishEffectProcess();
-      unregister();
-      return true;
-    };
-    const retryEffectDrain = (): void => {
-      const timer = setTimeout(() => {
-        void drainEffectTree().then((drained) => {
-          if (!drained) retryEffectDrain();
-        }).catch((error: unknown) => {
-          emitKodaXDiagnostic({
-            source: 'coding:worktree-filesystem-effect',
-            level: 'warn',
-            message: 'Git process-tree drain retry failed; the namespace fence remains closed.',
-            detail: error,
-          });
-          retryEffectDrain();
-        });
-      }, GIT_EFFECT_DRAIN_RETRY_MS);
-      timer.unref?.();
+      let reportedDrainFailure = false;
+      while (true) {
+        try {
+          const result = await killChildProcessTree(child);
+          if (result.status !== 'unknown') {
+            await finishEffectProcess();
+            unregister();
+            return;
+          }
+        } catch (error: unknown) {
+          if (!reportedDrainFailure) {
+            reportedDrainFailure = true;
+            emitKodaXDiagnostic({
+              source: 'coding:worktree-filesystem-effect',
+              level: 'warn',
+              message: 'Git process-tree drain failed; the target worktree remains queued.',
+              detail: error,
+            });
+          }
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, GIT_EFFECT_DRAIN_RETRY_MS));
+      }
     };
     const invocation = gatedGitInvocation(args);
     const child = spawn(invocation.executable, [...invocation.args], {
@@ -160,11 +167,7 @@ function execGitFile(
         // fsmonitor, credential helpers, submodule recursion, and configured
         // content filters). The remaining Git process tree is trusted host
         // plumbing, so root closure is its effect-completion boundary.
-        if (!await drainEffectTree()) {
-          retryEffectDrain();
-          reject(new Error('Git process tree could not be proven drained; the namespace fence remains closed.'));
-          return;
-        }
+        await waitForEffectDrain();
         if (spawnError) {
           reject(spawnError);
         } else if (code === null || !allowedExitCodes.includes(code)) {
@@ -301,42 +304,48 @@ async function createWorktree(
   if (!worktreePath.startsWith(baseDir)) {
     throw new Error(`Worktree path escaped expected directory. Resolved to: ${worktreePath}`);
   }
-  return withHostFileSystemNamespaceMutation(async (bindEffectProcess, finishEffectProcess) => {
-    if (!explicitBaseDir && isAgentHomeHardMutationTarget(worktreePath, cwd)) {
-      throw new Error(`Worktree path targets protected KodaX state: ${worktreePath}`);
-    }
-
-    // `git worktree add` creates the leaf dir but not missing parents. An
-    // explicit base (e.g. a fresh `<runDir>/worktrees`) may not exist yet; the
-    // default sibling-of-repo base always does.
-    if (explicitBaseDir) {
-      mkdirSync(explicitBaseDir, { recursive: true });
-    }
-
-    try {
-      const configuredFilters = await execGitFile(
-        ['config', '--local', '--get-regexp', '^filter\\..*\\.(clean|smudge|process)$'],
-        cwd,
-        bindEffectProcess,
-        finishEffectProcess,
-        [0, 1],
-      );
-      if (configuredFilters.stdout.trim()) {
-        throw new Error('repository-configured content filter processes are not allowed');
+  return withPathMutation(
+    worktreePath,
+    async () => withHostFileSystemNamespaceMutation(async (
+      bindEffectProcess,
+      finishEffectProcess,
+    ) => {
+      if (!explicitBaseDir && isAgentHomeHardMutationTarget(worktreePath, cwd)) {
+        throw new Error(`Worktree path targets protected KodaX state: ${worktreePath}`);
       }
-      await execGitFile(
-        ['worktree', 'add', '-b', branch, worktreePath],
-        cwd,
-        bindEffectProcess,
-        finishEffectProcess,
-      );
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed to create worktree: ${msg}`);
-    }
 
-    return JSON.stringify({ path: worktreePath, branch });
-  });
+      // `git worktree add` creates the leaf dir but not missing parents. An
+      // explicit base (e.g. a fresh `<runDir>/worktrees`) may not exist yet; the
+      // default sibling-of-repo base always does.
+      if (explicitBaseDir) {
+        mkdirSync(explicitBaseDir, { recursive: true });
+      }
+
+      try {
+        const configuredFilters = await execGitFile(
+          ['config', '--local', '--get-regexp', '^filter\\..*\\.(clean|smudge|process)$'],
+          cwd,
+          bindEffectProcess,
+          finishEffectProcess,
+          [0, 1],
+        );
+        if (configuredFilters.stdout.trim()) {
+          throw new Error('repository-configured content filter processes are not allowed');
+        }
+        await execGitFile(
+          ['worktree', 'add', '-b', branch, worktreePath],
+          cwd,
+          bindEffectProcess,
+          finishEffectProcess,
+        );
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        throw new Error(`Failed to create worktree: ${msg}`);
+      }
+
+      return JSON.stringify({ path: worktreePath, branch });
+    }),
+  );
 }
 
 /**
@@ -404,97 +413,95 @@ async function removeWorktree(
   }
   const trustedTarget = trustedBaseDir !== undefined
     && isPathWithin(worktreePath, path.resolve(trustedBaseDir));
-  return withHostFileSystemNamespaceMutation(async (bindEffectProcess, finishEffectProcess) => {
-    if (!trustedTarget && isAgentHomeHardRemovalTarget(worktreePath, cwd)) {
-      throw new Error(`Worktree removal targets protected KodaX state: ${worktreePath}`);
-    }
+  return withPathMutation(
+    path.resolve(worktreePath),
+    async () => withHostFileSystemNamespaceMutation(async (
+      bindEffectProcess,
+      finishEffectProcess,
+    ) => {
+      if (!trustedTarget && isAgentHomeHardRemovalTarget(worktreePath, cwd)) {
+        throw new Error(`Worktree removal targets protected KodaX state: ${worktreePath}`);
+      }
 
-  // Safety check: count uncommitted changes
-  if (!discardChanges) {
-    try {
-      // Check for uncommitted files
-      const { stdout: statusOut } = await execGitFile(
-        ['status', '--porcelain'],
-        worktreePath,
-        bindEffectProcess,
-        finishEffectProcess,
-      );
-      const uncommittedFiles = statusOut
-        .trim()
-        .split('\n')
-        .filter((l) => l.trim().length > 0).length;
+      // Safety check: count uncommitted changes
+      if (!discardChanges) {
+        try {
+          const { stdout: statusOut } = await execGitFile(
+            ['status', '--porcelain'],
+            worktreePath,
+            bindEffectProcess,
+            finishEffectProcess,
+          );
+          const uncommittedFiles = statusOut
+            .trim()
+            .split('\n')
+            .filter((line) => line.trim().length > 0).length;
+          const { stdout: revListOut } = await execGitFile(
+            ['rev-list', '--count', 'HEAD', '--not', '--remotes'],
+            worktreePath,
+            bindEffectProcess,
+            finishEffectProcess,
+          );
+          const localCommits = parseInt(revListOut.trim(), 10) || 0;
 
-      // Count commits ahead of origin
-      const { stdout: revListOut } = await execGitFile([
-        'rev-list',
-        '--count',
-        'HEAD',
-        '--not',
-        '--remotes',
-      ], worktreePath, bindEffectProcess, finishEffectProcess);
-      const localCommits = parseInt(revListOut.trim(), 10) || 0;
+          if (uncommittedFiles > 0 || localCommits > 0) {
+            throw new Error(
+              `Worktree has ${uncommittedFiles} uncommitted file(s) and ${localCommits} local commit(s). `
+              + 'Use discard_changes=true to force removal, or commit/push your work first.',
+            );
+          }
+        } catch (error: unknown) {
+          if (error instanceof Error && error.message.includes('uncommitted')) throw error;
+          throw new Error(
+            `Cannot verify worktree state: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
 
-      if (uncommittedFiles > 0 || localCommits > 0) {
-        throw new Error(
-          `Worktree has ${uncommittedFiles} uncommitted file(s) and ${localCommits} local commit(s). ` +
-          `Use discard_changes=true to force removal, or commit/push your work first.`,
+      let branch = '';
+      try {
+        const { stdout: branchOut } = await execGitFile(
+          ['rev-parse', '--abbrev-ref', 'HEAD'],
+          worktreePath,
+          bindEffectProcess,
+          finishEffectProcess,
         );
+        branch = branchOut.trim();
+      } catch {
+        // If we cannot identify the branch, removal may still safely proceed.
       }
-    } catch (err) {
-      if (err instanceof Error && err.message.includes('uncommitted')) {
-        throw err;
+
+      try {
+        await execGitFile(
+          ['worktree', 'remove', worktreePath, '--force'],
+          cwd,
+          bindEffectProcess,
+          finishEffectProcess,
+        );
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`Failed to remove worktree: ${message}`);
       }
-      // If git commands fail, fail-closed
-      throw new Error(`Cannot verify worktree state: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
 
-  // Get the branch name before removing
-  let branch = '';
-  try {
-    const { stdout: branchOut } = await execGitFile(
-      ['rev-parse', '--abbrev-ref', 'HEAD'],
-      worktreePath,
-      bindEffectProcess,
-      finishEffectProcess,
-    );
-    branch = branchOut.trim();
-  } catch {
-    // If we can't get the branch name, continue anyway
-  }
+      if (branch) {
+        try {
+          await execGitFile(
+            ['branch', '-D', branch],
+            cwd,
+            bindEffectProcess,
+            finishEffectProcess,
+          );
+        } catch {
+          // The branch may not exist or may be checked out elsewhere.
+        }
+      }
 
-  // Remove worktree
-  try {
-    await execGitFile(
-      ['worktree', 'remove', worktreePath, '--force'],
-      cwd,
-      bindEffectProcess,
-      finishEffectProcess,
-    );
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    throw new Error(`Failed to remove worktree: ${msg}`);
-  }
-
-  // Delete the branch
-  if (branch) {
-    try {
-      await execGitFile(
-        ['branch', '-D', branch],
-        cwd,
-        bindEffectProcess,
-        finishEffectProcess,
-      );
-    } catch {
-      // Branch might not exist or be checked out elsewhere; ignore
-    }
-  }
-
-    return JSON.stringify({
-      restored: true,
-      message: `Worktree removed. Branch ${branch || '(unknown)'} deleted. Restored CWD.`,
-    });
-  });
+      return JSON.stringify({
+        restored: true,
+        message: `Worktree removed. Branch ${branch || '(unknown)'} deleted. Restored CWD.`,
+      });
+    }),
+  );
 }
 
 function isPathWithin(candidate: string, root: string): boolean {

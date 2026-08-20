@@ -1392,6 +1392,39 @@ describe('AutoModeToolGuardrail — Tier 1', () => {
     expect(admitWorkspaceSandboxCall).toHaveBeenCalledOnce();
   });
 
+  it('carries an admitted direct write review into the text mutation sandbox', async () => {
+    const admitWorkspaceSandboxCall = vi.fn();
+    const guardrail = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      admitWorkspaceSandboxCall,
+      analyzeCall: () => ({
+        schemaVersion: 1,
+        analysis: { status: 'complete', shell: 'tool', binding: 'exact' },
+        operations: [{
+          kind: 'write',
+          target: { path: 'C:\\workspace\\result.txt', boundary: 'workspace' },
+        }],
+        risks: [],
+      }),
+    });
+    const call: RunnerToolCall = {
+      id: 'write-1',
+      name: 'write',
+      input: { path: 'C:\\workspace\\result.txt', content: 'done' },
+    };
+
+    const verdict = await guardrail.beforeTool!(
+      call,
+      ctx([{ role: 'user', content: 'Write done to result.txt.' }]),
+    );
+
+    expect(verdict.action).toBe('allow');
+    expect(admitWorkspaceSandboxCall).toHaveBeenCalledWith(
+      call,
+      expect.objectContaining({ schemaVersion: 1 }),
+    );
+  });
+
   it('allows a statically exact ordinary Agent Home write without a sandbox adapter', async () => {
     const provider = new StubProvider(okResult(
       '<decision>allow</decision><hazard>none</hazard><reason>ordinary agent output</reason>',

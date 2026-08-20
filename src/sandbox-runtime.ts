@@ -41,6 +41,7 @@ import type {
 import {
   ELECTRON_NODE_ENV_SCRUB_IMPORT,
   ELECTRON_RUN_AS_NODE_ENV,
+  containWindowsEffectProcess,
   emitKodaXDiagnostic,
   getAgentConfigHome,
   KodaXFileLockTimeoutError,
@@ -52,14 +53,18 @@ import {
   type ISkillRegistry,
   type RunnerToolCall,
   type Skill,
+  type WindowsEffectJob,
 } from '@kodax-ai/agent';
 import {
+  acquireFileSystemMutationLease,
   acquireExclusiveFileSystemEffectLease,
   KodaXShellSandbox,
   KodaXShellSandboxBackend,
   KodaXShellSandboxObservation,
   KodaXSkillScriptRunInput,
   KodaXSkillScriptRunner,
+  KodaXTextFileMutationRequest,
+  KodaXTextFileMutationSandbox,
 } from '@kodax-ai/coding';
 
 export const KODAX_ASRT_VERSION = '0.0.65';
@@ -4983,7 +4988,7 @@ export function createAsrtShellSandbox(
           endpoints: [],
           allowAllNetwork: true,
           bootstrapCommand: sandboxJavaScriptCommand(),
-          fallbackToNormalExecution: true,
+          fallbackToNormalExecution: shellInput.fallbackToNormalExecution !== false,
           observationBackend: sandboxRuntimeCapability().backend,
           observationFile,
           targetStartedMarker:
@@ -5169,6 +5174,392 @@ export function createAsrtShellSandbox(
           execution: 'normal_permission_policy',
         });
         return undefined;
+      }
+    },
+  };
+}
+
+const TEXT_FILE_MUTATION_HELPER = String.raw`
+const { createHash } = require('node:crypto');
+const fs = require('node:fs/promises');
+const path = require('node:path');
+const chunks = [];
+process.stdin.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+process.stdin.once('end', async () => {
+  const revision = (content, stat) => 'present:' + createHash('sha256')
+    .update(stat.dev.toString())
+    .update(':')
+    .update(stat.ino.toString())
+    .update('\0')
+    .update(content)
+    .digest('hex');
+  const backupPath = async (target, openedStat) => {
+    const canonical = await fs.realpath(target);
+    let canonicalHandle;
+    try {
+      canonicalHandle = await fs.open(canonical, 'r');
+      const canonicalStat = await canonicalHandle.stat({ bigint: true });
+      if (canonicalStat.dev !== openedStat.dev || canonicalStat.ino !== openedStat.ino) {
+        throw new Error('Text mutation target identity changed while reading.');
+      }
+      return canonical;
+    } finally {
+      await canonicalHandle?.close();
+    }
+  };
+  const snapshot = async (target) => {
+    let handle;
+    try {
+      handle = await fs.open(target, 'r');
+    } catch (error) {
+      if (error && error.code === 'ENOENT') {
+        return { state: 'missing', content: '', revision: 'missing', backupPath: path.resolve(target) };
+      }
+      throw error;
+    }
+    try {
+      const [content, stat] = await Promise.all([
+        handle.readFile('utf8'),
+        handle.stat({ bigint: true }),
+      ]);
+      return {
+        state: 'present',
+        content,
+        revision: revision(content, stat),
+        backupPath: await backupPath(target, stat),
+      };
+    } finally {
+      await handle?.close();
+    }
+  };
+  const writeFully = async (handle, content) => {
+    const encoded = Buffer.from(content, 'utf8');
+    let written = 0;
+    while (written < encoded.length) {
+      const result = await handle.write(encoded, written, encoded.length - written, written);
+      if (result.bytesWritten === 0) throw new Error('Text mutation write made no progress.');
+      written += result.bytesWritten;
+    }
+    await handle.truncate(encoded.length);
+  };
+  try {
+    const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    if (!input || typeof input.path !== 'string' || !path.isAbsolute(input.path)) {
+      throw new Error('Text mutation target must be an absolute path.');
+    }
+    if (input.action === 'read') {
+      process.stdout.write(JSON.stringify({ status: 'ok', snapshot: await snapshot(input.path) }));
+      return;
+    }
+    if (
+      input.action !== 'write'
+      || typeof input.content !== 'string'
+      || typeof input.expectedRevision !== 'string'
+      || typeof input.createParentDirectories !== 'boolean'
+    ) throw new Error('Invalid text mutation request.');
+    if (input.createParentDirectories) await fs.mkdir(path.dirname(input.path), { recursive: true });
+    let handle;
+    try {
+      if (input.expectedRevision === 'missing') {
+        handle = await fs.open(input.path, 'wx');
+      } else {
+        handle = await fs.open(input.path, 'r+');
+        const [content, stat] = await Promise.all([
+          handle.readFile('utf8'),
+          handle.stat({ bigint: true }),
+        ]);
+        if (revision(content, stat) !== input.expectedRevision) {
+          process.stdout.write(JSON.stringify({ status: 'conflict' }));
+          return;
+        }
+      }
+      await writeFully(handle, input.content);
+      process.stdout.write(JSON.stringify({ status: 'written' }));
+    } catch (error) {
+      if (input.expectedRevision === 'missing' && error && error.code === 'EEXIST') {
+        process.stdout.write(JSON.stringify({ status: 'conflict' }));
+        return;
+      }
+      throw error;
+    } finally {
+      await handle?.close();
+    }
+  } catch (error) {
+    process.stderr.write((error instanceof Error ? error.message : String(error)) + '\n');
+    process.exitCode = 1;
+  }
+});
+`;
+
+const TEXT_FILE_MUTATION_OUTPUT_LIMIT = 64 * 1024 * 1024;
+const TEXT_FILE_SELECTION_CACHE_LIMIT = 128;
+const TEXT_FILE_CALL_KEY = '__kodaxTextFileMutationCall';
+
+interface EncodedTextFileMutationCall {
+  readonly id: string;
+  readonly name: KodaXTextFileMutationRequest['toolName'];
+  readonly input: Readonly<Record<string, unknown>>;
+  readonly path: string;
+}
+
+function encodedTextFileMutationCall(call: RunnerToolCall): EncodedTextFileMutationCall | undefined {
+  const encoded = call.input[TEXT_FILE_CALL_KEY];
+  if (encoded === null || typeof encoded !== 'object') return undefined;
+  const candidate = encoded as Partial<EncodedTextFileMutationCall>;
+  if (
+    typeof candidate.id !== 'string'
+    || typeof candidate.name !== 'string'
+    || typeof candidate.path !== 'string'
+    || candidate.input === null
+    || typeof candidate.input !== 'object'
+  ) return undefined;
+  return candidate as EncodedTextFileMutationCall;
+}
+
+async function executePreparedTextFileMutation(
+  sandbox: KodaXShellSandbox,
+  workspaceRoot: string,
+  request: KodaXTextFileMutationRequest,
+  payload: Readonly<Record<string, unknown>>,
+): Promise<Readonly<Record<string, unknown>> | undefined> {
+  const toolCallId = request.toolCallId ?? `text-file-${randomUUID()}`;
+  const invocation = await sandbox.prepare({
+    toolCallId,
+    toolInput: {
+      [TEXT_FILE_CALL_KEY]: {
+        id: toolCallId,
+        name: request.toolName,
+        input: request.toolInput,
+        path: request.path,
+      } satisfies EncodedTextFileMutationCall,
+    },
+    command: 'kodax-internal-text-file-mutation',
+    executable: process.execPath,
+    args: ['-e', TEXT_FILE_MUTATION_HELPER],
+    cwd: workspaceRoot,
+    env: sanitizedEnvironment(),
+    fallbackToNormalExecution: false,
+    signal: request.signal,
+  });
+  if (invocation === undefined) return undefined;
+
+  let execution: 'not_started' | 'started_or_unknown' = 'not_started';
+  let operationFailure: unknown;
+  let effectLease: Awaited<ReturnType<typeof acquireFileSystemMutationLease>> | undefined;
+  let effectProcessBound = false;
+  let effectProcessFinished = false;
+  let processDrained = false;
+  let child: ReturnType<typeof spawn> | undefined;
+  let windowsEffectJob: WindowsEffectJob | undefined;
+  try {
+    if (invocation.fileSystemEffectPolicyKey !== undefined) {
+      effectLease = await acquireFileSystemMutationLease(invocation.fileSystemEffectPolicyKey);
+    }
+    child = spawn(invocation.executable, [...invocation.args], {
+      cwd: workspaceRoot,
+      detached: process.platform !== 'win32',
+      env: invocation.env,
+      shell: false,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+    });
+    execution = 'started_or_unknown';
+    rememberChildProcessTree(child);
+    if (effectLease !== undefined) {
+      if (child.pid === undefined) throw new Error('Sandboxed text mutation process has no PID.');
+      if (process.platform === 'win32') {
+        windowsEffectJob = await containWindowsEffectProcess(child.pid);
+      }
+      await effectLease.bindEffectProcess(
+        windowsEffectJob?.supervisorPid ?? child.pid,
+        windowsEffectJob !== undefined,
+      );
+      effectProcessBound = true;
+    }
+    invocation.authorizeStart?.();
+    if (child.stdin === null) throw new Error('Sandboxed text mutation process has no stdin gate.');
+    child.stdin.end(JSON.stringify(payload));
+    const result = await collectProcess(
+      child,
+      request.signal,
+      SCRIPT_TIMEOUT_MS,
+      TEXT_FILE_MUTATION_OUTPUT_LIMIT,
+    );
+    if (windowsEffectJob !== undefined) {
+      await windowsEffectJob.drained;
+    } else {
+      const termination = await killChildProcessTree(child);
+      if (termination.status === 'unknown') {
+        throw new Error('Sandboxed text mutation process tree could not be proven drained.');
+      }
+    }
+    processDrained = true;
+    if (effectLease !== undefined) {
+      await effectLease.finishEffectProcess();
+      effectProcessFinished = true;
+    }
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `Sandboxed text mutation failed (${result.exitCode}): ${result.stderr.trim() || 'no diagnostics'}`,
+      );
+    }
+    const parsed = JSON.parse(result.stdout) as unknown;
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('Sandboxed text mutation returned an invalid response.');
+    }
+    return parsed as Readonly<Record<string, unknown>>;
+  } catch (error: unknown) {
+    operationFailure = error;
+    throw error;
+  } finally {
+    const cleanupFailures: unknown[] = [];
+    if (child !== undefined && !processDrained) {
+      try {
+        const termination = await killChildProcessTree(child);
+        if (termination.status === 'unknown') {
+          throw new Error('Sandboxed text mutation process tree could not be proven drained.');
+        }
+        await windowsEffectJob?.drained;
+        processDrained = true;
+      } catch (error: unknown) {
+        cleanupFailures.push(error);
+      }
+    }
+    if (effectProcessBound && processDrained && !effectProcessFinished) {
+      try {
+        await effectLease?.finishEffectProcess();
+      } catch (error: unknown) {
+        cleanupFailures.push(error);
+      }
+    }
+    try {
+      await invocation.cleanup({ execution });
+    } catch (cleanupError: unknown) {
+      cleanupFailures.push(cleanupError);
+    }
+    try {
+      await effectLease?.();
+    } catch (error: unknown) {
+      cleanupFailures.push(error);
+    }
+    if (cleanupFailures.length > 0) {
+      throw new AggregateError(
+        [
+          ...(operationFailure === undefined ? [] : [operationFailure]),
+          ...cleanupFailures,
+        ],
+        operationFailure === undefined
+          ? 'Sandboxed text mutation cleanup failed.'
+          : 'Sandboxed text mutation and cleanup both failed.',
+      );
+    }
+  }
+}
+
+/** Direct text tools use the same workspace sandbox policy as shell tools. */
+export function createAsrtTextFileMutationSandbox(
+  input: CreateAsrtShellSandboxInput,
+): KodaXTextFileMutationSandbox {
+  const workspaceRoot = path.resolve(input.workspaceRoot);
+  const canonicalWorkspaceRoot = (() => {
+    try {
+      return realpathSync(workspaceRoot);
+    } catch {
+      return workspaceRoot;
+    }
+  })();
+  const canHandlePath = (filePath: string): boolean => {
+    const candidate = path.resolve(filePath);
+    return isInside(workspaceRoot, candidate)
+      || isInside(canonicalWorkspaceRoot, candidate);
+  };
+  const selections = new Map<string, {
+    readonly fingerprint: string;
+    readonly selection: Promise<boolean | AsrtShellSandboxSelection>;
+  }>();
+  const sandbox = createAsrtShellSandbox({
+    workspaceRoot: input.workspaceRoot,
+    shouldSandbox: async (wrapperCall) => {
+      const encoded = encodedTextFileMutationCall(wrapperCall);
+      if (encoded === undefined) return false;
+      if (!canHandlePath(encoded.path)) return false;
+      const fingerprint = createHash('sha256')
+        .update(encoded.name)
+        .update('\0')
+        .update(encoded.path)
+        .update('\0')
+        .update(JSON.stringify(encoded.input))
+        .digest('hex');
+      let cached = selections.get(encoded.id);
+      if (cached !== undefined && cached.fingerprint !== fingerprint) {
+        throw new Error(`Text mutation tool-call identity was reused with different input: ${encoded.id}`);
+      }
+      if (cached === undefined) {
+        const selection = Promise.resolve(input.shouldSandbox({
+          id: encoded.id,
+          name: encoded.name,
+          input: encoded.input,
+        })).catch((error: unknown) => {
+          selections.delete(encoded.id);
+          throw error;
+        });
+        cached = { fingerprint, selection };
+        selections.set(encoded.id, cached);
+        if (selections.size > TEXT_FILE_SELECTION_CACHE_LIMIT) {
+          selections.delete(selections.keys().next().value as string);
+        }
+      }
+      return cached.selection;
+    },
+  });
+  return {
+    canHandlePath,
+    async read(request) {
+      const response = await executePreparedTextFileMutation(sandbox, workspaceRoot, request, {
+        action: 'read',
+        path: request.path,
+      });
+      if (response === undefined) return { status: 'unavailable' };
+      const snapshot = response.snapshot;
+      if (
+        response.status !== 'ok'
+        || snapshot === null
+        || typeof snapshot !== 'object'
+      ) throw new Error('Sandboxed text read returned an invalid response.');
+      const value = snapshot as Record<string, unknown>;
+      if (
+        (value.state !== 'missing' && value.state !== 'present')
+        || typeof value.content !== 'string'
+        || typeof value.revision !== 'string'
+        || typeof value.backupPath !== 'string'
+        || !path.isAbsolute(value.backupPath)
+      ) throw new Error('Sandboxed text read returned an invalid snapshot.');
+      return {
+        status: 'ok',
+        snapshot: {
+          state: value.state,
+          content: value.content,
+          revision: value.revision,
+          backupPath: value.backupPath,
+        },
+      };
+    },
+    async write(request) {
+      try {
+        const response = await executePreparedTextFileMutation(sandbox, workspaceRoot, request, {
+          action: 'write',
+          path: request.path,
+          content: request.content,
+          expectedRevision: request.expectedRevision,
+          createParentDirectories: request.createParentDirectories,
+        });
+        if (response === undefined) return { status: 'unavailable' };
+        if (response.status === 'written') return { status: 'written' };
+        if (response.status === 'conflict') return { status: 'conflict' };
+        throw new Error('Sandboxed text write returned an invalid response.');
+      } finally {
+        if (request.toolCallId !== undefined) selections.delete(request.toolCallId);
       }
     },
   };

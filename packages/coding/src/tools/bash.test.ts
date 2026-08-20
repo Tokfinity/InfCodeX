@@ -1,13 +1,17 @@
 import { ChildProcess, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { cleanupRegisteredManagedChildren, setAgentConfigHome } from '@kodax-ai/agent';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { KodaXShellSandbox } from '../types.js';
+import type { KodaXShellSandbox, KodaXTextFileMutationSandbox } from '../types.js';
 import { toolBash } from './bash.js';
+import { toolEdit } from './edit.js';
+import { toolWrite } from './write.js';
 import {
   _resetFileSystemEffectLeasesForTests,
+  acquireExclusiveFileSystemEffectLease,
   withFileMutation,
 } from './_internal/file-mutation-queue.js';
 
@@ -64,12 +68,49 @@ function passthroughShellSandbox(): KodaXShellSandbox {
   };
 }
 
+function passthroughTextFileMutationSandbox(): KodaXTextFileMutationSandbox {
+  const snapshot = async (target: string) => {
+    try {
+      const content = await fs.readFile(target, 'utf8');
+      return {
+        state: 'present' as const,
+        content,
+        revision: createHash('sha256').update(content).digest('hex'),
+        backupPath: await fs.realpath(target),
+      };
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return {
+          state: 'missing' as const,
+          content: '',
+          revision: 'missing',
+          backupPath: path.resolve(target),
+        };
+      }
+      throw error;
+    }
+  };
+  return {
+    read: async (input) => ({ status: 'ok', snapshot: await snapshot(input.path) }),
+    write: async (input) => {
+      if ((await snapshot(input.path)).revision !== input.expectedRevision) {
+        return { status: 'conflict' };
+      }
+      if (input.createParentDirectories) {
+        await fs.mkdir(path.dirname(input.path), { recursive: true });
+      }
+      await fs.writeFile(input.path, input.content, 'utf8');
+      return { status: 'written' };
+    },
+  };
+}
+
 function completedCommandBody(result: string): string {
   return result.split(/\nExit: -?\d+\n/, 2)[1] ?? result;
 }
 
 function parentWatchedBackgroundCommand(): string {
-  return 'node -e "const parent=process.ppid; console.log(\'child-pid:\' + process.pid); setInterval(() => { try { process.kill(parent, 0); } catch { process.exit(0); } }, 1000)"';
+  return `${JSON.stringify(process.execPath)} -e "const parent=process.ppid; console.log('child-pid:' + process.pid); setInterval(() => { try { process.kill(parent, 0); } catch { process.exit(0); } }, 1000)"`;
 }
 
 function parseBackgroundPid(result: string): number {
@@ -396,17 +437,11 @@ describe('toolBash', () => {
     expect(result).toContain('injected spawn-path sandbox cleanup failure');
   });
 
-  it('surfaces sandbox cleanup failure when the filesystem-effect lease cannot be acquired', async () => {
+  it.runIf(process.platform === 'win32')(
+    'surfaces sandbox cleanup failure when an incompatible sandbox policy is active',
+    async () => {
     const sentinel = path.join(tempDir, 'lease-acquisition-target-ran.txt');
-    let reportMutationStarted!: () => void;
-    const mutationStarted = new Promise<void>((resolve) => { reportMutationStarted = resolve; });
-    let releaseMutation!: () => void;
-    const holdMutation = new Promise<void>((resolve) => { releaseMutation = resolve; });
-    const mutation = withFileMutation(path.join(tempDir, 'held-mutation.txt'), async () => {
-      reportMutationStarted();
-      await holdMutation;
-    });
-    await mutationStarted;
+    const releasePolicy = await acquireExclusiveFileSystemEffectLease('policy-b');
     const cleanup = vi.fn(async () => {
       throw new Error('injected pre-lease sandbox cleanup failure');
     });
@@ -421,6 +456,7 @@ describe('toolBash', () => {
             executable: process.execPath,
             args: ['-e', `require('node:fs').writeFileSync(${JSON.stringify(sentinel)}, 'ran')`],
             env: process.env,
+            fileSystemEffectPolicyKey: 'policy-a',
             cleanup,
             retire,
           }),
@@ -434,8 +470,7 @@ describe('toolBash', () => {
       expect(retire).toHaveBeenCalledOnce();
       await expect(fs.readFile(sentinel, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
-      releaseMutation();
-      await mutation;
+      await releasePolicy();
     }
   }, 10_000);
 
@@ -1442,6 +1477,43 @@ describe('toolBash', () => {
     await expect(withFileMutation(path.join(tempDir, 'after-fast-background.txt'), async () => 'ready'))
       .resolves.toBe('ready');
   });
+
+  it('keeps a long-running background command alive while write and edit complete', async () => {
+    const controller = new AbortController();
+    const filePath = path.join(tempDir, 'background-concurrency.txt');
+    const result = await toolBash({
+      command: parentWatchedBackgroundCommand(),
+      run_in_background: true,
+    }, {
+      backups: new Map(),
+      executionCwd: tempDir,
+      shellSandbox: passthroughShellSandbox(),
+      abortSignal: controller.signal,
+    });
+    const pid = parseBackgroundPid(result);
+    const outputPath = parseBackgroundOutputPath(result);
+    await waitForOutputMatch(outputPath, /child-pid:(\d+)/);
+
+    try {
+      const ctx = {
+        backups: new Map<string, string>(),
+        executionCwd: tempDir,
+        textFileMutationSandbox: passthroughTextFileMutationSandbox(),
+      };
+      await expect(toolWrite({ path: filePath, content: 'alpha\n' }, ctx))
+        .resolves.toContain('File created');
+      await expect(toolEdit({
+        path: filePath,
+        old_string: 'alpha',
+        new_string: 'beta',
+      }, ctx)).resolves.toContain('File edited');
+      await expect(fs.readFile(filePath, 'utf8')).resolves.toBe('beta\n');
+      expect(isPidAlive(pid)).toBe(true);
+    } finally {
+      controller.abort();
+      await waitForPidExit(pid, WINDOWS_PROCESS_TREE_EXIT_WAIT_MS);
+    }
+  }, WINDOWS_PROCESS_TREE_TEST_TIMEOUT_MS);
 
   it('records an unattested background execution without replaying it', async () => {
     const executionCount = path.join(tempDir, 'background-execution-count.txt');

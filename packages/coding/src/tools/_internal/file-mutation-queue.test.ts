@@ -14,6 +14,7 @@ import {
   acquireFileSystemMutationLease,
   normalizePathForKey,
   withFileMutation,
+  withSandboxedFileMutation,
 } from './file-mutation-queue.js';
 
 let configHome: string;
@@ -186,30 +187,38 @@ describe('withFileMutation — different path concurrency', () => {
 });
 
 describe('cross-process filesystem effect lease', () => {
-  it('fails quickly instead of waiting behind a long-lived shell effect', async () => {
+  it('keeps a sandboxed file mutation independent from a long-lived shell effect', async () => {
     const releaseShell = await acquireFileSystemMutationLease();
-    const start = Date.now();
     try {
-      await expect(withFileMutation('/tmp/a.txt', async () => 'written'))
-        .rejects.toThrow('filesystem effect is already active');
-      expect(Date.now() - start).toBeLessThan(2_000);
+      await expect(withSandboxedFileMutation('/tmp/a.txt', async () => 'written'))
+        .resolves.toBe('written');
     } finally {
       await releaseShell();
     }
   });
 
-  it('does not admit a shell effect while a direct mutation is active', async () => {
+  it('keeps a host file mutation fenced from a long-lived shell effect', async () => {
+    const releaseShell = await acquireFileSystemMutationLease();
+    try {
+      await expect(withFileMutation('/tmp/host.txt', async () => 'unsafe'))
+        .rejects.toThrow('filesystem effect is already active');
+    } finally {
+      await releaseShell();
+    }
+  });
+
+  it('admits a shell effect while a sandboxed mutation is active', async () => {
     let enterMutation: (() => void) | undefined;
     const entered = new Promise<void>((resolve) => { enterMutation = resolve; });
     let finishMutation: (() => void) | undefined;
     const finished = new Promise<void>((resolve) => { finishMutation = resolve; });
-    const mutation = withFileMutation('/tmp/a.txt', async () => {
+    const mutation = withSandboxedFileMutation('/tmp/a.txt', async () => {
       enterMutation?.();
       await finished;
     });
     await entered;
-    await expect(acquireFileSystemMutationLease())
-      .rejects.toThrow('filesystem effect is already active');
+    const releaseShell = await acquireFileSystemMutationLease();
+    await releaseShell();
     finishMutation?.();
     await mutation;
   });
@@ -320,7 +329,7 @@ describe('cross-process filesystem effect lease', () => {
       .resolves.toBe('safe');
   });
 
-  it('keeps the fence while an abandoned owner\'s bound effect process is alive', async () => {
+  it('does not apply a live shell fence to direct file mutations', async () => {
     const runtimeDirectory = effectRuntimeDirectory();
     const statePath = path.join(runtimeDirectory, 'model-filesystem-effects.json');
     const token = 'crashed-owner-live-effect';
@@ -340,10 +349,16 @@ describe('cross-process filesystem effect lease', () => {
       'utf8',
     );
     const encodedToken = Buffer.from(token, 'utf8').toString('base64url');
-    await fs.promises.writeFile(`${statePath}.${encodedToken}.released`, `${token}\n`, 'utf8');
+    const releaseMarker = `${statePath}.${encodedToken}.released`;
+    await fs.promises.writeFile(releaseMarker, `${token}\n`, 'utf8');
 
-    await expect(withFileMutation('/tmp/must-remain-fenced.txt', async () => 'unsafe'))
-      .rejects.toThrow('filesystem effect is already active');
+    try {
+      await expect(withSandboxedFileMutation('/tmp/not-globally-fenced.txt', async () => 'safe'))
+        .resolves.toBe('safe');
+    } finally {
+      await fs.promises.rm(statePath, { force: true });
+      await fs.promises.rm(releaseMarker, { force: true });
+    }
   });
 
   it('recovers an abandoned namespace marker after managed cleanup converges', async () => {
@@ -424,13 +439,13 @@ describe('cross-process filesystem effect lease', () => {
   });
 
   it.runIf(process.platform === 'win32')(
-    'coordinates shell and host effects across different KODAX_HOME values',
+    'keeps direct file mutations independent across different KODAX_HOME values',
     async () => {
       const releaseShell = await acquireFileSystemMutationLease();
       setAgentConfigHome(path.join(configHome, 'other-home'));
       try {
-        await expect(withFileMutation('/tmp/cross-home.txt', async () => 'unsafe'))
-          .rejects.toThrow('filesystem effect is already active');
+        await expect(withSandboxedFileMutation('/tmp/cross-home.txt', async () => 'safe'))
+          .resolves.toBe('safe');
       } finally {
         await releaseShell();
       }
@@ -453,8 +468,8 @@ describe('cross-process filesystem effect lease', () => {
     const releaseEffect = await acquireFileSystemMutationLease();
     await releaseEffect.bindEffectProcess(process.pid, false);
     await releaseEffect.finishEffectProcess();
-    await expect(withFileMutation('/tmp/still-held-between-processes.txt', async () => 'unsafe'))
-      .rejects.toThrow('filesystem effect is already active');
+    await expect(withSandboxedFileMutation('/tmp/still-held-between-processes.txt', async () => 'safe'))
+      .resolves.toBe('safe');
     await releaseEffect.bindEffectProcess(process.pid, false);
     await releaseEffect.finishEffectProcess();
 

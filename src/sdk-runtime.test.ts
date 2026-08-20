@@ -16799,6 +16799,7 @@ describe("createKodaXRuntime", () => {
       expect(runOptions.context?.shellSandbox?.processTreeContainment).toBe(
         process.platform === "linux" ? "root-exit-drains" : undefined,
       );
+      expect(runOptions.context?.textFileMutationSandbox).toBeDefined();
     } finally {
       await invocation?.cleanup();
       await runtime.runs.abort(handle.runId);

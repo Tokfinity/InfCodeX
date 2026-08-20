@@ -216,6 +216,7 @@ import {
 import {
   createAsrtShellSandbox,
   createAsrtSkillScriptRunner,
+  createAsrtTextFileMutationSandbox,
   sandboxRuntimeCapability,
   shutdownAsrtWorkspaceSessions,
 } from "./sandbox-runtime.js";
@@ -10421,37 +10422,41 @@ function buildRunOptions(input: {
   const workspaceRoot =
     options.context?.gitRoot ?? options.context?.executionCwd ?? process.cwd();
   const executionCwd = options.context?.executionCwd ?? workspaceRoot;
-  const runtimeWorkspaceShellSandbox =
-    createAsrtShellSandbox({
-      workspaceRoot,
-      shouldSandbox: async (call) => {
-        const autoMode =
-          replApi.normalizePermissionMode(record.permissionMode) === "auto";
-        let review: AutoModePermissionReview | undefined;
-        if (autoMode && runtimeAutoGuardrail !== undefined) {
-          review = runtimeAutoGuardrail.consumeWorkspaceSandboxCall(call);
-          if (review === undefined) return false;
-        } else {
-          try {
-            review = await analyzeAutoModeCall(call, {
-              projectRoot: workspaceRoot,
-              executionCwd,
-              signals: [],
-            });
-          } catch {
-            // The sandbox remains selected with workspace-only access.
-          }
-        }
-        return {
-          agentHomeAccess: review === undefined
-            ? undefined
-            : runtimePermissionReviewAgentHomeAccess(review, executionCwd),
-          filesystemAccess: review === undefined
-            ? undefined
-            : runtimePermissionReviewFilesystemAccess(review, executionCwd),
-        };
-      },
-    });
+  const selectWorkspaceSandbox = async (call: RunnerToolCall) => {
+    const autoMode =
+      replApi.normalizePermissionMode(record.permissionMode) === "auto";
+    let review: AutoModePermissionReview | undefined;
+    if (autoMode && runtimeAutoGuardrail !== undefined) {
+      review = runtimeAutoGuardrail.consumeWorkspaceSandboxCall(call);
+      if (review === undefined) return false;
+    } else {
+      try {
+        review = await analyzeAutoModeCall(call, {
+          projectRoot: workspaceRoot,
+          executionCwd,
+          signals: [],
+        });
+      } catch {
+        // The sandbox remains selected with workspace-only access.
+      }
+    }
+    return {
+      agentHomeAccess: review === undefined
+        ? undefined
+        : runtimePermissionReviewAgentHomeAccess(review, executionCwd),
+      filesystemAccess: review === undefined
+        ? undefined
+        : runtimePermissionReviewFilesystemAccess(review, executionCwd),
+    };
+  };
+  const runtimeWorkspaceShellSandbox = createAsrtShellSandbox({
+    workspaceRoot,
+    shouldSandbox: selectWorkspaceSandbox,
+  });
+  const textFileMutationSandbox = createAsrtTextFileMutationSandbox({
+    workspaceRoot,
+    shouldSandbox: selectWorkspaceSandbox,
+  });
   const shellSandbox =
     runtimeWorkspaceShellSandbox !== undefined && callerShellSandbox !== undefined
       ? {
@@ -10534,6 +10539,7 @@ function buildRunOptions(input: {
       ...ownerSafeContext,
       configHome: input.defaultConfigHome,
       ...(shellSandbox !== undefined ? { shellSandbox } : {}),
+      textFileMutationSandbox,
       ...(hideUnwiredExitPlanMode
         ? {
             // Runtime daemon options cannot transport callback functions. Do

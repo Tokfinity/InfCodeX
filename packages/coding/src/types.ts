@@ -1653,6 +1653,8 @@ export interface KodaXShellSandboxPrepareInput {
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
   readonly windowsVerbatimArguments?: boolean;
+  /** Internal callers may forbid the broker's ordinary host fallback. */
+  readonly fallbackToNormalExecution?: boolean;
   /** Caller cancellation while waiting for sandbox admission/preparation. */
   readonly signal?: AbortSignal;
   /** Absolute wall-clock deadline shared with the command timeout. */
@@ -1695,6 +1697,42 @@ export interface KodaXShellSandbox {
   prepare(
     input: KodaXShellSandboxPrepareInput,
   ): Promise<KodaXPreparedShellSandboxInvocation | undefined>;
+}
+
+export interface KodaXTextFileSnapshot {
+  readonly state: 'missing' | 'present';
+  readonly content: string;
+  /** Opaque identity for an optimistic compare-and-write conflict check. */
+  readonly revision: string;
+  /** Canonical backup authority bound to the opened snapshot identity. */
+  readonly backupPath: string;
+}
+
+export interface KodaXTextFileMutationRequest {
+  readonly toolCallId?: string;
+  readonly toolName: 'edit' | 'insert_after_anchor' | 'multi_edit' | 'undo' | 'write';
+  readonly toolInput: Readonly<Record<string, unknown>>;
+  readonly path: string;
+  readonly signal?: AbortSignal;
+}
+
+/** Runtime-owned narrow filesystem capability for direct text mutation tools. */
+export interface KodaXTextFileMutationSandbox {
+  /** Whether this capability covers the path; uncovered paths use the legacy host fence. */
+  canHandlePath?(filePath: string): boolean;
+  read(input: KodaXTextFileMutationRequest): Promise<
+    | { readonly status: 'ok'; readonly snapshot: KodaXTextFileSnapshot }
+    | { readonly status: 'unavailable' }
+  >;
+  write(input: KodaXTextFileMutationRequest & {
+    readonly content: string;
+    readonly createParentDirectories: boolean;
+    readonly expectedRevision: string;
+  }): Promise<
+    | { readonly status: 'written' }
+    | { readonly status: 'conflict' }
+    | { readonly status: 'unavailable' }
+  >;
 }
 
 export interface KodaXContextOptions {
@@ -1765,6 +1803,8 @@ export interface KodaXContextOptions {
   shellExecution?: KodaXShellExecutionContract;
   /** Runtime-owned OS sandbox broker; never accepted from serialized model input. */
   shellSandbox?: KodaXShellSandbox;
+  /** Runtime-owned OS-sandboxed optimistic compare-and-write path for direct text mutations. */
+  textFileMutationSandbox?: KodaXTextFileMutationSandbox;
   /** Fail-closed host policy applied to every concrete file a read tool opens. */
   assertReadablePath?: (candidate: string) => void;
   /**
@@ -2609,6 +2649,8 @@ export interface KodaXToolExecutionContext {
   sandbox?: KodaXSandboxOptions;
   /** Runtime-owned OS sandbox broker for selected concrete shell calls. */
   shellSandbox?: KodaXShellSandbox;
+  /** Runtime-owned OS-sandboxed read/compare/write path for direct text mutations. */
+  textFileMutationSandbox?: KodaXTextFileMutationSandbox;
   /** Structured containment metadata; never model-visible or persisted as conversation text. */
   reportToolSandboxObservation?: (observation: KodaXShellSandboxObservation) => void;
   /**

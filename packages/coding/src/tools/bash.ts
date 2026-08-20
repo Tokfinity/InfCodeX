@@ -546,9 +546,8 @@ async function executeToolBash(
   const preparedEffectLease = sandboxInvocation?.fileSystemEffectLease;
   let releaseMutationLease: FileSystemMutationLeaseRelease;
   try {
-    releaseMutationLease = preparedEffectLease === undefined
-      ? await acquireFileSystemMutationLease(sandboxInvocation?.fileSystemEffectPolicyKey)
-      : Object.assign(
+    releaseMutationLease = preparedEffectLease !== undefined
+      ? Object.assign(
           () => preparedEffectLease.release(),
           {
             bindEffectProcess: (
@@ -557,7 +556,8 @@ async function executeToolBash(
             ) => preparedEffectLease.bindEffectProcess(pid, windowsJobContained),
             finishEffectProcess: () => preparedEffectLease.finishEffectProcess(),
           },
-        );
+        )
+      : await acquireFileSystemMutationLease(sandboxInvocation?.fileSystemEffectPolicyKey);
   } catch (error) {
     await cleanupSandbox();
     const message = error instanceof Error ? error.message : String(error);

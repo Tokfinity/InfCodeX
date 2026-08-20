@@ -93,6 +93,8 @@ export interface ContentHashCache {
    * a new file, deferring to the soft-warning layer, etc.).
    */
   checkStale(filePath: string): StaleCheckResult;
+  /** Compare against content already read through a narrower filesystem capability. */
+  checkStaleContent(filePath: string, currentContent: string | undefined): StaleCheckResult;
   /** Record the post-edit hash so subsequent self-edits do not false-alarm. */
   recordWrite(filePath: string, newContent: string): void;
   /** Drop the recorded hash. Use on delete or when the LLM explicitly forgets. */
@@ -120,6 +122,27 @@ export function createContentHashCache(
   const clock = options.clock ?? Date.now;
   const hash = options.hash ?? REAL_HASH;
   const entries = new Map<string, CacheEntry>();
+  const checkStaleContent = (
+    filePath: string,
+    currentContent: string | undefined,
+  ): StaleCheckResult => {
+    const recorded = entries.get(filePath);
+    if (!recorded) return { kind: 'no-read', stale: false };
+    if (currentContent === undefined) {
+      return { kind: 'missing', stale: true, readAt: recorded.readAt };
+    }
+    const currentHash = hash(currentContent);
+    if (currentHash === recorded.hash) {
+      return { kind: 'fresh', stale: false, readAt: recorded.readAt };
+    }
+    return {
+      kind: 'stale',
+      stale: true,
+      readAt: recorded.readAt,
+      recordedHash: recorded.hash,
+      currentHash,
+    };
+  };
 
   return {
     recordRead(filePath, content) {
@@ -135,36 +158,27 @@ export function createContentHashCache(
       entries.delete(filePath);
     },
     checkStale(filePath) {
-      const recorded = entries.get(filePath);
-      if (!recorded) return { kind: 'no-read', stale: false };
+      if (!entries.has(filePath)) return { kind: 'no-read', stale: false };
 
       // File deletion / rename mid-task → treat as stale. The LLM must
       // reckon with the disappearance rather than silently writing a
       // fresh file on the old path.
       if (!fs.existsSync(filePath)) {
-        return { kind: 'missing', stale: true, readAt: recorded.readAt };
+        return checkStaleContent(filePath, undefined);
       }
 
-      let currentHash: string;
+      let currentContent: string;
       try {
-        const currentContent = fs.readFileSync(filePath, 'utf8');
-        currentHash = hash(currentContent);
+        currentContent = fs.readFileSync(filePath, 'utf8');
       } catch {
         // Transient read failure → treat as stale rather than risk a
         // silent overwrite. The LLM retries the read next turn.
-        return { kind: 'missing', stale: true, readAt: recorded.readAt };
+        return checkStaleContent(filePath, undefined);
       }
-
-      if (currentHash === recorded.hash) {
-        return { kind: 'fresh', stale: false, readAt: recorded.readAt };
-      }
-      return {
-        kind: 'stale',
-        stale: true,
-        readAt: recorded.readAt,
-        recordedHash: recorded.hash,
-        currentHash,
-      };
+      return checkStaleContent(filePath, currentContent);
+    },
+    checkStaleContent(filePath, currentContent) {
+      return checkStaleContent(filePath, currentContent);
     },
     getReadAt(filePath) {
       return entries.get(filePath)?.readAt;

@@ -16,10 +16,10 @@
  * that path's queue, sets the new tail, and clears the entry when its
  * own work is the current tail (so completed paths don't leak).
  *
- * Per-path ordering is process-local. A short cross-process category lease
- * additionally prevents privileged file sinks and model-started shell effects
- * from overlapping their path-validation/write windows while preserving
- * concurrency within either category.
+ * Per-path ordering is process-local. Host-side sinks additionally retain the
+ * cross-process direct lease. Only direct text sinks that actually execute in
+ * the Runtime OS sandbox omit that lease, so a background command does not
+ * turn a sandboxed workspace mutation into a global conflict.
  *
  * Path normalization rules (Windows/POSIX parity):
  *   - lowercase the drive letter on Windows-style paths so `C:\foo`
@@ -696,13 +696,14 @@ export function acquireExclusiveFileSystemEffectLease(
   return acquireEffectLease('namespace', sandboxPolicyKey);
 }
 
-function acquireDirectFileMutationLease(): Promise<FileSystemMutationLeaseRelease> {
+/** Degraded host fallback only; sandboxed text mutations do not acquire this lease. */
+export function acquireHostFileSystemMutationLease(): Promise<FileSystemMutationLeaseRelease> {
   return acquireEffectLease('direct');
 }
 
-/** Keep one host-side filesystem effect disjoint from model-started shells. */
+/** Keep a degraded host-side sink disjoint from model-started shell effects. */
 export async function withHostFileSystemMutation<T>(operation: () => Promise<T>): Promise<T> {
-  const releaseLease = await acquireDirectFileMutationLease();
+  const releaseLease = await acquireHostFileSystemMutationLease();
   try {
     return await operation();
   } finally {
@@ -734,8 +735,22 @@ export function recordFileBackup(
   filePath: string,
   content: string,
 ): void {
+  recordResolvedFileBackup(backups, resolveFileBackupPath(filePath), content);
+}
+
+/** Capture a stable canonical backup key before a concurrent sink commits. */
+export function resolveFileBackupPath(filePath: string): string {
   const backupPath = canonicalizeAgentHomePolicyPath(filePath);
   if (backupPath === undefined) throw new Error(`Cannot identify backup path: ${filePath}`);
+  return backupPath;
+}
+
+/** Record against a canonical key captured before the corresponding commit. */
+export function recordResolvedFileBackup(
+  backups: Map<string, string>,
+  backupPath: string,
+  content: string,
+): void {
   backups.delete(backupPath);
   backups.set(backupPath, content);
 }
@@ -799,7 +814,7 @@ export function normalizePathForKey(absolutePath: string): string {
  * but the rejected promise is what `withFileMutation` returns to the
  * caller. Subsequent enqueues see a settled prior tail and proceed.
  */
-export async function withFileMutation<T>(
+export async function withPathMutation<T>(
   absolutePath: string,
   fn: () => Promise<T>,
 ): Promise<T> {
@@ -810,14 +825,7 @@ export async function withFileMutation<T>(
   // the prior caller succeeded.
   const next: Promise<T> = previous
     .catch(() => undefined)
-    .then(async () => {
-      return withHostFileSystemMutation(async () => {
-        if (isAgentHomeHardMutationTarget(absolutePath)) {
-          throw new Error(`Mutation targets protected KodaX state: ${absolutePath}`);
-        }
-        return await fn();
-      });
-    });
+    .then(fn);
   // Track a sibling promise for tail-eviction so `next`'s consumer
   // sees its real result (success or rejection) without our cleanup
   // accidentally swallowing it.
@@ -828,6 +836,34 @@ export async function withFileMutation<T>(
   });
   fileMutationQueue.set(key, trackable);
   return next;
+}
+
+/** Path-local queue plus the ordinary direct-file Agent Home hard boundary. */
+export function withFileMutation<T>(
+  absolutePath: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return withPathMutation(absolutePath, async () => {
+    return withHostFileSystemMutation(async () => {
+      if (isAgentHomeHardMutationTarget(absolutePath)) {
+        throw new Error(`Mutation targets protected KodaX state: ${absolutePath}`);
+      }
+      return fn();
+    });
+  });
+}
+
+/** Path-local direct mutation whose actual filesystem sink runs inside the OS sandbox. */
+export function withSandboxedFileMutation<T>(
+  absolutePath: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return withPathMutation(absolutePath, async () => {
+    if (isAgentHomeHardMutationTarget(absolutePath)) {
+      throw new Error(`Mutation targets protected KodaX state: ${absolutePath}`);
+    }
+    return fn();
+  });
 }
 
 /**

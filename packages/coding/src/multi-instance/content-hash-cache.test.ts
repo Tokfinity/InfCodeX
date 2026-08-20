@@ -78,6 +78,15 @@ describe('createContentHashCache — recordRead + checkStale (fresh path)', () =
 });
 
 describe('createContentHashCache — checkStale (stale path)', () => {
+  it('checks a snapshot supplied by a narrower filesystem capability', () => {
+    const cache = createContentHashCache({ hash: idHash, clock: () => 1000 });
+    cache.recordRead('/r/a.ts', 'v1');
+
+    expect(cache.checkStaleContent('/r/a.ts', 'v1').kind).toBe('fresh');
+    expect(cache.checkStaleContent('/r/a.ts', 'v2').kind).toBe('stale');
+    expect(cache.checkStaleContent('/r/a.ts', undefined).kind).toBe('missing');
+  });
+
   it("returns kind:'stale' when the file content changed since the recorded read", () => {
     const fs = new FakeFs();
     fs.files.set('/r/a.ts', 'v1');

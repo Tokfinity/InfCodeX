@@ -1,5 +1,3 @@
-import fs from 'fs/promises';
-import fsSync from 'fs';
 import type { KodaXToolExecutionContext } from '../types.js';
 import { generateDiff, countChanges } from './diff.js';
 import { resolveExecutionPath } from '../runtime-paths.js';
@@ -13,10 +11,14 @@ import {
 } from './text-anchor.js';
 import { findExactMatchPositions, formatLineList } from './multi-edit.js';
 import { appendLspDiagnostics } from './_internal/lsp-reflux.js';
-import { recordFileBackup, withFileMutation } from './_internal/file-mutation-queue.js';
 import { buildStaleWriteReason } from '../multi-instance/content-hash-cache.js';
 import { memoryMutationDenial } from './memory-mutation-guard.js';
 import { formatActiveFileWarning } from '../multi-instance/active-file-warning.js';
+import {
+  withTextFileMutation,
+  writeTextFileForMutation,
+  type TextFileMutationSnapshot,
+} from './_internal/text-file-mutation.js';
 
 export type EditToolErrorCode =
   | 'EDIT_NOT_FOUND'
@@ -41,10 +43,6 @@ export async function toolEdit(input: Record<string, unknown>, ctx: KodaXToolExe
   const filePath = resolveExecutionPath(input.path as string, ctx);
   const memoryDenial = memoryMutationDenial(filePath);
   if (memoryDenial !== undefined) return memoryDenial;
-  if (!fsSync.existsSync(filePath)) {
-    return `[Tool Error] edit: File not found: ${filePath}`;
-  }
-
   const oldStr = String(input.old_string ?? '');
   const newStr = String(input.new_string ?? '');
   const replaceAll = input.replace_all === true;
@@ -56,8 +54,11 @@ export async function toolEdit(input: Record<string, unknown>, ctx: KodaXToolExe
   // FEATURE_131 Part A: serialize same-file mutations so concurrent
   // children can't race the read-modify-write cycle. Different files
   // still proceed in parallel.
-  const result = await withFileMutation(filePath, async () => {
-    return await runEditOnce(filePath, oldStr, newStr, replaceAll, ctx);
+  const result = await withTextFileMutation(filePath, 'edit', input, ctx, async (snapshot) => {
+    if (snapshot.state === 'missing') {
+      return `[Tool Error] edit: File not found: ${filePath}`;
+    }
+    return await runEditOnce(filePath, oldStr, newStr, replaceAll, snapshot, ctx);
   });
   // FEATURE_132 v0.7.47 — reflux LSP diagnostics OUTSIDE the mutation lock so
   // a concurrent same-file writer isn't blocked during the diagnostics wait.
@@ -70,6 +71,7 @@ async function runEditOnce(
   oldStr: string,
   newStr: string,
   replaceAll: boolean,
+  snapshot: TextFileMutationSnapshot,
   ctx: KodaXToolExecutionContext,
 ): Promise<string> {
   // FEATURE_125 v0.7.41 — Layer 4 hard gate. If the LLM read this file
@@ -78,12 +80,12 @@ async function runEditOnce(
   // here mirrors the existing edit error envelope so the tool-result
   // policy and error parsers treat it identically to a NOT_FOUND case.
   if (ctx.contentHashCache) {
-    const stale = ctx.contentHashCache.checkStale(filePath);
+    const stale = ctx.contentHashCache.checkStaleContent(filePath, snapshot.content);
     if (stale.stale) {
       return `[Tool Error] edit: ${buildStaleWriteReason(filePath, stale)}`;
     }
   }
-  const content = await fs.readFile(filePath, 'utf-8');
+  const content = snapshot.content;
   const exactMatches = findExactMatchPositions(content, oldStr);
   let replacementPlan: {
     newContent: string;
@@ -163,8 +165,7 @@ async function runEditOnce(
     };
   }
 
-  recordFileBackup(ctx.backups, filePath, content);
-  await fs.writeFile(filePath, replacementPlan.newContent, 'utf-8');
+  await writeTextFileForMutation(snapshot, replacementPlan.newContent, false, ctx, content);
 
   // FEATURE_125 v0.7.41 — update content-hash cache with the post-edit
   // content so the LLM's own subsequent edit on this file does not

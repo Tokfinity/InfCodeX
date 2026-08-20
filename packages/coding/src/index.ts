@@ -173,6 +173,9 @@ export type {
   KodaXShellProfileMode,
   KodaXShellSandbox,
   KodaXShellSandboxPrepareInput,
+  KodaXTextFileMutationRequest,
+  KodaXTextFileMutationSandbox,
+  KodaXTextFileSnapshot,
   KodaXSkillScriptInputFile,
   KodaXSkillScriptOutputFile,
   KodaXSkillScriptRunInput,
@@ -256,6 +259,7 @@ export type {
 } from './types.js';
 
 export {
+  acquireFileSystemMutationLease,
   acquireExclusiveFileSystemEffectLease,
 } from './tools/_internal/file-mutation-queue.js';
 

@@ -1,5 +1,3 @@
-import fs from 'fs/promises';
-import fsSync from 'fs';
 import type { KodaXToolExecutionContext } from '../types.js';
 import { generateDiff, countChanges } from './diff.js';
 import { resolveExecutionPath } from '../runtime-paths.js';
@@ -11,7 +9,7 @@ import {
   findUniqueNormalizedBlockMatch,
   findUniqueUnicodeNormalizedBlockMatch,
 } from './text-anchor.js';
-import { recordFileBackup, withFileMutation } from './_internal/file-mutation-queue.js';
+import { withTextFileMutation, writeTextFileForMutation } from './_internal/text-file-mutation.js';
 
 function formatInsertError(code: 'ANCHOR_NOT_FOUND' | 'ANCHOR_AMBIGUOUS', detail: string): string {
   return `[Tool Error] insert_after_anchor: ${code}: ${detail}`;
@@ -24,53 +22,57 @@ export async function toolInsertAfterAnchor(
   const filePath = resolveExecutionPath(input.path as string, ctx);
   const memoryDenial = memoryMutationDenial(filePath);
   if (memoryDenial !== undefined) return memoryDenial;
-  if (!fsSync.existsSync(filePath)) {
-    return `[Tool Error] insert_after_anchor: File not found: ${filePath}`;
-  }
-
   const anchor = String(input.anchor ?? '');
   const contentToInsert = String(input.content ?? '');
 
   // FEATURE_131 Part A: serialize same-file mutations.
-  return withFileMutation(filePath, async () => {
-    const content = await fs.readFile(filePath, 'utf-8');
-    const insertion = resolveAnchorInsertion(content, anchor);
+  return withTextFileMutation(
+    filePath,
+    'insert_after_anchor',
+    input,
+    ctx,
+    async (snapshot) => {
+      if (snapshot.state === 'missing') {
+        return `[Tool Error] insert_after_anchor: File not found: ${filePath}`;
+      }
+      const content = snapshot.content;
+      const insertion = resolveAnchorInsertion(content, anchor);
 
-    if (insertion.status === 'missing') {
-      return formatInsertError(
-        'ANCHOR_NOT_FOUND',
-        'Anchor not found. Retry with a unique nearby heading or section marker.',
-      );
-    }
-    if (insertion.status === 'ambiguous') {
-      return formatInsertError(
-        'ANCHOR_AMBIGUOUS',
-        `Anchor matched ${insertion.count} locations. Retry with a more specific anchor.`,
-      );
-    }
+      if (insertion.status === 'missing') {
+        return formatInsertError(
+          'ANCHOR_NOT_FOUND',
+          'Anchor not found. Retry with a unique nearby heading or section marker.',
+        );
+      }
+      if (insertion.status === 'ambiguous') {
+        return formatInsertError(
+          'ANCHOR_AMBIGUOUS',
+          `Anchor matched ${insertion.count} locations. Retry with a more specific anchor.`,
+        );
+      }
 
-    const prepared = prepareInsertionContent(content, insertion.index, contentToInsert);
-    const nextContent = `${content.slice(0, insertion.index)}${prepared}${content.slice(insertion.index)}`;
+      const prepared = prepareInsertionContent(content, insertion.index, contentToInsert);
+      const nextContent = `${content.slice(0, insertion.index)}${prepared}${content.slice(insertion.index)}`;
 
-    recordFileBackup(ctx.backups, filePath, content);
-    await fs.writeFile(filePath, nextContent, 'utf-8');
-    // FEATURE_177 v0.7.42 — drop the read-state cache so the next Read
-    // sees the post-insert content.
-    ctx.readFileStateCache?.forget(filePath);
+      await writeTextFileForMutation(snapshot, nextContent, false, ctx, content);
+      // FEATURE_177 v0.7.42 — drop the read-state cache so the next Read
+      // sees the post-insert content.
+      ctx.readFileStateCache?.forget(filePath);
 
-    const diff = generateDiff(content, nextContent, filePath);
-    const changes = countChanges(diff);
-    const preview = diff
-      ? await formatDiffPreview({ diff, toolName: 'write', filePath, ctx })
-      : '';
+      const diff = generateDiff(content, nextContent, filePath);
+      const changes = countChanges(diff);
+      const preview = diff
+        ? await formatDiffPreview({ diff, toolName: 'write', filePath, ctx })
+        : '';
 
-    return [
-      `Content inserted after anchor in: ${filePath}`,
-      `  (+${changes.added} lines, -${changes.removed} lines)`,
-      preview ? '' : undefined,
-      preview || undefined,
-    ].filter((line): line is string => line !== undefined).join('\n');
-  });
+      return [
+        `Content inserted after anchor in: ${filePath}`,
+        `  (+${changes.added} lines, -${changes.removed} lines)`,
+        preview ? '' : undefined,
+        preview || undefined,
+      ].filter((line): line is string => line !== undefined).join('\n');
+    },
+  );
 }
 
 function resolveAnchorInsertion(

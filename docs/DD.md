@@ -104,6 +104,25 @@ after the Run is no longer active. `src/sdk-runtime.ts` keeps managed
 `onComplete` non-authoritative and requires `sandboxRuntime:4` plus
 `crashOutcomeModel:2` so idle older daemons are replaced.
 
+The Unreleased direct-text path narrows this coordinator without deleting it.
+`withFileMutation()` remains the host-sink primitive: normalized-path FIFO plus
+a direct lease that conflicts with shell and namespace effects.
+`withSandboxedFileMutation()` is used only after Runtime supplies a concrete
+text-mutation sandbox. Its read and write run through a fixed helper inside the
+same ASRT workspace policy as Bash, with file identity plus content revision
+checked on the opened handle before writing. This is optimistic
+compare-and-write, not an atomic CAS against an arbitrary external writer.
+Runtime ASRT unavailability for a covered workspace target fails closed;
+non-workspace targets and standalone Coding contexts retain
+`withFileMutation()` semantics. Runtime non-workspace host fallback rechecks
+inside that direct lease that the target (or nearest existing ancestor for a
+new file) is not routed through a symlink/junction, and rejects hard-linked
+existing files.
+Sandbox backups use a canonical path minted from the opened helper identity;
+undo rejects a subsequently changed canonical identity. Worktree create/remove additionally keep a per-target queue
+around their namespace lease until the managed Git process tree is proven
+drained.
+
 The same release implements Session-scoped event journals and cursor-bound
 replay, the F289/F290 Memory review and lesson pipelines, and F292's
 conversation-first Memory management. Terminal startup restores terminal Runs

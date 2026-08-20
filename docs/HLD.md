@@ -91,6 +91,18 @@ isolated Anthropic/OpenAI abort-class identity so a typed SDK abort is not
 redacted as a credential failure. Same-boot ACL and POSIX recovery remain
 fail-closed.
 
+The Unreleased filesystem-effect refinement separates sandboxed text sinks from
+host-privileged sinks. Runtime `write`, `edit`, `multi_edit`,
+`insert_after_anchor`, and `undo` execute their snapshot and commit through the
+same ASRT workspace policy, keep only a normalized-path FIFO, and may therefore
+run while a compatible background shell remains alive. A standalone Coding
+consumer with no Runtime capability retains the existing direct lease. A
+covered workspace target fails closed when the Runtime capability is
+unavailable; non-workspace targets and all other host sinks retain the direct
+lease. Shell policy owners and namespace owners remain in the coordinator so
+incompatible Windows ACL transitions and worktree path-alias changes are still
+fenced.
+
 For a Windows daemon Runtime, startup is a three-part process boundary:
 PowerShell creates the daemon suspended, assigns it to a kill-on-close Job
 Object, and resumes it; an out-of-Job supervisor waits for daemon exit and then

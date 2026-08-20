@@ -6,6 +6,23 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Long-running and background Bash processes no longer block Runtime `write`,
+  `edit`, `multi_edit`, `insert_after_anchor`, or `undo` solely because a shell
+  lease is alive. Those tools now perform both snapshot and identity-aware
+  optimistic compare-and-write through the same ASRT workspace policy, while
+  preserving same-path FIFO ordering. Sandbox failure for a covered workspace
+  target fails closed; non-workspace targets, standalone/other host filesystem
+  sinks, incompatible Windows ACL policies, and worktree namespace changes
+  retain their existing safety fences. Runtime non-workspace host writes also
+  reject symlink/junction-routed and hard-linked targets inside that fence.
+- Sandboxed text backup authority is minted from the helper's opened file
+  identity, preserving stable alias undo without trusting concurrent host
+  `realpath`. A permanently rejected Windows Job drain proof now reports the
+  error and keeps the worktree namespace fence fail-closed instead of polling
+  a settled promise forever or trusting a root-only process check.
+
 ---
 
 ## [0.7.93] - 2026-08-19

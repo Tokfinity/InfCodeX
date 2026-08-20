@@ -1450,7 +1450,14 @@ export function createAutoModeToolGuardrail(
     }
 
     const allowFinal = (): GuardrailVerdict => {
-      if (guardedCall.name === 'bash') {
+      if ([
+        'bash',
+        'edit',
+        'insert_after_anchor',
+        'multi_edit',
+        'undo',
+        'write',
+      ].includes(guardedCall.name)) {
         const sandboxReview = permissionReview ?? fallbackPermissionReview(
           guardedCall.name,
           action || safeFallbackToClassifierInput(guardedCall.name, guardedCall.input),

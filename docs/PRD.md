@@ -117,6 +117,16 @@ outcome, can recover previous-boot shared ACL markers after a verified boot
 change, and preserves managed Stop interruption when an Anthropic or OpenAI
 SDK abort wrapper does not carry the `APIUserAbortError` runtime name.
 
+The Unreleased concurrency fix allows a compatible long-running or background
+Bash process to remain alive while Runtime text tools update workspace files.
+Only workspace text operations whose actual read and write are both inside the
+Runtime ASRT policy receive this concurrency. Sandbox failure for a covered
+workspace target fails closed; non-workspace targets, standalone consumers,
+and other host-side file sinks keep the existing filesystem-effect exclusion.
+Same-path text operations remain FIFO, worktree namespace changes remain
+fenced, and a concurrent shell write to the same file is detected
+optimistically where possible rather than promised as an atomic transaction.
+
 ## 2. Target Users
 
 - Developers who want a terminal-native agent for code changes, debugging,

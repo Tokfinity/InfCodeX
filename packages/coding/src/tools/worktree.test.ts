@@ -19,6 +19,7 @@ import {
   toolWorktreeRemove,
 } from './worktree.js';
 import {
+  _resetFileSystemEffectLeasesForTests,
   acquireFileSystemMutationLease,
   withFileMutation,
 } from './_internal/file-mutation-queue.js';
@@ -112,8 +113,14 @@ const mockContext: KodaXToolExecutionContext = {
 
 const TEST_AGENT_HOME = path.join(os.tmpdir(), `kodax-worktree-agent-home-${process.pid}`);
 
-afterEach(() => {
+afterEach(async () => {
   setMockExecFileImpl(null);
+  vi.mocked(containWindowsEffectProcess).mockImplementation(async (pid: number) => ({
+    drained: Promise.resolve(),
+    supervisorPid: pid,
+  }));
+  vi.mocked(killChildProcessTree).mockResolvedValue({ status: 'already-exited' });
+  await _resetFileSystemEffectLeasesForTests();
   setAgentConfigHome(undefined);
 });
 
@@ -269,20 +276,54 @@ describe('toolWorktreeCreate', () => {
     await mutation;
   });
 
-  it('keeps the namespace fence closed until a POSIX Git tree has a non-unknown drain proof', async () => {
-    vi.mocked(containWindowsEffectProcess).mockResolvedValueOnce(undefined as never);
+  it('serializes operations that target the same worktree path', async () => {
     vi.mocked(killChildProcessTree)
       .mockResolvedValueOnce({ status: 'unknown' })
       .mockResolvedValue({ status: 'already-exited' });
+    let releaseFirstAdd: (() => void) | undefined;
+    let reportFirstAdd: (() => void) | undefined;
+    const firstAddStarted = new Promise<void>((resolve) => { reportFirstAdd = resolve; });
+    let addCalls = 0;
+    setMockExecFileImpl((_cmd: string, args: string[], _opts: unknown, cb: Function) => {
+      if (args[0] === 'worktree' && args[1] === 'add') {
+        addCalls += 1;
+        if (addCalls === 1) {
+          reportFirstAdd?.();
+          releaseFirstAdd = () => cb(null, '', '');
+          return;
+        }
+      }
+      cb(null, '', '');
+    });
 
-    await expect(toolWorktreeCreate(
-      { branch_name: 'unknown-drain-proof' },
-      mockContext,
-    )).rejects.toThrow(/process tree.*proven drained/i);
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    await expect(withFileMutation('/tmp/after-worktree-drain.txt', async () => 'ready'))
-      .resolves.toBe('ready');
+    const first = toolWorktreeCreate({ branch_name: 'same-target' }, mockContext);
+    await firstAddStarted;
+    const second = toolWorktreeCreate({ branch_name: 'same-target' }, mockContext);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(addCalls).toBe(1);
+    releaseFirstAdd?.();
+    await Promise.all([first, second]);
+    expect(addCalls).toBe(2);
   });
+
+  it.runIf(process.platform === 'win32')(
+    'rejects instead of hanging when the Windows Job drain proof fails',
+    async () => {
+      const drained = Promise.reject(new Error('job drain failed'));
+      void drained.catch(() => undefined);
+      vi.mocked(containWindowsEffectProcess).mockResolvedValueOnce({
+        drained,
+        supervisorPid: 2_147_483_647,
+      });
+      vi.mocked(killChildProcessTree).mockResolvedValueOnce({ status: 'already-exited' });
+
+      await expect(toolWorktreeCreate(
+        { branch_name: 'failed-job-drain' },
+        mockContext,
+      )).rejects.toThrow(/job drain failed|process tree has not been proven drained/i);
+      expect(killChildProcessTree).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe('toolWorktreeRemove', () => {

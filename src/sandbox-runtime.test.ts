@@ -1,7 +1,19 @@
 import { EventEmitter, once } from 'node:events';
-import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  closeSync,
+  fstatSync,
+  ftruncateSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+  writeSync,
+} from 'node:fs';
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -48,6 +60,7 @@ const capturedKillSignals = vi.hoisted(
 const capturedProcessTreeKillOptions = vi.hoisted(
   () => [] as Array<Readonly<Record<string, unknown>>>,
 );
+const textMutationChildren = vi.hoisted(() => new WeakSet<object>());
 const processTreeKillMock = vi.hoisted(() => ({
   outcome: 'actual' as 'actual' | 'unknown' | 'close_then_unknown' | 'close_then_reject',
   childPid: undefined as number | undefined,
@@ -440,9 +453,11 @@ vi.mock('node:child_process', async (importOriginal) => {
         });
         return child;
       }
+      let brokerRequest: Readonly<Record<string, unknown>> | undefined;
       const captureRequest = (): void => {
         if (typeof requestFile !== 'string' || !requestFile.endsWith('.json')) return;
         const request = JSON.parse(readFileSync(requestFile, 'utf8')) as { readonly cwd?: string };
+        brokerRequest = request;
         capturedBrokerRequests.push(request);
         if (request.cwd) {
           mkdirSync(path.join(request.cwd, 'outputs'), { recursive: true });
@@ -495,6 +510,137 @@ vi.mock('node:child_process', async (importOriginal) => {
         return child;
       }
       captureRequest();
+      const textMutationRequest = brokerRequest as {
+        readonly args?: readonly string[];
+        readonly observationFile?: string;
+        readonly targetStartedMarker?: string;
+      } | undefined;
+      if (textMutationRequest?.args?.some((arg) => arg.includes('Text mutation target'))) {
+        textMutationChildren.add(child);
+        let stdin = '';
+        child.stdin.on('data', (chunk: Buffer) => { stdin += chunk.toString('utf8'); });
+        child.stdin.once('finish', () => {
+          const payload = JSON.parse(stdin) as {
+            readonly action: 'read' | 'write';
+            readonly path: string;
+            readonly content?: string;
+            readonly expectedRevision?: string;
+            readonly createParentDirectories?: boolean;
+          };
+          const revision = (content: string, stats: ReturnType<typeof fstatSync>): string => (
+            `present:${createHash('sha256')
+              .update(stats.dev.toString())
+              .update(':')
+              .update(stats.ino.toString())
+              .update('\0')
+              .update(content)
+              .digest('hex')}`
+          );
+          const snapshot = () => {
+            let descriptor: number;
+            try {
+              descriptor = openSync(payload.path, 'r');
+            } catch (error: unknown) {
+              if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+                return {
+                  state: 'missing' as const,
+                  content: '',
+                  revision: 'missing',
+                  backupPath: path.resolve(payload.path),
+                };
+              }
+              throw error;
+            }
+            try {
+              const content = readFileSync(descriptor, 'utf8');
+              const stats = fstatSync(descriptor, { bigint: true });
+              const backupPath = realpathSync.native(payload.path);
+              const canonicalDescriptor = openSync(backupPath, 'r');
+              try {
+                const canonicalStats = fstatSync(canonicalDescriptor, { bigint: true });
+                if (canonicalStats.dev !== stats.dev || canonicalStats.ino !== stats.ino) {
+                  throw new Error('Text mutation target identity changed while reading.');
+                }
+              } finally {
+                closeSync(canonicalDescriptor);
+              }
+              return {
+                state: 'present' as const,
+                content,
+                revision: revision(content, stats),
+                backupPath,
+              };
+            } finally {
+              closeSync(descriptor);
+            }
+          };
+          const writeFully = (descriptor: number, content: string): void => {
+            const encoded = Buffer.from(content, 'utf8');
+            let written = 0;
+            while (written < encoded.length) {
+              const count = writeSync(
+                descriptor,
+                encoded,
+                written,
+                encoded.length - written,
+                written,
+              );
+              if (count === 0) throw new Error('Text mutation write made no progress.');
+              written += count;
+            }
+            ftruncateSync(descriptor, encoded.length);
+          };
+          const writeMutation = (): 'conflict' | 'written' => {
+            if (payload.createParentDirectories) {
+              mkdirSync(path.dirname(payload.path), { recursive: true });
+            }
+            let descriptor: number | undefined;
+            try {
+              if (payload.expectedRevision === 'missing') {
+                descriptor = openSync(payload.path, 'wx');
+              } else {
+                descriptor = openSync(payload.path, 'r+');
+                const content = readFileSync(descriptor, 'utf8');
+                const stats = fstatSync(descriptor, { bigint: true });
+                if (revision(content, stats) !== payload.expectedRevision) return 'conflict';
+              }
+              writeFully(descriptor, payload.content ?? '');
+              return 'written';
+            } catch (error: unknown) {
+              if (
+                payload.expectedRevision === 'missing'
+                && (error as NodeJS.ErrnoException).code === 'EEXIST'
+              ) return 'conflict';
+              throw error;
+            } finally {
+              if (descriptor !== undefined) closeSync(descriptor);
+            }
+          };
+          child.emit('spawn');
+          if (payload.action === 'read') {
+            child.stdout.end(JSON.stringify({ status: 'ok', snapshot: snapshot() }));
+          } else if (writeMutation() === 'conflict') {
+            child.stdout.end(JSON.stringify({ status: 'conflict' }));
+          } else {
+            child.stdout.end(JSON.stringify({ status: 'written' }));
+          }
+          if (textMutationRequest.observationFile !== undefined) {
+            writeFileSync(textMutationRequest.observationFile, JSON.stringify({
+              version: 1,
+              state: 'applied',
+              backend: process.platform === 'win32' ? 'windows-restricted-user' : 'linux-bubblewrap',
+              policyId: 'kodax-workspace-shell-v1',
+            }));
+          }
+          if (textMutationRequest.targetStartedMarker !== undefined) {
+            child.stderr.write(textMutationRequest.targetStartedMarker);
+          }
+          child.stderr.end();
+          child.emit('close', 0, null);
+          child.emit('exit', 0, null);
+        });
+        return child;
+      }
       if (stubbornBroker.mode !== 'none') {
         queueMicrotask(() => child.emit('spawn'));
         if (stubbornBroker.mode === 'overflow') {
@@ -512,6 +658,10 @@ vi.mock('@kodax-ai/agent', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@kodax-ai/agent')>();
   return {
     ...actual,
+    containWindowsEffectProcess: (pid: number) => Promise.resolve({
+      drained: Promise.resolve(),
+      supervisorPid: pid,
+    }),
     readProcessStartIdentity: (pid: number) => (
       processIdentityMock.unreadablePids.has(pid)
         ? undefined
@@ -524,6 +674,9 @@ vi.mock('@kodax-ai/agent', async (importOriginal) => {
       options: Parameters<typeof actual.killChildProcessTree>[1] = {},
     ) => {
       capturedProcessTreeKillOptions.push({ ...options });
+      if (textMutationChildren.has(child)) {
+        return Promise.resolve({ status: 'already-exited' as const });
+      }
       if (processTreeKillMock.outcome === 'unknown') {
         processTreeKillMock.releaseUnknown = () => {
           child.emit('exit', null, 'SIGKILL');
@@ -657,6 +810,7 @@ import {
   clearWindowsSandboxAclMarkersForRuntimeOwner,
   createAsrtShellSandbox,
   createAsrtSkillScriptRunner,
+  createAsrtTextFileMutationSandbox,
   doctorSandboxRuntime,
   clearPreviousBootWindowsSandboxAclMarkers,
   overrideWorkspaceSessionRpcTimeoutsForTest,
@@ -811,6 +965,141 @@ async function markSandboxRuntimeUnavailable(): Promise<void> {
 }
 
 describe('ASRT workspace shell adapter', () => {
+  it('reads and compare-writes direct text tools through the workspace sandbox', async () => {
+    processTreeKillMock.childPid = process.pid;
+    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-text-mutation-'));
+    tempRoots.push(root);
+    const target = path.join(root, 'target.txt');
+    await writeFile(target, 'before', 'utf8');
+    const shouldSandbox = vi.fn(() => true);
+    const liveShell = createAsrtShellSandbox({ workspaceRoot: root, shouldSandbox });
+    const preparedShell = await liveShell.prepare({
+      toolCallId: 'background-shell-1',
+      toolInput: { command: 'long-running-service' },
+      command: 'long-running-service',
+      cwd: root,
+      env: process.env,
+    });
+    if (preparedShell === undefined) throw new Error('expected background shell preparation');
+    const sandbox = createAsrtTextFileMutationSandbox({
+      workspaceRoot: root,
+      shouldSandbox,
+    });
+    const request = {
+      toolCallId: 'edit-text-1',
+      toolName: 'edit' as const,
+      toolInput: { path: target, old_string: 'before', new_string: 'after' },
+      path: target,
+    };
+
+    try {
+      const readResult = await sandbox.read(request);
+      expect(readResult.status).toBe('ok');
+      if (readResult.status !== 'ok') throw new Error('expected sandboxed snapshot');
+      expect(readResult.snapshot.content).toBe('before');
+      await expect(sandbox.write({
+        ...request,
+        content: 'after',
+        createParentDirectories: false,
+        expectedRevision: readResult.snapshot.revision,
+      })).resolves.toEqual({ status: 'written' });
+
+      await expect(readFile(target, 'utf8')).resolves.toBe('after');
+      expect(shouldSandbox).toHaveBeenCalledWith(expect.objectContaining({
+        id: 'edit-text-1',
+        name: 'edit',
+      }));
+      const requests = capturedBrokerRequests.slice(-2) as Array<{
+        readonly fallbackToNormalExecution?: boolean;
+      }>;
+      expect(requests).toHaveLength(2);
+      expect(requests.every((item) => item.fallbackToNormalExecution === false)).toBe(true);
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(1);
+    } finally {
+      await preparedShell.cleanup();
+    }
+  });
+
+  it('keeps canonical backup paths eligible for undo through a workspace junction', async () => {
+    processTreeKillMock.childPid = process.pid;
+    const actualWorkspace = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-text-real-'));
+    const junctionRoot = path.join(os.tmpdir(), `kodax-asrt-text-link-${randomUUID()}`);
+    tempRoots.push(actualWorkspace, junctionRoot);
+    await symlink(
+      actualWorkspace,
+      junctionRoot,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    const lexicalTarget = path.join(junctionRoot, 'target.txt');
+    const canonicalTarget = path.join(actualWorkspace, 'target.txt');
+    await writeFile(canonicalTarget, 'before', 'utf8');
+    const sandbox = createAsrtTextFileMutationSandbox({
+      workspaceRoot: junctionRoot,
+      shouldSandbox: () => true,
+    });
+    const editRequest = {
+      toolCallId: 'junction-edit-1',
+      toolName: 'edit' as const,
+      toolInput: { path: lexicalTarget },
+      path: lexicalTarget,
+    };
+
+    expect(sandbox.canHandlePath?.(lexicalTarget)).toBe(true);
+    expect(sandbox.canHandlePath?.(canonicalTarget)).toBe(true);
+    const edited = await sandbox.read(editRequest);
+    expect(edited.status).toBe('ok');
+    if (edited.status !== 'ok') throw new Error('expected sandboxed snapshot');
+    expect(edited.snapshot.backupPath).toBe(await realpath(canonicalTarget));
+    await expect(sandbox.write({
+      ...editRequest,
+      content: 'after',
+      createParentDirectories: false,
+      expectedRevision: edited.snapshot.revision,
+    })).resolves.toEqual({ status: 'written' });
+
+    const undoRequest = {
+      toolCallId: 'junction-undo-1',
+      toolName: 'undo' as const,
+      toolInput: {},
+      path: edited.snapshot.backupPath,
+    };
+    const undo = await sandbox.read(undoRequest);
+    expect(undo.status).toBe('ok');
+    if (undo.status !== 'ok') throw new Error('expected sandboxed undo snapshot');
+    await expect(sandbox.write({
+      ...undoRequest,
+      content: 'before',
+      createParentDirectories: false,
+      expectedRevision: undo.snapshot.revision,
+    })).resolves.toEqual({ status: 'written' });
+    await expect(readFile(canonicalTarget, 'utf8')).resolves.toBe('before');
+  });
+
+  it('keeps pathless Agent Home undo outside the concurrent workspace capability', async () => {
+    processTreeKillMock.childPid = process.pid;
+    const workspace = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-text-undo-'));
+    tempRoots.push(workspace);
+    const target = path.join(process.env.KODAX_HOME!, 'agents', 'notes.txt');
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, 'current', 'utf8');
+    const shouldSandbox = vi.fn(() => true);
+    const sandbox = createAsrtTextFileMutationSandbox({
+      workspaceRoot: workspace,
+      shouldSandbox,
+    });
+    const request = {
+      toolCallId: 'undo-agent-home-1',
+      toolName: 'undo' as const,
+      toolInput: {},
+      path: target,
+    };
+
+    await expect(sandbox.read(request)).resolves.toEqual({ status: 'unavailable' });
+    await expect(readFile(target, 'utf8')).resolves.toBe('current');
+    expect(shouldSandbox).not.toHaveBeenCalled();
+    expect(capturedWorkspaceSessionConfigs).toHaveLength(0);
+  });
+
   it.runIf(process.platform === 'win32')(
     'recovers only exact daemon-owned primary and legacy ACL markers without force',
     async () => {
