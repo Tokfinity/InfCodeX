@@ -236,6 +236,60 @@ describe("runtime daemon host", () => {
     expect(readRuntimeDaemonLockOwner(paths.lockFile)).toBeUndefined();
   });
 
+  it("reports a scheduled daemon.stop cleanup failure through the host lifecycle", async () => {
+    const paths = resolveRuntimeDaemonPaths(tempHome(), "stop-cleanup-failure");
+    const runtime = makeRuntime();
+    let signalCloseAttempted: (() => void) | undefined;
+    const closeAttempted = new Promise<void>((resolve) => {
+      signalCloseAttempted = resolve;
+    });
+    runtime.close = async () => {
+      signalCloseAttempted?.();
+      throw new Error("terminal Runtime cleanup failure");
+    };
+    const lock = tryAcquireRuntimeDaemonLock(paths, {
+      runtimeId: runtime.identity.runtimeId,
+      pid: process.pid,
+      createdAt: runtime.identity.startedAt,
+    });
+    expect(lock).toBeDefined();
+    if (!lock) throw new Error("Expected daemon lock for failed stop test.");
+
+    const host = await startRuntimeDaemonHost({
+      runtime,
+      paths,
+      endpoint: await makeTestEndpoint(),
+      lock,
+    });
+    cleanupTasks.push(() => host.close());
+    const client = await createRuntimeDaemonSocketClientTransport(host.endpoint);
+    cleanupTasks.push(async () => {
+      await client.close?.();
+    });
+    const token = readRuntimeDaemonToken(paths);
+    await client.request("initialize", { profile: "default", token });
+
+    let unhandledRejection: unknown;
+    const observeUnhandledRejection = (reason: unknown): void => {
+      unhandledRejection = reason;
+    };
+    process.on("unhandledRejection", observeUnhandledRejection);
+    try {
+      await expect(client.request("daemon.stop")).resolves.toEqual({ ok: true });
+      await closeAttempted;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(unhandledRejection).toBeUndefined();
+      await expect(Promise.race([
+        host.closed,
+        new Promise<void>((_resolve, reject) => {
+          setTimeout(() => reject(new Error("host.closed remained pending")), 250);
+        }),
+      ])).rejects.toThrow("terminal Runtime cleanup failure");
+    } finally {
+      process.off("unhandledRejection", observeUnhandledRejection);
+    }
+  });
+
   it("counts initialized logical clients instead of internal sockets and rejects stale rollback commits", async () => {
     const paths = resolveRuntimeDaemonPaths(tempHome(), "default");
     const runtime = makeRuntime();

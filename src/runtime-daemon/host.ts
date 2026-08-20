@@ -170,7 +170,14 @@ export async function startRuntimeDaemonHost(
   let runtimeClosed = false;
   let ownershipReleased = false;
   let signalClosed: (() => void) | undefined;
-  const closedPromise = new Promise<void>((resolve) => { signalClosed = resolve; });
+  let signalCloseFailed: ((error: unknown) => void) | undefined;
+  const closedPromise = new Promise<void>((resolve, reject) => {
+    signalClosed = resolve;
+    signalCloseFailed = reject;
+  });
+  // Preserve the rejected lifecycle for callers while preventing embedded
+  // hosts that do not observe `closed` from emitting an unhandled rejection.
+  void closedPromise.catch(() => undefined);
   const closeHost = (): Promise<void> => {
     if (closed) return Promise.resolve();
     if (closeAttempt) return closeAttempt;
@@ -207,6 +214,12 @@ export async function startRuntimeDaemonHost(
             && process.env.KODAX_INTERNAL_DAEMON_TEST_HOST_CLOSE_HANG === '1'
           ) {
             await new Promise<void>(() => undefined);
+          }
+          if (
+            process.env.NODE_ENV === 'test'
+            && process.env.KODAX_INTERNAL_DAEMON_TEST_HOST_CLOSE_ERROR === '1'
+          ) {
+            throw new Error('Injected Runtime host close failure.');
           }
           await options.runtime.close();
           runtimeClosed = true;
@@ -276,6 +289,7 @@ export async function startRuntimeDaemonHost(
     }
     const timer = setTimeout(() => {
       void closeHost().catch((error: unknown) => {
+        signalCloseFailed?.(error);
         emitKodaXDiagnostic({
           source: 'runtime.daemon.host',
           level: 'error',

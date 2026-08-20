@@ -27,6 +27,8 @@ import {
   runtimeDaemonBootstrapLogPath,
 } from './runtime-daemon/process.js';
 import {
+  readRuntimeDaemonLockOwner,
+  readRuntimeDaemonShutdownOutcome,
   resolveRuntimeDaemonPaths,
   resolveRuntimeDaemonPathsFromConfigHome,
   tryAcquireRuntimeDaemonLock,
@@ -1008,7 +1010,7 @@ describe('daemon CLI smoke', () => {
   }, 180_000);
 
   it.skipIf(process.platform !== 'win32')(
-    'does not report a legacy uncontained daemon as safely stopped',
+    'reports cleanup failure rather than safe stop for a live uncontained daemon',
     async () => {
       const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-uncontained-stop-'));
       tempRoots.push(homeDir);
@@ -1038,9 +1040,9 @@ describe('daemon CLI smoke', () => {
 
       expect(stop).toMatchObject({
         stopped: false,
-        reason: 'cleanup_unverified',
+        reason: 'cleanup_failed',
       });
-      expect(String(stop.error)).toMatch(/containment metadata is unavailable/i);
+      expect(String(stop.error)).toMatch(/shutdown did not complete successfully/i);
     },
     90_000,
   );
@@ -1186,6 +1188,39 @@ describe('daemon CLI smoke', () => {
       health: 'missing',
     });
     await waitForDaemonPidExit(daemonPid, 5_000);
+  }, 60_000);
+
+  it('persists a failed outcome when a scheduled Runtime host close fails', async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-host-close-error-'));
+    tempRoots.push(homeDir);
+    const profile = `host-close-error-${process.pid}-${Date.now()}`;
+    await runDaemonCommand([
+      'start', '--home', homeDir, '--profile', profile,
+      '--provider', 'mock-provider', '--timeout-ms', '30000', '--json',
+    ], {
+      NODE_ENV: 'test',
+      KODAX_INTERNAL_DAEMON_TEST_HOST_CLOSE_ERROR: '1',
+    });
+    const paths = resolveRuntimeDaemonPaths(homeDir, profile);
+    const owner = readRuntimeDaemonLockOwner(paths.lockFile);
+    expect(owner).toBeDefined();
+    if (owner === undefined) throw new Error('Expected daemon owner for failed host close test.');
+
+    const stop = await runDaemonCommand([
+      'stop', '--home', homeDir, '--profile', profile,
+      '--timeout-ms', '5000', '--json',
+    ], {}, 15_000);
+
+    expect(stop).toMatchObject({
+      stopped: false,
+      reason: 'cleanup_failed',
+    });
+    expect(readRuntimeDaemonShutdownOutcome(paths, owner)).toMatchObject({
+      runtimeId: owner.runtimeId,
+      pid: owner.pid,
+      status: 'failed',
+    });
+    await waitForDaemonPidExit(owner.pid, 5_000);
   }, 60_000);
 
   it.skipIf(process.platform !== 'win32')('force-reclaims the exact daemon process when Runtime host close hangs', async () => {
