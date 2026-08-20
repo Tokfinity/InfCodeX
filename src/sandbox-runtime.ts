@@ -66,6 +66,13 @@ import {
   KodaXTextFileMutationRequest,
   KodaXTextFileMutationSandbox,
 } from '@kodax-ai/coding';
+import {
+  rewriteWindowsGitSafeDirectoryArgv,
+  windowsGitBrokerHelpersSource,
+  windowsGitTrustRoots,
+} from './windows-git-sandbox.js';
+
+export { rewriteWindowsGitSafeDirectoryArgv, windowsGitTrustRoots };
 
 export const KODAX_ASRT_VERSION = '0.0.65';
 
@@ -226,6 +233,13 @@ export interface KodaXSandboxCapability {
   readonly setupMayElevate: boolean;
   readonly unavailableBehavior: 'structured-no-execution';
   readonly permissionFallback: 'normal-permission-policy';
+  /**
+   * Marker field (v4, non-versioned): Windows sandboxed git trusts exactly the
+   * session-authorized repo roots through per-exec `safe.directory` env entries.
+   * A daemon that reports `sandboxRuntime` without this field predates that
+   * behavior; clients surface a restart diagnostic instead of failing the gate.
+   */
+  readonly gitSafeDirectory: 'authorized-repo-roots';
 }
 
 export function sandboxRuntimeCapability(): KodaXSandboxCapability {
@@ -247,6 +261,7 @@ export function sandboxRuntimeCapability(): KodaXSandboxCapability {
     setupMayElevate: process.platform === 'win32',
     unavailableBehavior: 'structured-no-execution',
     permissionFallback: 'normal-permission-policy',
+    gitSafeDirectory: 'authorized-repo-roots',
   };
 }
 
@@ -595,11 +610,14 @@ const TARGET_ARGV_BOOTSTRAP_BASE64 = Buffer.from(
   'utf8',
 ).toString('base64');
 const TARGET_ARGV_BOOTSTRAP_BASE64_LITERAL = JSON.stringify(TARGET_ARGV_BOOTSTRAP_BASE64);
+const WINDOWS_GIT_BROKER_SOURCE = windowsGitBrokerHelpersSource();
+
 const BROKER_SOURCE = String.raw`
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { readFile, rm, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { realpathSync, statSync } from 'node:fs';
+import path from 'node:path';
 let SandboxManager;
 const request = JSON.parse(await readFile(process.argv[2], 'utf8'));
 await rm(process.argv[2], { force: true });
@@ -611,7 +629,8 @@ const callback = request.allowAllNetwork === true
   : request.endpoints.length === 0
     ? undefined
     : async ({ host, port }) => endpoints.has(host.toLowerCase() + ':' + port);
-const withWindowsChildEnvironment = (argv, environment) => {
+${WINDOWS_GIT_BROKER_SOURCE}
+const withWindowsChildEnvironment = (argv, environment, gitTrustRoots) => {
   const separator = argv.lastIndexOf('--');
   if (separator < 0) throw new Error('ASRT Windows wrapper omitted its child separator.');
   const requested = [];
@@ -651,9 +670,10 @@ const withWindowsChildEnvironment = (argv, environment) => {
     injected.push('--env', name + '=' + value);
   }
   const result = [...prefix, ...injected, ...argv.slice(separator)];
-  const estimate = result.reduce((size, value) => size + value.length + 3, 0);
+  const withGitTrust = rewriteWindowsGitSafeDirectoryArgv(result, gitTrustRoots);
+  const estimate = withGitTrust.reduce((size, value) => size + value.length + 3, 0);
   if (estimate > 30000) throw new Error('ASRT Windows child environment exceeds the CreateProcess command-line limit.');
-  return result;
+  return withGitTrust;
 };
 const writeObservation = async (observation) => {
   if (typeof request.observationFile !== 'string') return;
@@ -794,7 +814,7 @@ try {
           allowRead: [...new Set([
             ...request.config.filesystem.allowRead,
             bootstrap,
-            dirname(bootstrap),
+            path.dirname(bootstrap),
           ])],
         },
       }
@@ -826,7 +846,7 @@ try {
     const requestedEnv = internalElectronNode || bootstrapIsElectronNode
       ? { ...request.env, [${ELECTRON_RUN_AS_NODE_ENV_LITERAL}]: '1' }
       : request.env;
-    const childArgv = withWindowsChildEnvironment(wrapped.argv, requestedEnv);
+    const childArgv = withWindowsChildEnvironment(wrapped.argv, requestedEnv, windowsGitTrustRoots(request));
     child = spawn(childArgv[0], childArgv.slice(1), {
       cwd: request.cwd,
       env: wrapped.env,
@@ -3390,6 +3410,86 @@ function workspaceShellRuntimeReadScopes(
   ));
 }
 
+function sameWindowsPath(left: string, right: string): boolean {
+  return path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase();
+}
+
+function linkedWorktreeMainGitDirectory(gitdir: string, gitLink: string): string | undefined {
+  const match = /^(.*)[/\\]worktrees[/\\][^/\\]+$/.exec(gitdir);
+  if (match === null) return undefined;
+  const mainGit = realpathSync(match[1]!);
+  const commonDirectory = realpathSync(path.resolve(
+    gitdir,
+    readFileSync(path.join(gitdir, 'commondir'), 'utf8').trim(),
+  ));
+  const backlink = realpathSync(path.resolve(
+    gitdir,
+    readFileSync(path.join(gitdir, 'gitdir'), 'utf8').trim(),
+  ));
+  return sameWindowsPath(commonDirectory, mainGit) && sameWindowsPath(backlink, gitLink)
+    ? mainGit
+    : undefined;
+}
+
+function submoduleGitWorktree(gitdir: string): string | undefined {
+  const config = readFileSync(path.join(gitdir, 'config'), 'utf8');
+  if (config.length > 65_536) return undefined;
+  let inCore = false;
+  let worktree: string | undefined;
+  for (const line of config.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('[')) {
+      inCore = /^\[\s*core\s*\]$/i.test(trimmed);
+      continue;
+    }
+    if (!inCore) continue;
+    const match = /^worktree\s*=\s*(.+?)\s*$/i.exec(trimmed);
+    if (match === null) continue;
+    if (worktree !== undefined) return undefined;
+    const candidate = match[1]!;
+    if (candidate.includes('\0') || candidate.startsWith('"') || candidate.endsWith('"')) {
+      return undefined;
+    }
+    worktree = candidate;
+  }
+  return worktree === undefined
+    ? undefined
+    : realpathSync(path.resolve(gitdir, worktree));
+}
+
+function isStructurallyBoundSubmoduleGitDirectory(gitdir: string, workspaceRoot: string): boolean {
+  if (!/[/\\]\.git[/\\]modules[/\\]/i.test(gitdir)) return false;
+  const linkedWorktree = submoduleGitWorktree(gitdir);
+  return linkedWorktree !== undefined && sameWindowsPath(linkedWorktree, workspaceRoot);
+}
+
+/** Grant only gitfile targets whose external metadata proves its workspace relationship. */
+function windowsLinkedWorktreeGitAccess(
+  workspaceRoot: string,
+): { readonly mainGitDirectory?: string; readonly gitfile?: string } {
+  if (process.platform !== 'win32') return {};
+  const gitLink = path.join(workspaceRoot, '.git');
+  try {
+    if (!lstatSync(gitLink).isFile()) return {};
+    const content = readFileSync(gitLink, 'utf8');
+    if (content.length > 4_096) return {};
+    const match = /^gitdir:\s*(.+?)\s*$/m.exec(content);
+    if (match === null) return {};
+    const gitdir = realpathSync(path.resolve(workspaceRoot, match[1]!));
+    const linkedMainGit = linkedWorktreeMainGitDirectory(gitdir, gitLink);
+    const submodule = isStructurallyBoundSubmoduleGitDirectory(gitdir, workspaceRoot);
+    if (linkedMainGit === undefined && !submodule) return {};
+    const mainGitDirectory = linkedMainGit ?? gitdir;
+    if (!statSync(mainGitDirectory).isDirectory()) return {};
+    if (!statSync(path.join(mainGitDirectory, 'HEAD')).isFile()) return {};
+    return { mainGitDirectory, gitfile: gitLink };
+  } catch (error: unknown) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return {};
+    throw error;
+  }
+}
+
 function workspaceShellSandboxConfig(
   workspaceRoot: string,
   shellTempDirectory: string | undefined,
@@ -3423,6 +3523,7 @@ function workspaceShellSandboxConfig(
     ],
     agentHome,
   );
+  const linkedGit = windowsLinkedWorktreeGitAccess(workspaceRoot);
   return withPreparedWindowsRunner({
     network: {
       allowedDomains: [],
@@ -3439,6 +3540,9 @@ function workspaceShellSandboxConfig(
           ...runtimeReadScopes,
           ...scopedAgentHomeAccess.read,
           ...(filesystemAccess?.read ?? []),
+          ...(linkedGit.mainGitDirectory !== undefined
+            ? [linkedGit.mainGitDirectory]
+            : []),
         ]),
       ],
       allowWrite: writeRoots,
@@ -3448,6 +3552,7 @@ function workspaceShellSandboxConfig(
           (directory) => path.join(agentHome, directory),
         ),
         ...existingWorkspaceDenyWrites(workspaceRoot),
+        ...(linkedGit.gitfile !== undefined ? [linkedGit.gitfile] : []),
       ],
     },
   });
@@ -5649,9 +5754,22 @@ export async function createAsrtSkillScriptRunner(input: CreateSkillScriptRunner
   }
 }
 
-function withWindowsSandboxChildEnvironment(
+let warnedUnexpectedAsrtGitEnv = false;
+
+function warnUnexpectedAsrtGitEnvShape(): void {
+  if (warnedUnexpectedAsrtGitEnv) return;
+  warnedUnexpectedAsrtGitEnv = true;
+  emitKodaXDiagnostic({
+    source: 'sandbox:git-safe-directory',
+    level: 'warn',
+    message: 'ASRT git env block had an unexpected shape; execution was rejected.',
+  });
+}
+
+export function withWindowsSandboxChildEnvironment(
   argv: readonly string[],
   environment: Readonly<NodeJS.ProcessEnv>,
+  gitTrustRoots?: readonly string[],
 ): string[] {
   const separator = argv.lastIndexOf('--');
   if (separator < 0) throw new Error('ASRT Windows wrapper omitted its child separator.');
@@ -5700,13 +5818,22 @@ function withWindowsSandboxChildEnvironment(
     injected.push('--env', `${name}=${value}`);
   }
   const result = [...wrapperPrefix, ...injected, ...argv.slice(separator)];
-  const estimate = result.reduce((size, value) => size + value.length + 3, 0);
+  let withGitTrust = result;
+  if (gitTrustRoots !== undefined) {
+    try {
+      withGitTrust = rewriteWindowsGitSafeDirectoryArgv(result, gitTrustRoots);
+    } catch (error: unknown) {
+      warnUnexpectedAsrtGitEnvShape();
+      throw error;
+    }
+  }
+  const estimate = withGitTrust.reduce((size, value) => size + value.length + 3, 0);
   if (estimate > 30_000) {
     throw new Error(
       'ASRT Windows child environment exceeds the CreateProcess command-line limit.',
     );
   }
-  return result;
+  return withGitTrust;
 }
 
 async function wrapSandboxTarget(
@@ -5763,7 +5890,17 @@ async function wrapSandboxTarget(
       undefined,
       request.cwd,
     );
-    const argv = withWindowsSandboxChildEnvironment(wrapped.argv, requestedEnv);
+    const argv = withWindowsSandboxChildEnvironment(
+      wrapped.argv,
+      requestedEnv,
+      process.platform === 'win32'
+        ? windowsGitTrustRoots(
+            request.cwd,
+            request.config.filesystem.allowWrite,
+            request.config.filesystem.allowRead,
+          )
+        : undefined,
+    );
     return {
       executable: argv[0]!,
       args: argv.slice(1),

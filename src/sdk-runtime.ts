@@ -4738,6 +4738,29 @@ function hasVersionedRuntimeCapability(
   );
 }
 
+let warnedStaleGitSafeDirectory = false;
+
+/**
+ * v4 marker check (non-gating): a daemon whose `sandboxRuntime` snapshot lacks
+ * `gitSafeDirectory` predates per-exec authorized-roots git trust. Surface one
+ * restart hint per process instead of failing the capability gate.
+ */
+function diagnoseStaleGitSafeDirectory(
+  daemonCapabilities: Readonly<Record<string, unknown>>,
+): void {
+  if (warnedStaleGitSafeDirectory) return;
+  const sandboxRuntime = daemonCapabilities.sandboxRuntime;
+  if (!isRecord(sandboxRuntime)) return;
+  if (sandboxRuntime.gitSafeDirectory === "authorized-repo-roots") return;
+  warnedStaleGitSafeDirectory = true;
+  emitKodaXDiagnostic({
+    source: "runtime.daemon.capabilities",
+    level: "warn",
+    message:
+      "Connected daemon predates sandbox git safe-directory authorization; sandboxed git may keep hitting dubious ownership on authorized roots until the daemon restarts.",
+  });
+}
+
 async function closeRejectedCapabilityUpgrade(
   runtime: KodaXDaemonRuntime,
   lease: RuntimeDaemonProcessLease,
@@ -5218,6 +5241,9 @@ async function connectKodaXRuntimeInternal(
       initialized.capabilities === undefined
         ? {}
         : requireRuntimeRecord(initialized.capabilities);
+    if (process.platform === "win32") {
+      diagnoseStaleGitSafeDirectory(daemonCapabilities);
+    }
     journalEpoch =
       typeof initialized.journalEpoch === "string"
         ? initialized.journalEpoch

@@ -51,6 +51,7 @@ const GIT_HARDENING_ARGS = [
   '-c', 'submodule.recurse=false',
 ] as const;
 const GIT_EFFECT_DRAIN_RETRY_MS = 250;
+const GIT_EFFECT_DRAIN_MAX_ATTEMPTS = 4;
 
 function resolveGitExecutable(): string {
   const executable = process.platform === 'win32' ? 'git.exe' : 'git';
@@ -120,7 +121,7 @@ function execGitFile(
         return;
       }
       let reportedDrainFailure = false;
-      while (true) {
+      for (let attempt = 1; attempt <= GIT_EFFECT_DRAIN_MAX_ATTEMPTS; attempt += 1) {
         try {
           const result = await killChildProcessTree(child);
           if (result.status !== 'unknown') {
@@ -139,8 +140,18 @@ function execGitFile(
             });
           }
         }
-        await new Promise<void>((resolve) => setTimeout(resolve, GIT_EFFECT_DRAIN_RETRY_MS));
+        if (attempt < GIT_EFFECT_DRAIN_MAX_ATTEMPTS) {
+          await new Promise<void>((resolve) => setTimeout(resolve, GIT_EFFECT_DRAIN_RETRY_MS));
+        }
       }
+      if (!reportedDrainFailure) {
+        emitKodaXDiagnostic({
+          source: 'coding:worktree-filesystem-effect',
+          level: 'warn',
+          message: 'Git process-tree drain remained unknown; the namespace fence stays active.',
+        });
+      }
+      throw new Error('Git process tree has not been proven drained.');
     };
     const invocation = gatedGitInvocation(args);
     const child = spawn(invocation.executable, [...invocation.args], {

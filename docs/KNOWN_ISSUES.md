@@ -75,6 +75,7 @@ by the focused sandbox, lineage, REPL, and coding-runtime tests.
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 300 | Medium | Resolved | Sandboxed git `safe.directory` trust set misaligned with authorized roots | v0.7.93 ASRT 0.0.65 git trust | Unreleased | 2026-08-20 | 2026-08-21 |
 | 299 | High | Resolved | Previous-boot foreign Windows ACL markers blocked SDK-owned Runtime exit settlement | v0.7.91 Runtime exit settlement | v0.7.93 | 2026-08-19 | 2026-08-19 |
 | 298 | High | Resolved | Provider SDK abort wrapper bypasses managed Stop classification and becomes a credential failure | v0.7.69 managed run-scoped credentials | v0.7.93 | 2026-08-19 | 2026-08-19 |
 | 297 | Medium | Resolved | Durable Windows cleanup failure still consumed the full orderly daemon-exit window before exact recovery | v0.7.91 Runtime exit settlement | v0.7.93 | 2026-08-19 | 2026-08-19 |
@@ -262,6 +263,56 @@ by the focused sandbox, lineage, REPL, and coding-runtime tests.
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 300: Sandboxed git `safe.directory` trust set misaligned with authorized roots
+
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.7.93 ASRT 0.0.65 git trust
+- **Fixed**: Unreleased
+- **Created**: 2026-08-20
+- **Resolved**: 2026-08-21
+
+#### Original Problem
+
+ASRT 0.0.65 already emits `safe.directory` env entries for `[cwd + session
+write grants]` (each as an exact path plus a `<dir>/*` glob, collapsing to a
+single `safe.directory=*` above eight directories). That leaves three gaps for
+Windows sandboxed git:
+
+1. Read-authorized roots outside the write grants (for example `git -C` on a
+   differently-owned main worktree the permission review admitted) are never
+   trusted, so git refuses with `detected dubious ownership`.
+2. Linked-worktree sessions fail before ownership checks: `srt-sandbox` has no
+   read ACE on the main repository's `.git` storage, which was previously
+   misdiagnosed as the same CVE-2022-24765 interception.
+3. Sessions with more than eight write roots (for example a home-directory
+   workspace after sibling expansion) run with `safe.directory=*`, widening git
+   trust to every repository the sandbox user can read.
+
+Older daemons that predate ASRT 0.0.65 emit no trust entries at all.
+
+#### Root Cause
+
+The trust set is derived inside ASRT from the write-grant stamp only; KodaX's
+per-command authorized read roots and linked-worktree gitdir needs never reach
+it, and KodaX's own env merge path cannot inject `GIT_CONFIG_COUNT` entries
+because the argv reassembly silently drops controlled names.
+
+#### Resolution
+
+KodaX now replaces the wrapper's entire `GIT_CONFIG_*` set at argv reassembly,
+removing wildcard trust even when no authorized root survives and rejecting
+malformed shapes. The exact eight-root budget prioritizes the cwd and
+repo-bearing read grants before ordinary write roots. Broker and host paths use
+one implementation, with a production-minified broker execution regression.
+
+Linked worktrees must prove the main `.git` through `commondir` and `gitdir`
+backlinks. Submodules must prove the canonical workspace through
+`core.worktree`; arbitrary real `.git` targets and ambiguous nested paths do
+not receive read ACEs. The workspace gitfile remains write-denied, and the v4
+capability exposes `gitSafeDirectory: authorized-repo-roots` for stale-daemon
+diagnosis.
 
 ### 299: Previous-boot foreign Windows ACL markers blocked SDK-owned Runtime exit settlement
 
@@ -12794,11 +12845,29 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 178 (27 Open, 151 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 179 (27 Open, 152 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-08-21: Issue 300 resolved
+- Replaced ASRT wildcard git trust with a bounded authorized-root set, including
+  repo-bearing read grants that remain prioritized under the eight-root cap.
+- Added verified linked-worktree and submodule metadata relationships, a
+  minifier-safe shared broker implementation, and fail-closed malformed-env
+  handling.
+
+### 2026-08-20: Issue 300 opened
+- Documented the misaligned sandboxed git trust set: read-authorized roots are
+  never emitted as `safe.directory`, linked-worktree sessions fail on missing
+  `<main>/.git` read access (not on ownership), and more than eight write roots
+  collapse ASRT's emission to `safe.directory=*`.
+- Fix in progress: per-exec argv-level takeover of the `GIT_CONFIG_*` set with
+  the exact authorized-root list (never `*`), linked-worktree gitdir read grants
+  plus gitfile write guards, and a `gitSafeDirectory` v4 marker field for stale
+  daemon detection. Detection: a daemon capability snapshot whose
+  `sandboxRuntime` object lacks `gitSafeDirectory` predates the fix.
 
 ### 2026-08-19: Issues 297, 298, and 299 resolved (v0.7.93)
 - Ended the 170-second orderly Windows exit wait when the exact owner already

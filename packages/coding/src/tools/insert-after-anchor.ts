@@ -55,6 +55,7 @@ export async function toolInsertAfterAnchor(
       const nextContent = `${content.slice(0, insertion.index)}${prepared}${content.slice(insertion.index)}`;
 
       await writeTextFileForMutation(snapshot, nextContent, false, ctx, content);
+      ctx.contentHashCache?.recordWrite(filePath, nextContent);
       // FEATURE_177 v0.7.42 — drop the read-state cache so the next Read
       // sees the post-insert content.
       ctx.readFileStateCache?.forget(filePath);

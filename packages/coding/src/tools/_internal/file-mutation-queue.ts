@@ -729,15 +729,6 @@ export async function withHostFileSystemNamespaceMutation<T>(
   }
 }
 
-/** Record the latest restorable mutation, including repeat edits to one path. */
-export function recordFileBackup(
-  backups: Map<string, string>,
-  filePath: string,
-  content: string,
-): void {
-  recordResolvedFileBackup(backups, resolveFileBackupPath(filePath), content);
-}
-
 /** Capture a stable canonical backup key before a concurrent sink commits. */
 export function resolveFileBackupPath(filePath: string): string {
   const backupPath = canonicalizeAgentHomePolicyPath(filePath);

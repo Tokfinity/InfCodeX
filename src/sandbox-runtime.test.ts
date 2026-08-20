@@ -16,9 +16,12 @@ import {
 import { link, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { PassThrough } from 'node:stream';
+import { fileURLToPath } from 'node:url';
 
 import { readProcessStartIdentity, SkillRegistry } from '@kodax-ai/agent';
+import { build } from 'esbuild';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   _resetFileSystemEffectLeasesForTests,
@@ -853,9 +856,12 @@ import {
   runKodaXSandboxed,
   runAsrtBrokerProcess,
   resetAsrtWorkspaceSessionsForTest,
+  rewriteWindowsGitSafeDirectoryArgv,
   sandboxRuntimeCapability,
   sandboxSetupGuidance,
   shutdownAsrtWorkspaceSessions,
+  windowsGitTrustRoots,
+  withWindowsSandboxChildEnvironment,
 } from './sandbox-runtime.js';
 
 const tempRoots: string[] = [];
@@ -6051,6 +6057,421 @@ describe('ASRT workspace shell adapter', () => {
       version: 1,
       state: 'not_selected',
     });
+  });
+});
+
+interface BrokerGitHelpers {
+  readonly rewriteWindowsGitSafeDirectoryArgv: (
+    argv: readonly string[],
+    trustRoots: readonly string[],
+  ) => string[];
+  readonly windowsGitTrustRoots: (input: {
+    readonly cwd?: string;
+    readonly config: {
+      readonly filesystem: {
+        readonly allowWrite?: readonly string[];
+        readonly allowRead?: readonly string[];
+      };
+    };
+  }) => string[];
+}
+
+async function buildMinifiedWindowsGitBrokerHelpers(): Promise<BrokerGitHelpers> {
+  const moduleUrl = new URL('./windows-git-sandbox.ts', import.meta.url);
+  const result = await build({
+    stdin: {
+      contents: readFileSync(moduleUrl, 'utf8'),
+      loader: 'ts',
+      resolveDir: path.dirname(fileURLToPath(moduleUrl)),
+      sourcefile: 'windows-git-sandbox.ts',
+    },
+    bundle: true,
+    platform: 'node',
+    target: 'node18',
+    format: 'cjs',
+    minify: true,
+    keepNames: true,
+    write: false,
+    logLevel: 'silent',
+  });
+  const bundledModule: { exports: unknown } = { exports: {} };
+  Function('require', 'module', 'exports', result.outputFiles[0]!.text)(
+    createRequire(import.meta.url),
+    bundledModule,
+    bundledModule.exports,
+  );
+  const api = bundledModule.exports as { windowsGitBrokerHelpersSource: () => string };
+  const helperSource = api.windowsGitBrokerHelpersSource();
+  return Function(
+    'realpathSync',
+    'statSync',
+    'path',
+    `${helperSource}\nreturn { windowsGitTrustRoots, rewriteWindowsGitSafeDirectoryArgv };`,
+  )(realpathSync, statSync, path) as BrokerGitHelpers;
+}
+
+async function capturedSandboxReadRoots(
+  workspaceRoot: string,
+  toolCallId: string,
+): Promise<readonly string[]> {
+  const prepared = await createAsrtShellSandbox({
+    workspaceRoot,
+    shouldSandbox: () => true,
+  }).prepare({
+    toolCallId,
+    toolInput: { command: 'git status' },
+    command: 'git status',
+    cwd: workspaceRoot,
+    env: { PATH: process.env.PATH },
+  });
+  if (!prepared) throw new Error('expected a sandbox invocation');
+  try {
+    const config = capturedWorkspaceSessionConfigs.at(-1) as {
+      readonly filesystem: { readonly allowRead: readonly string[] };
+    };
+    return config.filesystem.allowRead;
+  } finally {
+    await prepared.cleanup();
+  }
+}
+
+describe('Windows git safe.directory argv takeover', () => {
+  const envAssignments = (result: readonly string[]): string[] => {
+    const assignments: string[] = [];
+    for (let index = 0; index < result.length; index += 1) {
+      if (result[index] === '--env' && index + 1 < result.length) {
+        assignments.push(result[index + 1]!);
+      }
+    }
+    return assignments;
+  };
+
+  it.runIf(process.platform === 'win32')(
+    'derives bounded trust roots from the cwd, write roots, and repo-bearing read roots',
+    async () => {
+      const base = await mkdtemp(path.join(os.tmpdir(), 'kodax-git-trust-'));
+      tempRoots.push(base);
+      const repo = path.join(base, 'repo');
+      const plain = path.join(base, 'plain');
+      const missing = path.join(base, 'missing');
+      await mkdir(repo);
+      await mkdir(path.join(repo, '.git'));
+      await mkdir(plain);
+      const expected = realpathSync(repo).replaceAll('\\', '/').replace(/\/+$/, '');
+      expect(windowsGitTrustRoots(repo, [repo, missing], [plain, repo])).toEqual([expected]);
+      const many: string[] = [];
+      for (let index = 0; index < 10; index += 1) {
+        const root = path.join(base, `root-${index}`);
+        await mkdir(root);
+        many.push(root);
+      }
+      expect(windowsGitTrustRoots(undefined, many, [])).toHaveLength(8);
+      expect(windowsGitTrustRoots(plain, many, [repo])).toContain(expected);
+    },
+  );
+
+  it('rewrites the ASRT directory collapse to exact authorized roots', () => {
+    const argv = [
+      'wrapper.exe', 'exec', '--quiet',
+      '--env', 'Path=wrapper-path',
+      '--env', 'GIT_CONFIG_COUNT=2',
+      '--env', 'GIT_CONFIG_KEY_0=safe.directory',
+      '--env', 'GIT_CONFIG_VALUE_0=*',
+      '--env', 'GIT_CONFIG_KEY_1=http.schannelUseSSLCAInfo',
+      '--env', 'GIT_CONFIG_VALUE_1=0',
+      '--', 'git.exe', 'status',
+    ];
+    const rewritten = rewriteWindowsGitSafeDirectoryArgv(argv, ['C:/ws/main', 'C:/ws/other']);
+    expect(envAssignments(rewritten)).toEqual([
+      'Path=wrapper-path',
+      'GIT_CONFIG_KEY_0=safe.directory',
+      'GIT_CONFIG_VALUE_0=C:/ws/main',
+      'GIT_CONFIG_KEY_1=safe.directory',
+      'GIT_CONFIG_VALUE_1=C:/ws/main/*',
+      'GIT_CONFIG_KEY_2=safe.directory',
+      'GIT_CONFIG_VALUE_2=C:/ws/other',
+      'GIT_CONFIG_KEY_3=safe.directory',
+      'GIT_CONFIG_VALUE_3=C:/ws/other/*',
+      'GIT_CONFIG_KEY_4=http.schannelUseSSLCAInfo',
+      'GIT_CONFIG_VALUE_4=0',
+      'GIT_CONFIG_COUNT=5',
+    ]);
+    expect(rewritten.slice(rewritten.lastIndexOf('--'))).toEqual(['--', 'git.exe', 'status']);
+  });
+
+  it('appends the trust set when the vendored ASRT emitted no git env', () => {
+    const argv = [
+      'wrapper.exe', 'exec', '--quiet',
+      '--env', 'Path=wrapper-path',
+      '--', 'git.exe', 'status',
+    ];
+    const rewritten = rewriteWindowsGitSafeDirectoryArgv(argv, ['C:/ws/main']);
+    const separator = rewritten.lastIndexOf('--');
+    expect(rewritten.slice(0, separator)).toEqual([
+      'wrapper.exe', 'exec', '--quiet',
+      '--env', 'Path=wrapper-path',
+      '--env', 'GIT_CONFIG_KEY_0=safe.directory',
+      '--env', 'GIT_CONFIG_VALUE_0=C:/ws/main',
+      '--env', 'GIT_CONFIG_KEY_1=safe.directory',
+      '--env', 'GIT_CONFIG_VALUE_1=C:/ws/main/*',
+      '--env', 'GIT_CONFIG_COUNT=2',
+    ]);
+    expect(rewritten.slice(separator)).toEqual(['--', 'git.exe', 'status']);
+  });
+
+  it('removes ASRT wildcard trust when no authorized root survives', () => {
+    const argv = [
+      'wrapper.exe',
+      '--env', 'GIT_CONFIG_COUNT=2',
+      '--env', 'GIT_CONFIG_KEY_0=safe.directory',
+      '--env', 'GIT_CONFIG_VALUE_0=*',
+      '--env', 'GIT_CONFIG_KEY_1=http.schannelUseSSLCAInfo',
+      '--env', 'GIT_CONFIG_VALUE_1=0',
+      '--', 'git.exe', 'status',
+    ];
+
+    expect(envAssignments(withWindowsSandboxChildEnvironment(argv, {}, []))).toEqual([
+      'GIT_CONFIG_KEY_0=http.schannelUseSSLCAInfo',
+      'GIT_CONFIG_VALUE_0=0',
+      'GIT_CONFIG_COUNT=1',
+    ]);
+  });
+
+  it('fails closed on unexpected ASRT git env shapes', () => {
+    const incomplete = [
+      'wrapper.exe',
+      '--env', 'GIT_CONFIG_COUNT=2',
+      '--env', 'GIT_CONFIG_KEY_0=safe.directory',
+      '--env', 'GIT_CONFIG_VALUE_0=*',
+      '--', 'git.exe',
+    ];
+    expect(() => withWindowsSandboxChildEnvironment(incomplete, {}, ['C:/ws']))
+      .toThrow('unexpected shape');
+    const duplicatedCount = [
+      'wrapper.exe',
+      '--env', 'GIT_CONFIG_COUNT=1',
+      '--env', 'GIT_CONFIG_COUNT=1',
+      '--', 'git.exe',
+    ];
+    expect(() => withWindowsSandboxChildEnvironment(duplicatedCount, {}, ['C:/ws']))
+      .toThrow('unexpected shape');
+  });
+
+  it('ignores git env names on the child side of the separator', () => {
+    const argv = [
+      'wrapper.exe',
+      '--env', 'Path=wrapper-path',
+      '--', 'child.exe',
+      '--env', 'GIT_CONFIG_COUNT=9',
+      '--env', 'GIT_CONFIG_VALUE_0=child-owned',
+    ];
+    const rewritten = rewriteWindowsGitSafeDirectoryArgv(argv, ['C:/ws']);
+    const separator = rewritten.lastIndexOf('--');
+    expect(rewritten.slice(separator)).toEqual(argv.slice(argv.lastIndexOf('--')));
+    expect(envAssignments(rewritten.slice(0, separator))).toContain('GIT_CONFIG_COUNT=2');
+  });
+
+  it('injects the trust set through the wrapper environment path', () => {
+    const wrapped = [
+      process.execPath, 'exec', '--quiet',
+      '--env', 'Path=wrapper-path',
+      '--env', 'PATHEXT=.EXE',
+      '--env', 'WRAPPED_ONLY=yes',
+      '--', process.execPath, '-e', 'code',
+    ];
+    const result = withWindowsSandboxChildEnvironment(wrapped, {
+      USERPROFILE: 'C:/Users/admin',
+      PATHEXT: '.COM',
+    }, ['C:/ws/main']);
+    const assignments = envAssignments(result);
+    expect(assignments).toContain('USERPROFILE=C:/Users/admin');
+    expect(assignments).toContain('PATHEXT=.COM');
+    expect(assignments).toContain('WRAPPED_ONLY=yes');
+    expect(assignments).toContain('GIT_CONFIG_VALUE_0=C:/ws/main');
+    expect(assignments).toContain('GIT_CONFIG_VALUE_1=C:/ws/main/*');
+    expect(result.slice(result.lastIndexOf('--'))).toEqual(['--', process.execPath, '-e', 'code']);
+  });
+
+  it.runIf(process.platform === 'win32')(
+    'grants a linked worktree read access to the main .git and denies gitfile edits',
+    async () => {
+      const base = await mkdtemp(path.join(os.tmpdir(), 'kodax-git-worktree-'));
+      tempRoots.push(base);
+      const mainRepo = path.join(base, 'main-repo');
+      const worktree = path.join(base, 'linked-wt');
+      const mainGit = path.join(mainRepo, '.git');
+      await mkdir(path.join(mainGit, 'worktrees', 'linked-wt'), { recursive: true });
+      await writeFile(path.join(mainGit, 'HEAD'), 'ref: refs/heads/main\n', 'utf8');
+      await mkdir(worktree);
+      const gitfile = path.join(worktree, '.git');
+      await writeFile(gitfile, `gitdir: ${mainGit}\\worktrees\\linked-wt\n`, 'utf8');
+      await writeFile(
+        path.join(mainGit, 'worktrees', 'linked-wt', 'gitdir'),
+        `${gitfile}\n`,
+        'utf8',
+      );
+      await writeFile(
+        path.join(mainGit, 'worktrees', 'linked-wt', 'commondir'),
+        '../..\n',
+        'utf8',
+      );
+      const sandbox = createAsrtShellSandbox({
+        workspaceRoot: worktree,
+        shouldSandbox: () => true,
+      });
+      const hostileWorkspace = path.join(base, 'hostile-wt');
+      const innocentDirectory = path.join(base, 'innocent-dir');
+      await mkdir(innocentDirectory);
+      await mkdir(hostileWorkspace);
+      await writeFile(
+        path.join(hostileWorkspace, '.git'),
+        `gitdir: ${innocentDirectory}\n`,
+        'utf8',
+      );
+      const prepared = await sandbox.prepare({
+        toolCallId: 'linked-worktree-git',
+        toolInput: { command: 'git status' },
+        command: 'git status',
+        cwd: worktree,
+        env: { PATH: process.env.PATH },
+      });
+      if (!prepared) throw new Error('expected a linked-workspace invocation');
+      try {
+        expect(capturedWorkspaceSessionConfigs).toHaveLength(1);
+        const config = capturedWorkspaceSessionConfigs[0] as {
+          readonly filesystem: {
+            readonly allowRead: readonly string[];
+            readonly denyWrite: readonly string[];
+          };
+        };
+        expect(config.filesystem.allowRead).toContain(path.resolve(mainGit));
+        expect(config.filesystem.denyWrite).toContain(path.resolve(gitfile));
+        expect(windowsGitTrustRoots(
+          worktree,
+          [worktree],
+          config.filesystem.allowRead,
+        )).toContain(realpathSync(mainGit).replaceAll('\\', '/'));
+      } finally {
+        await prepared.cleanup();
+      }
+      const hostileSandbox = createAsrtShellSandbox({
+        workspaceRoot: hostileWorkspace,
+        shouldSandbox: () => true,
+      });
+      const hostilePrepared = await hostileSandbox.prepare({
+        toolCallId: 'hostile-gitfile-rejected',
+        toolInput: { command: 'git status' },
+        command: 'git status',
+        cwd: hostileWorkspace,
+        env: { PATH: process.env.PATH },
+      });
+      if (!hostilePrepared) throw new Error('expected a hostile-workspace invocation');
+      try {
+        const hostileConfig = capturedWorkspaceSessionConfigs.at(-1) as {
+          readonly filesystem: {
+            readonly allowRead: readonly string[];
+          };
+        };
+        expect(hostileConfig.filesystem.allowRead).not.toContain(
+          path.resolve(innocentDirectory),
+        );
+      } finally {
+        await hostilePrepared.cleanup();
+      }
+
+      const foreignRepo = path.join(base, 'foreign-repo');
+      const foreignGit = path.join(foreignRepo, '.git');
+      const forgedWorkspace = path.join(base, 'forged-wt');
+      await mkdir(foreignGit, { recursive: true });
+      await writeFile(path.join(foreignGit, 'HEAD'), 'ref: refs/heads/main\n', 'utf8');
+      await mkdir(forgedWorkspace);
+      await writeFile(path.join(forgedWorkspace, '.git'), `gitdir: ${foreignGit}\n`, 'utf8');
+      const forgedSandbox = createAsrtShellSandbox({
+        workspaceRoot: forgedWorkspace,
+        shouldSandbox: () => true,
+      });
+      const forgedPrepared = await forgedSandbox.prepare({
+        toolCallId: 'foreign-real-gitdir-rejected',
+        toolInput: { command: 'git status' },
+        command: 'git status',
+        cwd: forgedWorkspace,
+        env: { PATH: process.env.PATH },
+      });
+      if (!forgedPrepared) throw new Error('expected a forged-workspace invocation');
+      try {
+        const forgedConfig = capturedWorkspaceSessionConfigs.at(-1) as {
+          readonly filesystem: { readonly allowRead: readonly string[] };
+        };
+        expect(forgedConfig.filesystem.allowRead).not.toContain(path.resolve(foreignGit));
+      } finally {
+        await forgedPrepared.cleanup();
+      }
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'binds nested submodule metadata through its core.worktree backlink',
+    async () => {
+      const base = await mkdtemp(path.join(os.tmpdir(), 'kodax-nested-submodule-'));
+      tempRoots.push(base);
+      const superproject = path.join(base, 'super');
+      const workspace = path.join(superproject, 'A', 'B');
+      const forgedWorkspace = path.join(superproject, 'A', 'modules', 'B');
+      const gitdir = path.join(superproject, '.git', 'modules', 'A', 'modules', 'B');
+      await mkdir(workspace, { recursive: true });
+      await mkdir(forgedWorkspace, { recursive: true });
+      await mkdir(gitdir, { recursive: true });
+      await writeFile(path.join(gitdir, 'HEAD'), 'ref: refs/heads/main\n', 'utf8');
+      await writeFile(
+        path.join(gitdir, 'config'),
+        `[core]\n\tworktree = ${path.relative(gitdir, workspace)}\n`,
+        'utf8',
+      );
+      await writeFile(path.join(workspace, '.git'), `gitdir: ${gitdir}\n`, 'utf8');
+      await writeFile(path.join(forgedWorkspace, '.git'), `gitdir: ${gitdir}\n`, 'utf8');
+
+      expect(await capturedSandboxReadRoots(workspace, 'nested-submodule-valid'))
+        .toContain(path.resolve(gitdir));
+      expect(await capturedSandboxReadRoots(forgedWorkspace, 'nested-submodule-forged'))
+        .not.toContain(path.resolve(gitdir));
+    },
+  );
+
+  it('reports the v4 capability with the authorized-repo-roots marker', () => {
+    const capability = sandboxRuntimeCapability();
+    expect(capability.version).toBe(4);
+    expect(capability.gitSafeDirectory).toBe('authorized-repo-roots');
+    expect(capability.controls).toEqual([
+      'filesystem', 'network', 'environment', 'timeout', 'output',
+    ]);
+  });
+
+  it('executes the broker helpers after the production minify settings', async () => {
+    const base = await mkdtemp(path.join(os.tmpdir(), 'kodax-git-broker-minify-'));
+    tempRoots.push(base);
+    const cwd = path.join(base, 'cwd');
+    const repo = path.join(base, 'review-repo');
+    await mkdir(cwd);
+    await mkdir(path.join(repo, '.git'), { recursive: true });
+    const writes: string[] = [];
+    for (let index = 0; index < 9; index += 1) {
+      const root = path.join(base, `write-${index}`);
+      await mkdir(root);
+      writes.push(root);
+    }
+    const broker = await buildMinifiedWindowsGitBrokerHelpers();
+    expect(broker.windowsGitTrustRoots({
+      cwd,
+      config: { filesystem: { allowWrite: writes, allowRead: [repo] } },
+    })).toEqual(windowsGitTrustRoots(cwd, writes, [repo]));
+    const wildcard = ['wrapper', '--env', 'GIT_CONFIG_COUNT=1',
+      '--env', 'GIT_CONFIG_KEY_0=safe.directory', '--env', 'GIT_CONFIG_VALUE_0=*',
+      '--', 'git.exe'];
+    expect(broker.rewriteWindowsGitSafeDirectoryArgv(wildcard, []))
+      .toEqual(rewriteWindowsGitSafeDirectoryArgv(wildcard, []));
+    expect(() => broker.rewriteWindowsGitSafeDirectoryArgv([
+      'wrapper', '--env', 'GIT_CONFIG_COUNT=1', '--', 'git.exe',
+    ], [])).toThrow('unexpected shape');
   });
 });
 

@@ -8,6 +8,19 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Scheduled Runtime daemon shutdown now rejects the public host lifecycle when
+  cleanup fails, while retaining an internal rejection observer so embedded
+  hosts do not emit an unhandled rejection. CLI stop persists and reports the
+  matching failed shutdown outcome instead of claiming a safe stop.
+- Worktree Git process-tree drain now returns a bounded error when completion
+  remains unprovable, while leaving the namespace lease fail-closed. Successful
+  `insert_after_anchor` mutations also refresh the content-hash cache so the
+  next edit is not falsely rejected as stale.
+- Windows sandbox Git trust now removes ASRT wildcard `safe.directory` entries
+  even when no authorized root survives, rejects malformed `GIT_CONFIG_*`
+  shapes, and generates broker and bundled rewriting from one implementation.
+  Linked-worktree metadata must prove its backlink before the main `.git` earns
+  read trust; repository-bearing metadata read roots join the exact trust set.
 - Long-running and background Bash processes no longer block Runtime `write`,
   `edit`, `multi_edit`, `insert_after_anchor`, or `undo` solely because a shell
   lease is alive. Those tools now perform both snapshot and identity-aware

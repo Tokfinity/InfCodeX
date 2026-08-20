@@ -157,7 +157,7 @@ _Archive Created: 2026-05-19_
 
 | ID | Title | Released | Design | Notes |
 |---|---|---|---|---|
-| `035` | MCP Capability Provider | `v0.7.15` | [v0.8.0](features/v0.8.5.md#feature_035-mcp-capability-provider) | — |
+| `035` | MCP Capability Provider | `v0.7.15` | [v0.8.0](features/v0.9.5.md#feature_035-mcp-capability-provider) | — |
 | `045` | Provider Stream Resilience and Graceful Recovery | `v0.7.15` (unreleased) | [v0.7.15](features/v0.7.15.md#feature_045-provider-stream-resilience-and-graceful-recovery) | — |
 
 ## v0.7.16 (2 features)
@@ -171,7 +171,7 @@ _Archive Created: 2026-05-19_
 
 | ID | Title | Released | Design | Notes |
 |---|---|---|---|---|
-| `046` | AMA Handoff Integrity and Final-Answer Convergence | `v0.7.18` | [v0.8.0](features/v0.8.5.md#feature_046-ama-handoff-integrity-and-final-answer-convergence) | — |
+| `046` | AMA Handoff Integrity and Final-Answer Convergence | `v0.7.18` | [v0.8.0](features/v0.9.5.md#feature_046-ama-handoff-integrity-and-final-answer-convergence) | — |
 | `064` | Multi-Provider Cost Observatory | `v0.7.18` | [v0.7.18](features/v0.7.18.md#feature_064-multi-provider-cost-observatory) | — |
 | `065` | MCP Protocol Maturity | `v0.7.18` | [v0.7.18](features/v0.7.18.md#feature_065-mcp-protocol-maturity) | — |
 | `066` | Permission Hardening | `v0.7.18` | [v0.7.18](features/v0.7.18.md#feature_066-permission-hardening) | — |
@@ -312,11 +312,11 @@ _Archive Created: 2026-05-19_
 
 | ID | Title | Released | Design | Notes |
 |---|---|---|---|---|
-| `044` | Durable Compression Anchors and Artifact Recall | `v0.8.0` (unreleased) | [v0.8.0](features/v0.8.5.md#feature_044-durable-compression-anchors-and-artifact-recall) | — |
-| `048` | Sectionized Prompt Assembly and Dynamic Capability Truth | `v0.8.0` (unreleased) | [v0.8.0](features/v0.8.5.md#feature_048-sectionized-prompt-assembly-and-dynamic-capability-truth) | — |
-| `049` | First-Class Search, Fetch, Code Search, and Semantic Retrieval | `v0.8.0` (unreleased) | [v0.8.0](features/v0.8.5.md#feature_049-first-class-search-fetch-code-search-and-semantic-retrieval) | — |
-| `050` | Prompt Contracts, Snapshots, and Regression Evaluation | `v0.8.0` (unreleased) | [v0.8.0](features/v0.8.5.md#feature_050-prompt-contracts-snapshots-and-regression-evaluation) | — |
-| `055` | REPL Substrate Hardening and Summary-Only AMA UX | `v0.8.0` (unreleased) | [v0.8.0](features/v0.8.5.md#feature_055-repl-substrate-hardening-and-summary-only-ama-ux) | — |
+| `044` | Durable Compression Anchors and Artifact Recall | `v0.8.0` (unreleased) | [v0.8.0](features/v0.9.5.md#feature_044-durable-compression-anchors-and-artifact-recall) | — |
+| `048` | Sectionized Prompt Assembly and Dynamic Capability Truth | `v0.8.0` (unreleased) | [v0.8.0](features/v0.9.5.md#feature_048-sectionized-prompt-assembly-and-dynamic-capability-truth) | — |
+| `049` | First-Class Search, Fetch, Code Search, and Semantic Retrieval | `v0.8.0` (unreleased) | [v0.8.0](features/v0.9.5.md#feature_049-first-class-search-fetch-code-search-and-semantic-retrieval) | — |
+| `050` | Prompt Contracts, Snapshots, and Regression Evaluation | `v0.8.0` (unreleased) | [v0.8.0](features/v0.9.5.md#feature_050-prompt-contracts-snapshots-and-regression-evaluation) | — |
+| `055` | REPL Substrate Hardening and Summary-Only AMA UX | `v0.8.0` (unreleased) | [v0.8.0](features/v0.9.5.md#feature_055-repl-substrate-hardening-and-summary-only-ama-ux) | — |
 
 ---
 
@@ -327,7 +327,7 @@ These rows were removed from `FEATURE_LIST.md` because they are released, cancel
 | ID | Title | Final status | Version / slot | Source |
 |---|---|---|---|---|
 | `057` | Claude-Aligned TUI Substrate Refactor | Completed / Released | `v0.7.30` | [v0.7.30](features/v0.7.30.md) |
-| `059` | Managed Task Structured Protocol V2 | Absorbed | `v0.8.0` | [v0.8.0](features/v0.8.5.md) |
+| `059` | Managed Task Structured Protocol V2 | Absorbed | `v0.8.0` | [v0.8.0](features/v0.9.5.md) |
 | `060` | Claude-Aligned Bounded-Memory Runtime and OOM Hardening | Completed / Released | `v0.7.30` | [v0.7.30](features/v0.7.30.md) |
 | `063` | Extensible Hook & Automation Substrate | Cancelled | `v0.7.18` | [v0.7.18](features/v0.7.18.md) |
 | `073` | Reference-Style Lineage and Island Model Removal | Cancelled | `v0.7.25` | [v0.7.25](features/v0.7.25.md) |
@@ -361,7 +361,7 @@ These rows were removed from `FEATURE_LIST.md` because they are released, cancel
 | `130` | Provider Retry-After Header + Exponential Backoff | Completed / Released | `v0.7.36` | [v0.7.36](features/v0.7.36.md) |
 | `131` | Tool Safety Patch Pack | Completed / Released | `v0.7.36` | [v0.7.36](features/v0.7.36.md) |
 | `132` | LSP Native Integration | Completed / Released | `v0.7.47` | [v0.7.47](features/v0.7.47.md) |
-| `137` | RPC Headless Protocol | Absorbed | `v0.8.0` | Merged into `FEATURE_030`; JSON-Line stdin/stdout bridge details moved to [v0.8.0](features/v0.8.5.md#feature_030-multi-surface-delivery) |
+| `137` | RPC Headless Protocol | Absorbed | `v0.8.0` | Merged into `FEATURE_030`; JSON-Line stdin/stdout bridge details moved to [v0.8.0](features/v0.9.5.md#feature_030-multi-surface-delivery) |
 | `141` | Transcript Inline Diff Renderer | Completed / Released | `v0.7.37` | [v0.7.37](features/v0.7.37.md) |
 | `142` | Package Boundary Cleanup | Completed / Released | `v0.7.35.1` | [v0.7.35](features/v0.7.35.md) |
 | `143` | Skill UX Upgrade + Prompt Overlay Fix | Completed / Released | `v0.7.36` | [v0.7.36](features/v0.7.36.md) |
@@ -436,8 +436,8 @@ The v0.9.5.md filename was repurposed for the v0.8.0/v0.8.5 vision document (F00
 # v0.9.5 Feature 设计
 
 > **Archived (2026-04-19)**:
-> This version milestone has been compressed into [v0.8.0](./v0.8.5.md).
-> `FEATURE_055` (the only remaining feature here) has moved to [v0.8.0: FEATURE_055](./v0.8.5.md#feature_055-repl-substrate-hardening-and-summary-only-ama-ux).
+> This version milestone has been compressed into [v0.8.0](./v0.9.5.md).
+> `FEATURE_055` (the only remaining feature here) has moved to [v0.8.0: FEATURE_055](./v0.9.5.md#feature_055-repl-substrate-hardening-and-summary-only-ama-ux).
 > Features `031 / 042 / 043 / 053` were previously moved to [v0.7.30](./v0.7.30.md).
 > This document is retained as a historical staging reference only and should no longer be treated as an active roadmap target.
 
@@ -456,7 +456,7 @@ The v0.9.5.md filename was repurposed for the v0.8.0/v0.8.5 vision document (F00
 
 > Migration note (2026-04-04):
 > `FEATURE_031 / 042 / 043 / 053` are now planned in [v0.7.30](./v0.7.30.md).
-> `FEATURE_055` is now in [v0.8.0](./v0.8.5.md#feature_055-repl-substrate-hardening-and-summary-only-ama-ux).
+> `FEATURE_055` is now in [v0.8.0](./v0.9.5.md#feature_055-repl-substrate-hardening-and-summary-only-ama-ux).
 > At the time of this migration, `v0.9.0` no longer contained any active
 > features. It was independently reactivated for `FEATURE_262` on 2026-07-12.
 ## 中文导读

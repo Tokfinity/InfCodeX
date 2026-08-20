@@ -11,13 +11,13 @@ import {
 import { normalizePathForKey } from './_internal/file-mutation-queue.js';
 import { withTextFileMutation, writeTextFileForMutation } from './_internal/text-file-mutation.js';
 
-export async function toolUndo(_input: Record<string, unknown>, ctx: KodaXToolExecutionContext): Promise<string> {
+export async function toolUndo(input: Record<string, unknown>, ctx: KodaXToolExecutionContext): Promise<string> {
   const backups = ctx.backups;
   if (backups.size > 0) {
     const entries = [...backups.entries()];
     const [filePath] = entries[entries.length - 1]!;
     let restored = false;
-    await withTextFileMutation(filePath, 'undo', _input, ctx, async (snapshot) => {
+    await withTextFileMutation(filePath, 'undo', input, ctx, async (snapshot) => {
       const content = backups.get(filePath);
       if (content === undefined) return;
       const currentIdentity = canonicalizeAgentHomePolicyPath(filePath);

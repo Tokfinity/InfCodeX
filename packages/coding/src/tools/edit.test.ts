@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { KodaXToolExecutionContext } from '../types.js';
+import { createContentHashCache } from '../multi-instance/content-hash-cache.js';
 import { inspectEditFailure, parseEditToolError, toolEdit } from './edit.js';
 import { toolInsertAfterAnchor } from './insert-after-anchor.js';
 
@@ -221,6 +222,29 @@ describe('insert_after_anchor tool', () => {
 
     expect(result).toContain('Content inserted after anchor');
     await expect(fs.readFile(filePath, 'utf8')).resolves.toContain('FEATURE_054 body');
+  });
+
+  it('refreshes the stale-write hash for the next edit', async () => {
+    const filePath = path.join(tempDir, 'hash-sequence.md');
+    const original = '## Anchor\nold body\n';
+    await fs.writeFile(filePath, original, 'utf8');
+    const contentHashCache = createContentHashCache();
+    contentHashCache.recordRead(filePath, original);
+    ctx.contentHashCache = contentHashCache;
+
+    await toolInsertAfterAnchor({
+      path: filePath,
+      anchor: '## Anchor',
+      content: '\ninserted body\n',
+    }, ctx);
+    const result = await toolEdit({
+      path: filePath,
+      old_string: 'old body',
+      new_string: 'new body',
+    }, ctx);
+
+    expect(result).toContain('File edited:');
+    await expect(fs.readFile(filePath, 'utf8')).resolves.toContain('new body');
   });
 
   it('keeps insertion after the full line when the anchor is only a unique prefix', async () => {

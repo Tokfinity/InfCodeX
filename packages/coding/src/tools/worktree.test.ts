@@ -115,6 +115,8 @@ const TEST_AGENT_HOME = path.join(os.tmpdir(), `kodax-worktree-agent-home-${proc
 
 afterEach(async () => {
   setMockExecFileImpl(null);
+  vi.mocked(containWindowsEffectProcess).mockClear();
+  vi.mocked(killChildProcessTree).mockClear();
   vi.mocked(containWindowsEffectProcess).mockImplementation(async (pid: number) => ({
     drained: Promise.resolve(),
     supervisorPid: pid,
@@ -304,6 +306,23 @@ describe('toolWorktreeCreate', () => {
     releaseFirstAdd?.();
     await Promise.all([first, second]);
     expect(addCalls).toBe(2);
+  });
+
+  it('rejects instead of waiting forever when process-tree drain remains unknown', async () => {
+    vi.mocked(containWindowsEffectProcess).mockResolvedValue(undefined as never);
+    vi.mocked(killChildProcessTree).mockResolvedValue({ status: 'unknown' });
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const deadline = new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error('worktree drain remained pending')), 5_000);
+      });
+      await expect(Promise.race([
+        toolWorktreeCreate({ branch_name: 'unknown-process-tree' }, mockContext),
+        deadline,
+      ])).rejects.toThrow(/process tree has not been proven drained/i);
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
+    }
   });
 
   it.runIf(process.platform === 'win32')(
