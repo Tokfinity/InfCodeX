@@ -13,14 +13,19 @@ import {
   writeFileSync,
   writeSync,
 } from 'node:fs';
-import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { link, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 
 import { readProcessStartIdentity, SkillRegistry } from '@kodax-ai/agent';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { acquireFileSystemMutationLease } from '../packages/coding/src/tools/_internal/file-mutation-queue.js';
+import {
+  _resetFileSystemEffectLeasesForTests,
+  acquireExclusiveFileSystemEffectLease,
+  acquireFileSystemMutationLease,
+  acquireHostFileSystemMutationLease,
+} from '../packages/coding/src/tools/_internal/file-mutation-queue.js';
 
 const capturedBrokerRequests = vi.hoisted(
   () => [] as Array<Readonly<Record<string, unknown>>>,
@@ -65,6 +70,9 @@ const processTreeKillMock = vi.hoisted(() => ({
   outcome: 'actual' as 'actual' | 'unknown' | 'close_then_unknown' | 'close_then_reject',
   childPid: undefined as number | undefined,
   releaseUnknown: undefined as (() => void) | undefined,
+}));
+const windowsEffectJobMock = vi.hoisted(() => ({
+  drainFailure: undefined as string | undefined,
 }));
 const processIdentityMock = vi.hoisted(() => ({
   windowsBootIdentity: 'windows-boot-100' as string | undefined,
@@ -520,6 +528,20 @@ vi.mock('node:child_process', async (importOriginal) => {
         let stdin = '';
         child.stdin.on('data', (chunk: Buffer) => { stdin += chunk.toString('utf8'); });
         child.stdin.once('finish', () => {
+          const attest = (): void => {
+            if (textMutationRequest.observationFile !== undefined) {
+              writeFileSync(textMutationRequest.observationFile, JSON.stringify({
+                version: 1,
+                state: 'applied',
+                backend: process.platform === 'win32' ? 'windows-restricted-user' : 'linux-bubblewrap',
+                policyId: 'kodax-workspace-shell-v1',
+              }));
+            }
+            if (textMutationRequest.targetStartedMarker !== undefined) {
+              child.stderr.write(textMutationRequest.targetStartedMarker);
+            }
+          };
+          try {
           const payload = JSON.parse(stdin) as {
             readonly action: 'read' | 'write';
             readonly path: string;
@@ -527,11 +549,18 @@ vi.mock('node:child_process', async (importOriginal) => {
             readonly expectedRevision?: string;
             readonly createParentDirectories?: boolean;
           };
+          const assertSingleLink = (stats: { readonly nlink: number | bigint }): void => {
+            if (BigInt(stats.nlink) !== 1n) {
+              throw new Error('Text mutation target must not be hard-linked.');
+            }
+          };
           const revision = (content: string, stats: ReturnType<typeof fstatSync>): string => (
             `present:${createHash('sha256')
               .update(stats.dev.toString())
               .update(':')
               .update(stats.ino.toString())
+              .update(':')
+              .update(stats.nlink.toString())
               .update('\0')
               .update(content)
               .digest('hex')}`
@@ -554,10 +583,12 @@ vi.mock('node:child_process', async (importOriginal) => {
             try {
               const content = readFileSync(descriptor, 'utf8');
               const stats = fstatSync(descriptor, { bigint: true });
+              assertSingleLink(stats);
               const backupPath = realpathSync.native(payload.path);
               const canonicalDescriptor = openSync(backupPath, 'r');
               try {
                 const canonicalStats = fstatSync(canonicalDescriptor, { bigint: true });
+                assertSingleLink(canonicalStats);
                 if (canonicalStats.dev !== stats.dev || canonicalStats.ino !== stats.ino) {
                   throw new Error('Text mutation target identity changed while reading.');
                 }
@@ -598,10 +629,12 @@ vi.mock('node:child_process', async (importOriginal) => {
             try {
               if (payload.expectedRevision === 'missing') {
                 descriptor = openSync(payload.path, 'wx');
+                assertSingleLink(fstatSync(descriptor, { bigint: true }));
               } else {
                 descriptor = openSync(payload.path, 'r+');
                 const content = readFileSync(descriptor, 'utf8');
                 const stats = fstatSync(descriptor, { bigint: true });
+                assertSingleLink(stats);
                 if (revision(content, stats) !== payload.expectedRevision) return 'conflict';
               }
               writeFully(descriptor, payload.content ?? '');
@@ -624,20 +657,17 @@ vi.mock('node:child_process', async (importOriginal) => {
           } else {
             child.stdout.end(JSON.stringify({ status: 'written' }));
           }
-          if (textMutationRequest.observationFile !== undefined) {
-            writeFileSync(textMutationRequest.observationFile, JSON.stringify({
-              version: 1,
-              state: 'applied',
-              backend: process.platform === 'win32' ? 'windows-restricted-user' : 'linux-bubblewrap',
-              policyId: 'kodax-workspace-shell-v1',
-            }));
-          }
-          if (textMutationRequest.targetStartedMarker !== undefined) {
-            child.stderr.write(textMutationRequest.targetStartedMarker);
-          }
+          attest();
           child.stderr.end();
           child.emit('close', 0, null);
           child.emit('exit', 0, null);
+          } catch (error: unknown) {
+            attest();
+            child.stdout.end();
+            child.stderr.end(error instanceof Error ? error.message : String(error));
+            child.emit('close', 1, null);
+            child.emit('exit', 1, null);
+          }
         });
         return child;
       }
@@ -658,10 +688,13 @@ vi.mock('@kodax-ai/agent', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@kodax-ai/agent')>();
   return {
     ...actual,
-    containWindowsEffectProcess: (pid: number) => Promise.resolve({
-      drained: Promise.resolve(),
-      supervisorPid: pid,
-    }),
+    containWindowsEffectProcess: (pid: number) => {
+      const drained = windowsEffectJobMock.drainFailure === undefined
+        ? Promise.resolve()
+        : Promise.reject(new Error(windowsEffectJobMock.drainFailure));
+      void drained.catch(() => undefined);
+      return Promise.resolve({ drained, supervisorPid: pid });
+    },
     readProcessStartIdentity: (pid: number) => (
       processIdentityMock.unreadablePids.has(pid)
         ? undefined
@@ -865,6 +898,7 @@ afterEach(async () => {
   processTreeKillMock.releaseUnknown = undefined;
   processTreeKillMock.outcome = 'actual';
   processTreeKillMock.childPid = undefined;
+  windowsEffectJobMock.drainFailure = undefined;
   processIdentityMock.windowsBootIdentity = 'windows-boot-100';
   processIdentityMock.pid4StartIdentity = '13370000000000';
   workspaceSessionControl.releaseReady?.();
@@ -1020,6 +1054,81 @@ describe('ASRT workspace shell adapter', () => {
     }
   });
 
+  it.runIf(process.platform !== 'win32')(
+    'starts a workspace text session beside a live POSIX shell with additional scopes',
+    async () => {
+      processTreeKillMock.childPid = process.pid;
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-text-posix-policy-'));
+      const extraRead = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-text-extra-read-'));
+      tempRoots.push(root, extraRead);
+      const target = path.join(root, 'target.txt');
+      await writeFile(target, 'before', 'utf8');
+      const shouldSandbox = vi.fn((call: { readonly id: string }) => (
+        call.id === 'scoped-background-shell'
+          ? { filesystemAccess: { read: [extraRead], write: [] } }
+          : true
+      ));
+      const liveShell = createAsrtShellSandbox({ workspaceRoot: root, shouldSandbox });
+      const preparedShell = await liveShell.prepare({
+        toolCallId: 'scoped-background-shell',
+        toolInput: { command: 'long-running-service' },
+        command: 'long-running-service',
+        cwd: root,
+        env: process.env,
+      });
+      if (preparedShell?.fileSystemEffectPolicyKey === undefined) {
+        throw new Error('expected scoped background shell policy');
+      }
+      const releaseShell = await acquireFileSystemMutationLease(
+        preparedShell.fileSystemEffectPolicyKey,
+      );
+      const sandbox = createAsrtTextFileMutationSandbox({ workspaceRoot: root, shouldSandbox });
+      try {
+        await expect(sandbox.read({
+          toolCallId: 'edit-beside-scoped-shell',
+          toolName: 'edit',
+          toolInput: { path: target },
+          path: target,
+        })).resolves.toMatchObject({ status: 'ok' });
+      } finally {
+        await releaseShell();
+        await preparedShell.cleanup();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'keeps POSIX workspace session startup behind a real namespace mutation',
+    async () => {
+      processTreeKillMock.childPid = process.pid;
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-text-posix-namespace-'));
+      tempRoots.push(root);
+      const target = path.join(root, 'target.txt');
+      await writeFile(target, 'before', 'utf8');
+      const sandbox = createAsrtTextFileMutationSandbox({
+        workspaceRoot: root,
+        shouldSandbox: () => true,
+      });
+      const releaseNamespace = await acquireExclusiveFileSystemEffectLease();
+      try {
+        await expect(sandbox.read({
+          toolCallId: 'edit-behind-namespace',
+          toolName: 'edit',
+          toolInput: { path: target },
+          path: target,
+        })).rejects.toThrow('filesystem effect is already active');
+      } finally {
+        await releaseNamespace();
+      }
+      await expect(sandbox.read({
+        toolCallId: 'edit-after-namespace',
+        toolName: 'edit',
+        toolInput: { path: target },
+        path: target,
+      })).resolves.toMatchObject({ status: 'ok' });
+    },
+  );
+
   it('keeps canonical backup paths eligible for undo through a workspace junction', async () => {
     processTreeKillMock.childPid = process.pid;
     const actualWorkspace = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-text-real-'));
@@ -1099,6 +1208,123 @@ describe('ASRT workspace shell adapter', () => {
     expect(shouldSandbox).not.toHaveBeenCalled();
     expect(capturedWorkspaceSessionConfigs).toHaveLength(0);
   });
+
+  it('fails closed when the workspace root identity cannot be resolved', () => {
+    const missingWorkspace = path.join(os.tmpdir(), `kodax-missing-workspace-${randomUUID()}`);
+
+    expect(() => createAsrtTextFileMutationSandbox({
+      workspaceRoot: missingWorkspace,
+      shouldSandbox: () => true,
+    })).toThrow();
+  });
+
+  it('rejects a workspace hard link before sandboxed text is read', async () => {
+    processTreeKillMock.childPid = process.pid;
+    const workspace = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-hardlink-workspace-'));
+    const outside = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-hardlink-outside-'));
+    tempRoots.push(workspace, outside);
+    const outsideTarget = path.join(outside, 'secret.txt');
+    const workspaceTarget = path.join(workspace, 'target.txt');
+    await writeFile(outsideTarget, 'outside-before', 'utf8');
+    await link(outsideTarget, workspaceTarget);
+    const sandbox = createAsrtTextFileMutationSandbox({
+      workspaceRoot: workspace,
+      shouldSandbox: () => true,
+    });
+
+    await expect(sandbox.read({
+      toolCallId: 'hardlink-read-1',
+      toolName: 'edit',
+      toolInput: { path: workspaceTarget },
+      path: workspaceTarget,
+    })).rejects.toThrow(/hard.?link/i);
+    await expect(readFile(outsideTarget, 'utf8')).resolves.toBe('outside-before');
+  });
+
+  it('rejects a hard link added between sandboxed read and write', async () => {
+    processTreeKillMock.childPid = process.pid;
+    const workspace = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-hardlink-race-workspace-'));
+    const outside = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-hardlink-race-outside-'));
+    tempRoots.push(workspace, outside);
+    const workspaceTarget = path.join(workspace, 'target.txt');
+    const outsideAlias = path.join(outside, 'alias.txt');
+    await writeFile(workspaceTarget, 'before', 'utf8');
+    const sandbox = createAsrtTextFileMutationSandbox({
+      workspaceRoot: workspace,
+      shouldSandbox: () => true,
+    });
+    const request = {
+      toolCallId: 'hardlink-write-1',
+      toolName: 'edit' as const,
+      toolInput: { path: workspaceTarget },
+      path: workspaceTarget,
+    };
+    const snapshot = await sandbox.read(request);
+    if (snapshot.status !== 'ok') throw new Error('expected sandboxed snapshot');
+    await link(workspaceTarget, outsideAlias);
+
+    await expect(sandbox.write({
+      ...request,
+      content: 'must-not-write',
+      createParentDirectories: false,
+      expectedRevision: snapshot.snapshot.revision,
+    })).rejects.toThrow(/hard.?link/i);
+    await expect(readFile(workspaceTarget, 'utf8')).resolves.toBe('before');
+    await expect(readFile(outsideAlias, 'utf8')).resolves.toBe('before');
+  });
+
+  it('rejects canonical backup authority outside the workspace capability', async () => {
+    processTreeKillMock.childPid = process.pid;
+    const workspace = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-backup-workspace-'));
+    const outside = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-backup-outside-'));
+    tempRoots.push(workspace, outside);
+    const redirectedDirectory = path.join(workspace, 'redirected');
+    await symlink(outside, redirectedDirectory, process.platform === 'win32' ? 'junction' : 'dir');
+    const outsideTarget = path.join(outside, 'target.txt');
+    const workspaceTarget = path.join(redirectedDirectory, 'target.txt');
+    await writeFile(outsideTarget, 'outside-before', 'utf8');
+    const sandbox = createAsrtTextFileMutationSandbox({
+      workspaceRoot: workspace,
+      shouldSandbox: () => true,
+    });
+
+    await expect(sandbox.read({
+      toolCallId: 'outside-backup-1',
+      toolName: 'edit',
+      toolInput: { path: workspaceTarget },
+      path: workspaceTarget,
+    })).rejects.toThrow('invalid snapshot');
+    await expect(readFile(outsideTarget, 'utf8')).resolves.toBe('outside-before');
+  });
+
+  it.runIf(process.platform === 'win32')(
+    'keeps the text effect lease when Windows Job drain is unconfirmed',
+    async () => {
+      processTreeKillMock.childPid = process.pid;
+      windowsEffectJobMock.drainFailure = 'injected Windows Job drain failure';
+      const workspace = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-job-drain-'));
+      tempRoots.push(workspace);
+      const target = path.join(workspace, 'target.txt');
+      await writeFile(target, 'before', 'utf8');
+      const sandbox = createAsrtTextFileMutationSandbox({
+        workspaceRoot: workspace,
+        shouldSandbox: () => true,
+      });
+      try {
+        await expect(sandbox.read({
+          toolCallId: 'job-drain-read-1',
+          toolName: 'edit',
+          toolInput: { path: target },
+          path: target,
+        })).rejects.toThrow(/Job drain|cleanup/i);
+        await expect(acquireHostFileSystemMutationLease())
+          .rejects.toThrow('filesystem effect is already active');
+      } finally {
+        windowsEffectJobMock.drainFailure = undefined;
+        await _resetFileSystemEffectLeasesForTests();
+      }
+    },
+  );
 
   it.runIf(process.platform === 'win32')(
     'recovers only exact daemon-owned primary and legacy ACL markers without force',

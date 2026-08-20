@@ -3877,7 +3877,13 @@ async function withExclusiveFileSystemEffectFence<T>(
   sandboxPolicyKey?: string,
 ): Promise<T> {
   if (alreadyHeld) return action();
-  const release = await acquireExclusiveFileSystemEffectLease(sandboxPolicyKey);
+  // POSIX policies are process-local, so a session transition is an ordinary
+  // shell effect: it may overlap every shell policy but still waits for host
+  // direct sinks and real namespace mutations. Windows needs exclusive,
+  // exact-policy coordination for its shared sandbox-account ACLs.
+  const release = process.platform === 'win32'
+    ? await acquireExclusiveFileSystemEffectLease(sandboxPolicyKey)
+    : await acquireFileSystemMutationLease(sandboxPolicyKey);
   try {
     return await action();
   } finally {
@@ -5186,10 +5192,15 @@ const path = require('node:path');
 const chunks = [];
 process.stdin.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
 process.stdin.once('end', async () => {
+  const assertSingleLink = (stat) => {
+    if (stat.nlink !== 1n) throw new Error('Text mutation target must not be hard-linked.');
+  };
   const revision = (content, stat) => 'present:' + createHash('sha256')
     .update(stat.dev.toString())
     .update(':')
     .update(stat.ino.toString())
+    .update(':')
+    .update(stat.nlink.toString())
     .update('\0')
     .update(content)
     .digest('hex');
@@ -5199,6 +5210,7 @@ process.stdin.once('end', async () => {
     try {
       canonicalHandle = await fs.open(canonical, 'r');
       const canonicalStat = await canonicalHandle.stat({ bigint: true });
+      assertSingleLink(canonicalStat);
       if (canonicalStat.dev !== openedStat.dev || canonicalStat.ino !== openedStat.ino) {
         throw new Error('Text mutation target identity changed while reading.');
       }
@@ -5222,6 +5234,7 @@ process.stdin.once('end', async () => {
         handle.readFile('utf8'),
         handle.stat({ bigint: true }),
       ]);
+      assertSingleLink(stat);
       return {
         state: 'present',
         content,
@@ -5262,12 +5275,14 @@ process.stdin.once('end', async () => {
     try {
       if (input.expectedRevision === 'missing') {
         handle = await fs.open(input.path, 'wx');
+        assertSingleLink(await handle.stat({ bigint: true }));
       } else {
         handle = await fs.open(input.path, 'r+');
         const [content, stat] = await Promise.all([
           handle.readFile('utf8'),
           handle.stat({ bigint: true }),
         ]);
+        assertSingleLink(stat);
         if (revision(content, stat) !== input.expectedRevision) {
           process.stdout.write(JSON.stringify({ status: 'conflict' }));
           return;
@@ -5462,13 +5477,7 @@ export function createAsrtTextFileMutationSandbox(
   input: CreateAsrtShellSandboxInput,
 ): KodaXTextFileMutationSandbox {
   const workspaceRoot = path.resolve(input.workspaceRoot);
-  const canonicalWorkspaceRoot = (() => {
-    try {
-      return realpathSync(workspaceRoot);
-    } catch {
-      return workspaceRoot;
-    }
-  })();
+  const canonicalWorkspaceRoot = realpathSync(workspaceRoot);
   const canHandlePath = (filePath: string): boolean => {
     const candidate = path.resolve(filePath);
     return isInside(workspaceRoot, candidate)
@@ -5534,6 +5543,7 @@ export function createAsrtTextFileMutationSandbox(
         || typeof value.revision !== 'string'
         || typeof value.backupPath !== 'string'
         || !path.isAbsolute(value.backupPath)
+        || !canHandlePath(value.backupPath)
       ) throw new Error('Sandboxed text read returned an invalid snapshot.');
       return {
         status: 'ok',

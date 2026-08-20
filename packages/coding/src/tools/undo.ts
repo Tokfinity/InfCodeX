@@ -15,8 +15,11 @@ export async function toolUndo(_input: Record<string, unknown>, ctx: KodaXToolEx
   const backups = ctx.backups;
   if (backups.size > 0) {
     const entries = [...backups.entries()];
-    const [filePath, content] = entries[entries.length - 1]!;
+    const [filePath] = entries[entries.length - 1]!;
+    let restored = false;
     await withTextFileMutation(filePath, 'undo', _input, ctx, async (snapshot) => {
+      const content = backups.get(filePath);
+      if (content === undefined) return;
       const currentIdentity = canonicalizeAgentHomePolicyPath(filePath);
       if (currentIdentity === undefined
         || normalizePathForKey(currentIdentity) !== normalizePathForKey(filePath)) {
@@ -24,8 +27,9 @@ export async function toolUndo(_input: Record<string, unknown>, ctx: KodaXToolEx
       }
       await writeTextFileForMutation(snapshot, content, false, ctx);
       backups.delete(filePath);
+      restored = true;
     });
-    return `Restored: ${filePath}`;
+    return restored ? `Restored: ${filePath}` : 'No backups available. Nothing to undo.';
   }
   return 'No backups available. Nothing to undo.';
 }

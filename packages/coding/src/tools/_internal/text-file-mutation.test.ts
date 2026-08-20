@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { KodaXToolExecutionContext } from '../../types.js';
+import { toolUndo } from '../undo.js';
 import {
   withTextFileMutation,
   writeTextFileForMutation,
@@ -158,6 +159,33 @@ describe('text file mutation capability', () => {
     expect(read).not.toHaveBeenCalled();
     await expect(fs.readFile(filePath, 'utf8')).resolves.toBe('after');
   });
+
+  it.runIf(process.platform === 'win32')(
+    'accepts a differently-cased spelling of an unaliased host path',
+    async () => {
+      const filePath = path.join(root, 'case-target.txt');
+      await fs.writeFile(filePath, 'before', 'utf8');
+      const spellingVariant = filePath.toUpperCase();
+      const ctx: KodaXToolExecutionContext = {
+        backups: new Map(),
+        textFileMutationSandbox: {
+          canHandlePath: () => false,
+          read: async () => ({ status: 'unavailable' }),
+          write: async () => ({ status: 'unavailable' }),
+        },
+      };
+
+      await withTextFileMutation(
+        spellingVariant,
+        'write',
+        { path: spellingVariant },
+        ctx,
+        async (snapshot) => writeTextFileForMutation(snapshot, 'after', false, ctx),
+      );
+
+      await expect(fs.readFile(filePath, 'utf8')).resolves.toBe('after');
+    },
+  );
 
   it('rejects a redirected host path outside the runtime capability', async () => {
     const actualDirectory = path.join(root, 'outside-actual');
@@ -432,5 +460,239 @@ describe('text file mutation capability', () => {
       ),
     )).rejects.toThrow('File changed during mutation');
     expect([...backups.keys()]).toEqual([firstPath, latestPath]);
+  });
+
+  it('does not expose a pending alias backup to concurrent undo', async () => {
+    const alias = path.join(root, 'pending-alias.txt');
+    const canonicalTarget = path.join(root, 'pending-canonical.txt');
+    let releaseWrite: (() => void) | undefined;
+    const writeBlocked = new Promise<void>((resolve) => { releaseWrite = resolve; });
+    const writeStarted = vi.fn();
+    const backups = new Map<string, string>();
+    const ctx: KodaXToolExecutionContext = {
+      backups,
+      textFileMutationSandbox: {
+        read: async (request) => ({
+          status: 'ok',
+          snapshot: {
+            state: 'present',
+            content: request.path === alias ? 'before' : 'current',
+            revision: request.path,
+            backupPath: canonicalTarget,
+          },
+        }),
+        write: async (request) => {
+          if (request.path === alias) {
+            writeStarted();
+            await writeBlocked;
+          }
+          return { status: 'written' };
+        },
+      },
+    };
+    const edit = withTextFileMutation(
+      alias,
+      'edit',
+      { path: alias },
+      ctx,
+      async (snapshot) => writeTextFileForMutation(
+        snapshot,
+        'after',
+        false,
+        ctx,
+        'before',
+      ),
+    );
+    await vi.waitFor(() => expect(writeStarted).toHaveBeenCalledOnce());
+
+    await expect(toolUndo({}, ctx)).resolves.toBe('No backups available. Nothing to undo.');
+    releaseWrite?.();
+    await expect(edit).resolves.toBeUndefined();
+    expect(backups.get(canonicalTarget)).toBe('before');
+  });
+
+  it('serializes different lexical aliases by their sandbox-bound canonical identity', async () => {
+    const firstAlias = path.join(root, 'fifo-first-alias.txt');
+    const secondAlias = path.join(root, 'fifo-second-alias.txt');
+    const canonicalTarget = path.join(root, 'fifo-canonical.txt');
+    let releaseFirstWrite: (() => void) | undefined;
+    const firstWriteBlocked = new Promise<void>((resolve) => {
+      releaseFirstWrite = resolve;
+    });
+    let writeCalls = 0;
+    const writeStarted = vi.fn();
+    const read = vi.fn(async (request: { readonly path: string }) => ({
+      status: 'ok' as const,
+      snapshot: {
+        state: 'present' as const,
+        content: `${request.path}-before`,
+        revision: request.path,
+        backupPath: canonicalTarget,
+      },
+    }));
+    const ctx: KodaXToolExecutionContext = {
+      backups: new Map(),
+      textFileMutationSandbox: {
+        read,
+        write: async () => {
+          writeCalls += 1;
+          writeStarted();
+          if (writeCalls === 1) await firstWriteBlocked;
+          return { status: 'written' };
+        },
+      },
+    };
+    const mutate = (filePath: string) => withTextFileMutation(
+      filePath,
+      'edit',
+      { path: filePath },
+      ctx,
+      async (snapshot) => writeTextFileForMutation(
+        snapshot,
+        `${filePath}-after`,
+        false,
+        ctx,
+        `${filePath}-before`,
+      ),
+    );
+
+    const first = mutate(firstAlias);
+    const second = mutate(secondAlias);
+    await vi.waitFor(() => expect(read.mock.calls.length).toBeGreaterThanOrEqual(2));
+    await vi.waitFor(() => expect(writeStarted).toHaveBeenCalled());
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const callsBeforeRelease = writeStarted.mock.calls.length;
+    releaseFirstWrite?.();
+    await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
+
+    expect(callsBeforeRelease).toBe(1);
+    expect(writeStarted).toHaveBeenCalledTimes(2);
+  });
+
+  it('refreshes an alias snapshot after entering the canonical queue', async () => {
+    const firstAlias = path.join(root, 'refresh-first-alias.txt');
+    const secondAlias = path.join(root, 'refresh-second-alias.txt');
+    const canonicalTarget = path.join(root, 'refresh-canonical.txt');
+    const initialReaders = new Set<string>();
+    let releaseInitialReads: (() => void) | undefined;
+    const initialReadsReady = new Promise<void>((resolve) => {
+      releaseInitialReads = resolve;
+    });
+    let releaseFirstWrite: (() => void) | undefined;
+    const firstWriteBlocked = new Promise<void>((resolve) => {
+      releaseFirstWrite = resolve;
+    });
+    let content = 'before';
+    let revision = 'r0';
+    let writes = 0;
+    const ctx: KodaXToolExecutionContext = {
+      backups: new Map(),
+      textFileMutationSandbox: {
+        read: async (request) => {
+          if (!initialReaders.has(request.path)) {
+            initialReaders.add(request.path);
+            if (initialReaders.size === 2) releaseInitialReads?.();
+            await initialReadsReady;
+          }
+          return {
+            status: 'ok',
+            snapshot: {
+              state: 'present',
+              content,
+              revision,
+              backupPath: canonicalTarget,
+            },
+          };
+        },
+        write: async (request) => {
+          writes += 1;
+          if (writes === 1) await firstWriteBlocked;
+          if (request.expectedRevision !== revision) return { status: 'conflict' };
+          content = request.content;
+          revision = `r${writes}`;
+          return { status: 'written' };
+        },
+      },
+    };
+    const mutate = (filePath: string) => withTextFileMutation(
+      filePath,
+      'edit',
+      { path: filePath },
+      ctx,
+      async (snapshot) => writeTextFileForMutation(
+        snapshot,
+        `${snapshot.content}|${path.basename(filePath)}`,
+        false,
+        ctx,
+        snapshot.content,
+      ),
+    );
+
+    const first = mutate(firstAlias);
+    const second = mutate(secondAlias);
+    await vi.waitFor(() => expect(writes).toBe(1));
+    releaseFirstWrite?.();
+    await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
+
+    expect(content).toContain(path.basename(firstAlias));
+    expect(content).toContain(path.basename(secondAlias));
+  });
+
+  it('undo reads the latest backup after waiting for a canonical alias edit', async () => {
+    const alias = path.join(root, 'undo-latest-alias.txt');
+    const canonicalTarget = path.join(root, 'undo-latest-canonical.txt');
+    let releaseEditWrite: (() => void) | undefined;
+    const editWriteBlocked = new Promise<void>((resolve) => {
+      releaseEditWrite = resolve;
+    });
+    const editWriteStarted = vi.fn();
+    let content = 'before-edit';
+    let revision = 'r0';
+    const backups = new Map([[canonicalTarget, 'old-backup']]);
+    const ctx: KodaXToolExecutionContext = {
+      backups,
+      textFileMutationSandbox: {
+        read: async () => ({
+          status: 'ok',
+          snapshot: {
+            state: 'present',
+            content,
+            revision,
+            backupPath: canonicalTarget,
+          },
+        }),
+        write: async (request) => {
+          if (request.expectedRevision !== revision) return { status: 'conflict' };
+          if (request.path === alias) {
+            editWriteStarted();
+            await editWriteBlocked;
+          }
+          content = request.content;
+          revision = request.path === alias ? 'r1' : 'r2';
+          return { status: 'written' };
+        },
+      },
+    };
+    const edit = withTextFileMutation(
+      alias,
+      'edit',
+      { path: alias },
+      ctx,
+      async (snapshot) => writeTextFileForMutation(
+        snapshot,
+        'after-edit',
+        false,
+        ctx,
+        snapshot.content,
+      ),
+    );
+    await vi.waitFor(() => expect(editWriteStarted).toHaveBeenCalledOnce());
+
+    const undo = toolUndo({}, ctx);
+    releaseEditWrite?.();
+    await expect(Promise.all([edit, undo])).resolves.toEqual([undefined, `Restored: ${canonicalTarget}`]);
+
+    expect(content).toBe('before-edit');
+    expect(backups.has(canonicalTarget)).toBe(false);
   });
 });

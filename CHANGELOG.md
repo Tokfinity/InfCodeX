@@ -22,6 +22,12 @@ All notable changes to this project will be documented in this file.
   `realpath`. A permanently rejected Windows Job drain proof now reports the
   error and keeps the worktree namespace fence fail-closed instead of polling
   a settled promise forever or trusting a root-only process check.
+- Sandboxed text mutations now reject hard-linked targets at snapshot and
+  commit, reject canonical backup identities outside the workspace capability,
+  and preserve the winning undo record when two lexical aliases race. POSIX
+  workspace-session startup no longer conflicts with unrelated live shell
+  policies because its sandbox policy is process-local; Windows retains its
+  shared-account ACL transition fence.
 
 ---
 
