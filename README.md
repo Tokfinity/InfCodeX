@@ -738,6 +738,18 @@ open. See the
 [v0.7.94 release checklist](docs/release.md#v0794-release-preparation)
 and [SDK Embedder Guide](public_docs/sdk/embedder-guide.md).
 
+**Unreleased Runtime SDK recovery hardening:** every Run finalization and
+sandbox/managed-child termination rejection is now observed. If neither
+terminal record can be persisted, the Run resolves `unknown` with
+`run_settlement_not_persisted` and keeps the Session fenced. Daemon connection
+loss exposes a typed code, `connectionId`, and `reconnectable` fact; provider
+failures under a run-scoped credential expose only a bounded `failureKind`.
+Once a host receives a `runId`, it must retain it and, after reconnecting, call
+`runs.get(runId)` then
+`runs.await(runId)` on the replacement Runtime. It must never replay
+`runs.start()` for that admitted Run. See the
+[SDK Embedder Guide](public_docs/sdk/embedder-guide.md#query-authoritative-session-and-run-lifecycle).
+
 **v0.7.93 release:** Runtime exit settlement no longer spends the 170-second
 Windows orderly-exit window after a durable `failed` shutdown outcome, can
 recover previous-boot shared ACL markers after a verified boot change, and

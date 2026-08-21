@@ -120,6 +120,7 @@ export interface RuntimeDaemonRequestControl {
   readonly onLateResult?: (value: unknown) => void;
 }
 
+/** Factual state for one daemon connection; disconnected does not imply daemon crash. */
 export interface RuntimeDaemonTransportLifecycleState {
   readonly state: 'connected' | 'disconnected';
   readonly connectionId: string;
@@ -128,6 +129,7 @@ export interface RuntimeDaemonTransportLifecycleState {
   readonly reconnectable: boolean;
 }
 
+/** Transport-observable close reason. Run/daemon crash classification needs durable evidence. */
 export type RuntimeDaemonDisconnectCode =
   | 'protocol_closed'
   | 'transport_error'

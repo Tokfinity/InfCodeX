@@ -132,6 +132,16 @@ aborting the Run. Scheduled daemon shutdown reports failed cleanup instead of
 a safe stop. Runtime advertises `conversationHistory:2` so hosts can reject
 daemons that still expose the legacy ordinary-history projection.
 
+Current unreleased source adds a post-v0.7.94 reliability requirement for SDK
+hosts and the shared daemon. A single Run or process-cleanup failure must not
+escape as a process-global unhandled rejection. If terminal durability cannot
+be proved, Runtime reports `unknown` / `run_settlement_not_persisted` and keeps
+the Session fenced. Transport disconnect metadata reports only observable
+connection facts; durable Run status remains the authority for crash outcome.
+After a host receives `runId`, reconnect recovery must query and await that same
+Run and must never replay `runs.start()` or its provider/tool effects. Safe
+failure categories remain bounded and credential-redacted.
+
 ## 2. Target Users
 
 - Developers who want a terminal-native agent for code changes, debugging,

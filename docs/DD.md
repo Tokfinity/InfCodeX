@@ -66,6 +66,25 @@ contracts; FEATURE_287 remains planned for v0.7.93 and the Worker owner-lease
 portion of Issue 256 remains open after v0.7.89 without a replacement target
 assigned by this release.
 
+Post-v0.7.94 source hardening keeps Run convergence inside
+`src/sdk-runtime.ts`: successful and failed executor callbacks feed one
+observed settlement chain, durable status outranks event-publication failure,
+and total terminal persistence failure records
+`run_settlement_not_persisted` while retaining the Session fence.
+`src/sandbox-runtime.ts` and Agent managed-child event handlers terminate
+through rejection-observed cleanup paths. `src/runtime-daemon/transport.ts`
+publishes the same typed disconnect facts to pending RPCs and lifecycle
+subscribers and rejects oversized outbound frames before socket write.
+Credential-safe terminal classification is persisted as `failureKind`; raw
+provider errors are not part of that field.
+
+Reconnect recovery belongs to the SDK host adapter, not the transport. After
+admission returns `runId`, an adapter may create a replacement Runtime, verify
+`runs.get(runId)` still identifies the same Session, and call
+`runs.await(runId)`. It must not call `runs.start()` again. Transient connection
+or daemon-health failures share one host backoff authority; permanent
+initialization failure and host close settle all waiting result observers.
+
 The v0.7.89 implementation adds `conversationHistory` projection rules that
 hide replaceable managed context from ordinary topology while retaining the
 physical audit track and fail-closed ambiguity. `web-search.ts` owns the

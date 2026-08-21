@@ -17,6 +17,10 @@ All notable changes to this project will be documented in this file.
 - The public README files, package SDK guides, Embedder Guide, HLD/DD,
   `kodax_manual`, and Runtime SDK type comments now document the same Skill
   catalog, slash-argument, provenance, and child-delegation semantics.
+- KodaX README files, public SDK guidance, Runtime SDK type comments,
+  PRD/HLD/DD/ADR, feature/release/known-issue records, regression guidance, and
+  `kodax_manual` now describe the same post-v0.7.94 Run-settlement,
+  typed-disconnect, safe-failure, and exact-`runId` recovery contracts.
 
 ### Fixed
 

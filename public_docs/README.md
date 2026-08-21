@@ -53,6 +53,13 @@ scheduled shutdown failure reporting, omitting the text sandbox when the
 workspace directory does not exist, and `conversationHistory:2`.
 `sandboxRuntime:4` and `crashOutcomeModel:2` are unchanged.
 
+Current source after v0.7.94 also documents fail-closed Run terminal
+settlement, observed sandbox/managed-child cleanup rejection, typed daemon
+disconnect facts, bounded credential-safe `failureKind`, and exact-`runId`
+result recovery. An admitted Run is queried and awaited after reconnect; it is
+never started again. These contracts are unreleased until a later package is
+published and must not be attributed to `@kodax-ai/kodax@0.7.94`.
+
 The v0.7.93 SDK guidance documents that a durable Windows `failed` shutdown
 outcome ends the orderly exit wait, previous-boot shared ACL markers may be
 recovered after a verified boot change, and Anthropic/OpenAI abort wrappers

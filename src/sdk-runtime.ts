@@ -1260,6 +1260,7 @@ export interface RuntimeSessionDiagnosticsInput extends RuntimeReadOptions {
   readonly runId?: string;
 }
 
+/** Bounded support classification; `unknown` settlement remains fail-closed. */
 export type RuntimeSessionDiagnosticErrorCode =
   | "run_control_unknown"
   | "run_status_unknown"
@@ -1907,6 +1908,7 @@ export interface RuntimeRunStatus {
   readonly requirements?: RuntimeRunRequirements;
 }
 
+/** Durable lifecycle uncertainty reported without converting it into a successful terminal. */
 export interface RuntimeRunLifecycleError {
   readonly code:
     | "actor_settlement_retrying"
@@ -1988,6 +1990,7 @@ export type RuntimeTerminalCode =
   | "actor_settlement_not_persisted"
   | "control_history_untrusted";
 
+/** Credential-safe failure category; raw provider error text is never required. */
 export type RuntimeRunFailureKind =
   | "auth"
   | "rate_limit"
@@ -2003,6 +2006,7 @@ export interface RuntimeTerminalFact {
   readonly code: RuntimeTerminalCode;
   readonly effectOutcome: "none" | "known" | "unknown";
   readonly message?: string;
+  /** Safe diagnostic category for failed terminals, independent from display text. */
   readonly failureKind?: RuntimeRunFailureKind;
 }
 

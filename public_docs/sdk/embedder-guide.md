@@ -20,6 +20,12 @@ stale prepared-Session recovery, crash-resumable Runtime exit settlement,
 effective live output segments, and standalone lazy provider dependency
 bundling.
 
+The current source tree also contains unreleased post-v0.7.94 recovery
+hardening. It observes Run-finalization and process-cleanup rejections,
+distinguishes transport facts from durable Run outcomes, exposes bounded safe
+failure categories, and defines exact-`runId` recovery after reconnect. Do not
+attribute these additions to the published `@kodax-ai/kodax@0.7.94` package.
+
 This guide documents the SDK surfaces a host integrator needs that
 are NOT obvious from inspecting the type definitions alone:
 
@@ -4672,6 +4678,18 @@ fallback; non-terminal evidence such as an input-delivery event may refine the
 read projection but does not prove that execution stopped. Persisted terminal
 states are monotonic.
 
+Current source treats Run terminal persistence as its own fail-closed
+convergence boundary. If the durable terminal status succeeds but event
+publication fails, the durable status remains authoritative. If neither
+terminal record can be persisted, `handle.result`, `runs.get()`, and
+`runs.await()` converge to `phase:'unknown'` with lifecycle code
+`run_settlement_not_persisted`; the Session execution fence stays closed.
+Credential-scoped failures may include a bounded `failureKind` (`auth`,
+`rate_limit`, `network`, `provider_aborted`, `invalid_response`,
+`runtime_cleanup`, or `provider`) without exposing raw provider text.
+Sandbox and managed-child termination failures are observed and retained as
+diagnostics rather than escaping as process-global unhandled rejections.
+
 `runtime.status.preflight()` treats `queued`, all active/waiting/recovery
 phases, and `unknown` as stop blockers. A host must never infer completion from
 reply text or convert `unknown` into success.
@@ -4782,6 +4800,51 @@ The SDK reports the current `connectionId`, `runtimeEpoch`, optional
 attempted. It does not transparently replay requests or subscriptions. Space
 creates a replacement Runtime client, checks its new epochs, resumes eligible
 leases, and observes the session again.
+
+`RuntimeDaemonDisconnectCode` reports only transport-observable facts:
+`protocol_closed`, `transport_error`, `invalid_frame`, or `client_closed`.
+The lifecycle state and pending RPC rejection carry the same `connectionId`
+and `reconnectable` value. `invalid_frame` includes the 8 MiB protocol boundary;
+outbound oversize is rejected before socket write. A transport close alone is
+not evidence of `daemon_crashed`; use durable Run status or launcher/crash
+evidence for that classification.
+
+Once `runs.start()` returns, retain the exact `runId`. If the result Promise
+fails because a reconnectable transport was lost, attach a replacement Runtime,
+verify the same Session with `runs.get(runId)`, and await that Run:
+
+```ts
+const admitted = await runtime.runs.start(input);
+let replacement: KodaXRuntime | undefined;
+
+for (;;) {
+  try {
+    if (replacement === undefined) {
+      return await admitted.result;
+    }
+    const status = await replacement.runs.get(admitted.runId);
+    if (status.sessionId !== admitted.sessionId) {
+      throw new Error('Run identity changed');
+    }
+    return await replacement.runs.await(admitted.runId);
+  } catch (error) {
+    if (!isRuntimeDaemonDisconnectError(error) || !error.reconnectable) {
+      throw error;
+    }
+    replacement = await attachRuntimeAfterBackoff();
+  }
+}
+```
+
+Here `attachRuntimeAfterBackoff()` owns one shared reconnect schedule, resolves
+only after a replacement Runtime is ready, and rejects on permanent
+initialization failure or explicit host close.
+
+Never call `runs.start()` again for the admitted request: transport recovery is
+observation, not execution replay. A second disconnect during `runs.get()` or
+`runs.await()` repeats the same recovery loop with the same `runId`. Permanent
+initialization errors and explicit host close settle the waiting result instead
+of leaving it pending.
 
 On transport failure, Runtime change, expired history, or `resync_required`,
 discard the local derived projection and call `sessions.observe()` again. Do

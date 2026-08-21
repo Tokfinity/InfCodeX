@@ -103,6 +103,22 @@ lease. Shell policy owners and namespace owners remain in the coordinator so
 incompatible Windows ACL transitions and worktree path-alias changes are still
 fenced.
 
+Current source adds a post-v0.7.94 Runtime recovery boundary without changing
+the published v0.7.94 capability versions. Run finalization owns and observes
+its complete persistence chain. A durable terminal status wins over a failed
+event append; failure to persist either authority produces an explicit
+`unknown` lifecycle error and keeps Session execution fenced. Sandbox and
+managed-child cleanup errors are observed and recorded instead of escaping as
+process-global Promise rejections.
+
+Daemon transport reports connection facts independently from Run outcome.
+Clients receive a close code, `connectionId`, and `reconnectable` marker, while
+durable Run status remains the authority for `daemon_crashed`. A host that has
+received a `runId` reconnects by creating/attaching a replacement Runtime and
+querying then awaiting that exact Run. Reissuing `runs.start()` is forbidden
+because it can duplicate provider and tool effects. Credential-scoped provider
+errors retain a bounded `failureKind` while raw provider text stays redacted.
+
 For a Windows daemon Runtime, startup is a three-part process boundary:
 PowerShell creates the daemon suspended, assigns it to a kill-on-close Job
 Object, and resumes it; an out-of-Job supervisor waits for daemon exit and then

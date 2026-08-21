@@ -82,6 +82,7 @@ export function isRuntimeDaemonTransportError(
   return error instanceof RuntimeDaemonTransportError;
 }
 
+/** Pending RPC failure enriched with the same facts published by the lifecycle stream. */
 export class RuntimeDaemonDisconnectError extends Error {
   constructor(
     message: string,

@@ -559,6 +559,22 @@ The release checklist is [docs/release.md](release.md#v0790-release-preparation)
 
 ---
 
+## Post-v0.7.94 Runtime SDK Recovery Hardening (Unreleased)
+
+The source after `v0.7.94` contains a maintenance-only Runtime/daemon recovery
+slice. It observes Run terminal persistence and process-cleanup rejections,
+keeps the Session fenced when terminal durability is unknown, exposes factual
+typed disconnect metadata and bounded `failureKind`, and requires SDK hosts to
+recover an admitted result through the original `runId` without replaying
+`runs.start()`.
+
+This is not part of the published `@kodax-ai/kodax@0.7.94` contract. The design
+record is [v0.7.95](features/v0.7.95.md#2026-08-21-runtime-sdk-recovery-hardening)
+and the acceptance guide is
+[Runtime daemon recovery](test-guides/ISSUE_RUNTIME_DAEMON_RECOVERY_v0.7.95_REGRESSION_GUIDE.md).
+
+---
+
 ## v0.7.94 Release Record
 
 `v0.7.94` is a non-Feature maintenance release. It closes post-v0.7.93

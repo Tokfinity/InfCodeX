@@ -127,6 +127,29 @@ Before tagging, all of the following must be true:
 
 Only after these gates pass may the exact commit be tagged `v0.7.90`.
 
+## Post-v0.7.94 Runtime SDK recovery gates
+
+This source-only maintenance slice is not part of the published v0.7.94
+package. Before it is included in a later release:
+
+1. Run finalization, sandbox termination, and managed-child emergency cleanup
+   must have final rejection observers and must not produce an unhandled
+   process-level rejection.
+2. Durable terminal status must remain authoritative after event-publication
+   failure; complete terminal persistence failure must report
+   `run_settlement_not_persisted` and retain the Session fence.
+3. Transport lifecycle and pending RPC failures must agree on disconnect code,
+   `connectionId`, and `reconnectable`; outbound oversize must fail before
+   socket write.
+4. An SDK host that has `runId` must recover with `runs.get()` / `runs.await()`
+   and must not call `runs.start()` again. Consecutive disconnect, transient
+   daemon-health failure, permanent initialization failure, and close must all
+   settle deterministically.
+5. README/README_CN, public SDK guidance, Runtime type comments,
+   PRD/HLD/DD/ADR, feature/release/known-issue records, regression guidance,
+   and `kodax_manual` must agree that this contract is unreleased after
+   v0.7.94.
+
 ## v0.7.94 release preparation
 
 Release state: the root package, all four workspace packages, and every

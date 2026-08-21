@@ -120,6 +120,21 @@ describe('FEATURE_218 manual registry', () => {
     expect(sandbox).toContain('compatible live Bash lease');
   });
 
+  it('documents the post-v0.7.94 Runtime settlement and reconnect contracts', () => {
+    const sdk = resolveKodaXManual({ topic: 'sdk' }).content;
+    const troubleshooting = resolveKodaXManual({ topic: 'troubleshooting' }).content;
+
+    expect(sdk).toContain('run_settlement_not_persisted');
+    expect(sdk).toContain('RuntimeDaemonDisconnectCode');
+    expect(sdk).toContain('failureKind');
+    expect(sdk).toContain('runs.get(runId)');
+    expect(sdk).toContain('runs.await(runId)');
+    expect(sdk).toMatch(/never call\s+`runs\.start\(\)` again/i);
+    expect(troubleshooting).toContain('connectionId');
+    expect(troubleshooting).toContain('reconnectable');
+    expect(troubleshooting).toContain('invalid_frame');
+  });
+
   it('documents the v0.7.93 exit settlement and abort classification contracts', () => {
     const sdk = resolveKodaXManual({ topic: 'sdk' }).content;
 
