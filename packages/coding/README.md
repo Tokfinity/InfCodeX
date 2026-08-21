@@ -166,7 +166,7 @@ AbortSignals, validates timeout defaults at the Runtime boundary, and keeps
 stale prepared Session tails recoverable through an authoritative delta merge
 instead of silently losing the latest host state.
 
-The v0.7.94 release keeps `sandboxRuntime:4` and `crashOutcomeModel:2`.
+The v0.7.94 release candidate keeps `sandboxRuntime:4` and `crashOutcomeModel:2`.
 Runtime text tools may overlap a compatible live Bash lease through the same
 ASRT workspace policy. Windows sandboxed git trusts authorized repo roots
 only (`gitSafeDirectory: authorized-repo-roots`). Scheduled daemon shutdown

@@ -10,6 +10,9 @@ All notable changes to this project will be documented in this file.
 
 ## [0.7.94] - 2026-08-21
 
+> Release candidate prepared in source. The `v0.7.94` tag and GitHub Release
+> remain pending until the release gates pass; npm publication remains manual.
+
 ### Changed
 
 - Runtime capability negotiation and pre-start SDK facts now advertise
@@ -31,6 +34,15 @@ All notable changes to this project will be documented in this file.
   typed-disconnect, safe-failure, and exact-`runId` recovery contracts.
 
 ### Fixed
+
+- Sandboxed text-mutation helper stdin failures are now observed by the
+  operation Promise instead of escaping as process-level stream errors.
+  Linked-worktree and submodule relationship files are read through strict
+  byte bounds before external Git metadata earns sandbox trust.
+- Explicit Skill runtime policy now diagnoses invalid `allowed-tools` entries
+  and malformed hook JSON. `PostToolUse` still runs when an embedder's base
+  result observer throws, while preserving that observer failure for its
+  caller.
 
 - Scheduled Runtime daemon shutdown now rejects the public host lifecycle when
   cleanup fails, while retaining an internal rejection observer so embedded

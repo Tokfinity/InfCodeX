@@ -726,7 +726,7 @@ permission UI, and recovers stale prepared Session tails through an
 authoritative merge. Background persistence failures are surfaced as
 diagnostics rather than hidden.
 
-**v0.7.94 release:** Runtime text tools may overlap a compatible live Bash
+**v0.7.94 release candidate:** Runtime text tools may overlap a compatible live Bash
 lease because snapshot and commit run through the same ASRT workspace policy.
 Hard-linked workspace targets are rejected. Windows sandboxed git trusts
 authorized repo roots only and never emits `safe.directory=*` (Issue 300).

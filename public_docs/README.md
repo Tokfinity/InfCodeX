@@ -2,7 +2,9 @@
 
 Public documentation for KodaX users and SDK integrators.
 
-The current release is `v0.7.94`. Its SDK guidance carries concurrent
+The current released version is `v0.7.93`. The current source candidate is
+`v0.7.94`; its tag and GitHub Release remain pending release gates. Its SDK
+guidance carries concurrent
 sandboxed text mutations, Issue 300 authorized-root git trust, scheduled
 shutdown failure reporting, missing-workspace Run start, and
 `conversationHistory:2` on top of the

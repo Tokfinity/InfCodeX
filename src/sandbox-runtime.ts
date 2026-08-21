@@ -2,11 +2,14 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import {
+  closeSync,
   constants,
   existsSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   readdirSync,
   realpathSync,
   renameSync,
@@ -2663,6 +2666,7 @@ async function collectProcess(
   try {
     const completed = new Promise<number>((resolve, reject) => {
       child.once('error', reject);
+      child.stdin?.once('error', reject);
       child.once('close', (code) => resolve(code ?? 1));
     });
     const exitCode = await Promise.race([completed, stopRequested.then(() => 1)]);
@@ -3414,17 +3418,42 @@ function sameWindowsPath(left: string, right: string): boolean {
   return path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase();
 }
 
+function readBoundedUtf8File(filePath: string, maxBytes: number): string | undefined {
+  const descriptor = openSync(filePath, 'r');
+  try {
+    const buffer = Buffer.allocUnsafe(maxBytes + 1);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const count = readSync(
+        descriptor,
+        buffer,
+        bytesRead,
+        buffer.length - bytesRead,
+        bytesRead,
+      );
+      if (count === 0) break;
+      bytesRead += count;
+    }
+    return bytesRead > maxBytes ? undefined : buffer.toString('utf8', 0, bytesRead);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
 function linkedWorktreeMainGitDirectory(gitdir: string, gitLink: string): string | undefined {
   const match = /^(.*)[/\\]worktrees[/\\][^/\\]+$/.exec(gitdir);
   if (match === null) return undefined;
+  const commonDirectoryLink = readBoundedUtf8File(path.join(gitdir, 'commondir'), 4_096);
+  const worktreeBacklink = readBoundedUtf8File(path.join(gitdir, 'gitdir'), 4_096);
+  if (commonDirectoryLink === undefined || worktreeBacklink === undefined) return undefined;
   const mainGit = realpathSync(match[1]!);
   const commonDirectory = realpathSync(path.resolve(
     gitdir,
-    readFileSync(path.join(gitdir, 'commondir'), 'utf8').trim(),
+    commonDirectoryLink.trim(),
   ));
   const backlink = realpathSync(path.resolve(
     gitdir,
-    readFileSync(path.join(gitdir, 'gitdir'), 'utf8').trim(),
+    worktreeBacklink.trim(),
   ));
   return sameWindowsPath(commonDirectory, mainGit) && sameWindowsPath(backlink, gitLink)
     ? mainGit
@@ -3432,8 +3461,8 @@ function linkedWorktreeMainGitDirectory(gitdir: string, gitLink: string): string
 }
 
 function submoduleGitWorktree(gitdir: string): string | undefined {
-  const config = readFileSync(path.join(gitdir, 'config'), 'utf8');
-  if (config.length > 65_536) return undefined;
+  const config = readBoundedUtf8File(path.join(gitdir, 'config'), 65_536);
+  if (config === undefined) return undefined;
   let inCore = false;
   let worktree: string | undefined;
   for (const line of config.split(/\r?\n/)) {
@@ -3471,8 +3500,8 @@ function windowsLinkedWorktreeGitAccess(
   const gitLink = path.join(workspaceRoot, '.git');
   try {
     if (!lstatSync(gitLink).isFile()) return {};
-    const content = readFileSync(gitLink, 'utf8');
-    if (content.length > 4_096) return {};
+    const content = readBoundedUtf8File(gitLink, 4_096);
+    if (content === undefined) return {};
     const match = /^gitdir:\s*(.+?)\s*$/m.exec(content);
     if (match === null) return {};
     const gitdir = realpathSync(path.resolve(workspaceRoot, match[1]!));
@@ -5515,14 +5544,21 @@ async function executePreparedTextFileMutation(
       effectProcessBound = true;
     }
     invocation.authorizeStart?.();
-    if (child.stdin === null) throw new Error('Sandboxed text mutation process has no stdin gate.');
-    child.stdin.end(JSON.stringify(payload));
-    const result = await collectProcess(
+    const childInput = child.stdin;
+    if (childInput === null) throw new Error('Sandboxed text mutation process has no stdin gate.');
+    const resultPromise = collectProcess(
       child,
       request.signal,
       SCRIPT_TIMEOUT_MS,
       TEXT_FILE_MUTATION_OUTPUT_LIMIT,
     );
+    const inputPromise = new Promise<void>((resolve, reject) => {
+      childInput.end(JSON.stringify(payload), (error?: Error | null) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    });
+    const [result] = await Promise.all([resultPromise, inputPromise]);
     if (windowsEffectJob !== undefined) {
       await windowsEffectJob.drained;
     } else {

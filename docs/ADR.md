@@ -2,7 +2,7 @@
 
 > Last updated: 2026-08-21
 >
-> **v0.7.94 release addendum:** a direct text mutation may overlap a
+> **v0.7.94 release-candidate addendum:** a direct text mutation may overlap a
 > model-started shell only after Runtime has acquired the same workspace ASRT
 > policy and moved both snapshot and write into that sandbox. The complete
 > text transaction keeps its normalized-path FIFO and uses a file-identity-aware

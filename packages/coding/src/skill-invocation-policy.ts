@@ -29,6 +29,7 @@ interface AllowedToolRule {
 interface AllowedToolPolicy {
   readonly configured: boolean;
   readonly rules: readonly AllowedToolRule[];
+  readonly invalidEntries: readonly string[];
 }
 
 function splitTopLevelCommaList(value: string): string[] {
@@ -50,20 +51,34 @@ function splitTopLevelCommaList(value: string): string[] {
 }
 
 function parseAllowedTools(value?: string): AllowedToolPolicy {
-  if (!value?.trim()) return { configured: false, rules: [] };
-  const rules = splitTopLevelCommaList(value).flatMap((entry): AllowedToolRule[] => {
-    if (entry === '*') return [{ tool: '*' }];
-    if (entry.includes('(') && !entry.endsWith(')')) return [];
+  if (!value?.trim()) return { configured: false, rules: [], invalidEntries: [] };
+  const rules: AllowedToolRule[] = [];
+  const invalidEntries: string[] = [];
+  for (const entry of splitTopLevelCommaList(value)) {
+    if (entry === '*') {
+      rules.push({ tool: '*' });
+      continue;
+    }
+    if (entry.includes('(') && !entry.endsWith(')')) {
+      invalidEntries.push(entry);
+      continue;
+    }
     const match = entry.match(/^([^(]+?)(?:\((.*)\))?$/);
-    if (!match) return [];
+    if (!match) {
+      invalidEntries.push(entry);
+      continue;
+    }
     const tool = TOOL_NAME_ALIASES[match[1]!.replace(/[^a-z]/gi, '').toLowerCase()];
-    if (!tool) return [];
+    if (!tool) {
+      invalidEntries.push(entry);
+      continue;
+    }
     const patterns = match[2]
       ? splitTopLevelCommaList(match[2]).map((item) => item.trim()).filter(Boolean)
       : undefined;
-    return [{ tool, ...(patterns?.length ? { patterns } : {}) }];
-  });
-  return { configured: true, rules };
+    rules.push({ tool, ...(patterns?.length ? { patterns } : {}) });
+  }
+  return { configured: true, rules, invalidEntries };
 }
 
 function matchesPattern(pattern: string, value: string): boolean {
@@ -127,7 +142,13 @@ async function runHook(
         : typeof parsed.continue === 'boolean'
           ? parsed.continue
           : undefined;
-    } catch {
+    } catch (error: unknown) {
+      emitKodaXDiagnostic({
+        source: 'coding:skill-invocation',
+        level: 'warn',
+        message: `Skill ${event} hook returned invalid JSON.`,
+        detail: error,
+      });
       return undefined;
     }
   } catch (error) {
@@ -233,6 +254,14 @@ export async function applyRuntimeSkillInvocationPolicy(options: KodaXOptions): 
 
   const skill = await loadTrustedInvokedSkill(options, invocation.name);
   const allowedTools = parseAllowedTools(skill.allowedTools);
+  if (allowedTools.invalidEntries.length > 0) {
+    emitKodaXDiagnostic({
+      source: 'coding:skill-invocation',
+      level: 'warn',
+      message: `Skill ${invocation.name} has invalid allowed-tools entries.`,
+      detail: allowedTools.invalidEntries,
+    });
+  }
   const baseEvents = options.events ?? {};
   const cwd = options.context?.executionCwd ?? options.context?.gitRoot ?? process.cwd();
   const pending = new Set<Promise<void>>();
@@ -267,16 +296,19 @@ export async function applyRuntimeSkillInvocationPolicy(options: KodaXOptions): 
           : true;
       },
       onToolResult: (result, meta) => {
-        baseEvents.onToolResult?.(result, meta);
-        trackPostHook(runtimeOptions, runHooks(
-          'PostToolUse',
-          skill.hooks?.PostToolUse,
-          result.name,
-          { ...result, displayName: invocation.name, source: 'skill', path: invocation.path },
-          cwd,
-          allowedTools,
-          baseEvents.beforeToolExecute,
-        ));
+        try {
+          baseEvents.onToolResult?.(result, meta);
+        } finally {
+          trackPostHook(runtimeOptions, runHooks(
+            'PostToolUse',
+            skill.hooks?.PostToolUse,
+            result.name,
+            { ...result, displayName: invocation.name, source: 'skill', path: invocation.path },
+            cwd,
+            allowedTools,
+            baseEvents.beforeToolExecute,
+          ));
+        }
       },
     },
   };

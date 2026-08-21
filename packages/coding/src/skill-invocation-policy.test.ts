@@ -4,7 +4,11 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { applyRuntimeSkillInvocationPolicy } from './skill-invocation-policy.js';
 import { awaitRuntimeSkillInvocationPolicy } from './skill-invocation-policy.js';
-import { SkillRegistry } from '@kodax-ai/agent';
+import {
+  setKodaXDiagnosticSink,
+  SkillRegistry,
+  type KodaXDiagnostic,
+} from '@kodax-ai/agent';
 import type { KodaXOptions } from './types.js';
 
 const tempDirs: string[] = [];
@@ -141,6 +145,65 @@ describe('applyRuntimeSkillInvocationPolicy', () => {
     await awaitRuntimeSkillInvocationPolicy(options);
 
     await expect(readFile(marker, 'utf8')).resolves.toBe('done');
+  });
+
+  it('runs PostToolUse hooks even when the base result observer throws', async () => {
+    const markerRoot = await mkdtemp(path.join(os.tmpdir(), 'kodax-post-hook-finally-'));
+    tempDirs.push(markerRoot);
+    const marker = path.join(markerRoot, 'post-hook.txt');
+    const encodedMarker = Buffer.from(marker, 'utf8').toString('base64');
+    const fixture = await optionsWithSkill({
+      postToolUse: nodeCommand(
+        `require('node:fs').writeFileSync(Buffer.from('${encodedMarker}','base64').toString(),'done')`,
+      ),
+    });
+    fixture.options.events = {
+      beforeToolExecute: async () => true,
+      onToolResult: () => { throw new Error('injected result observer failure'); },
+    };
+    const options = await applyRuntimeSkillInvocationPolicy(fixture.options);
+
+    expect(() => options.events?.onToolResult?.({ id: 'tool-1', name: 'read', content: 'ok' }))
+      .toThrow('injected result observer failure');
+    await awaitRuntimeSkillInvocationPolicy(options);
+    await expect(readFile(marker, 'utf8')).resolves.toBe('done');
+  });
+
+  it('diagnoses invalid allowed-tools entries while preserving fail-closed enforcement', async () => {
+    const diagnostics: KodaXDiagnostic[] = [];
+    const restore = setKodaXDiagnosticSink((diagnostic) => diagnostics.push(diagnostic));
+    try {
+      const fixture = await optionsWithSkill({ allowedTools: 'read, imaginary-tool' });
+      const options = await applyRuntimeSkillInvocationPolicy(fixture.options);
+
+      await expect(options.events?.beforeToolExecute?.('read', {})).resolves.toBe(true);
+      await expect(options.events?.beforeToolExecute?.('write', {})).resolves.toContain('not allowed');
+      expect(diagnostics).toContainEqual(expect.objectContaining({
+        level: 'warn',
+        message: expect.stringContaining('invalid allowed-tools'),
+      }));
+    } finally {
+      restore();
+    }
+  });
+
+  it('diagnoses malformed hook output without treating it as an allow decision', async () => {
+    const diagnostics: KodaXDiagnostic[] = [];
+    const restore = setKodaXDiagnosticSink((diagnostic) => diagnostics.push(diagnostic));
+    try {
+      const fixture = await optionsWithSkill({
+        preToolUse: nodeCommand("process.stdout.write('not-json')"),
+      });
+      const options = await applyRuntimeSkillInvocationPolicy(fixture.options);
+
+      await expect(options.events?.beforeToolExecute?.('read', {})).resolves.toBe(true);
+      expect(diagnostics).toContainEqual(expect.objectContaining({
+        level: 'warn',
+        message: expect.stringContaining('invalid JSON'),
+      }));
+    } finally {
+      restore();
+    }
   });
 
   it('treats a bound registry as authoritative when it excludes the named Skill', async () => {

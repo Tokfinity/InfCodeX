@@ -266,7 +266,7 @@ SDK 系统代码契约更新，但没有放宽 shell/sandbox 的 fail-closed 边
 `handleRuntimePermissionRequest()` 管理 SDK 权限 UI，并在 prepared Session 尾部遇到
 `data_changed` 时通过权威 delta 合并恢复；后台持久化失败会显示为诊断，不再静默丢失。
 
-**v0.7.94 发布**：Runtime 文本工具可以与兼容的长驻/后台 Bash 并发，因为
+**v0.7.94 发布候选版**：Runtime 文本工具可以与兼容的长驻/后台 Bash 并发，因为
 snapshot 与 commit 走同一套 ASRT workspace 策略。硬链接工作区目标会被拒绝。
 Windows 沙箱 git 只信任已授权的仓库根，不再发出 `safe.directory=*`（Issue 300）。
 计划中的 daemon shutdown 在 cleanup 失败时报告失败，而不是声称安全停止。

@@ -69,6 +69,14 @@ const capturedProcessTreeKillOptions = vi.hoisted(
   () => [] as Array<Readonly<Record<string, unknown>>>,
 );
 const textMutationChildren = vi.hoisted(() => new WeakSet<object>());
+const textMutationStdinMock = vi.hoisted(() => ({
+  failNext: false,
+  observedErrorListener: false,
+}));
+const boundedMetadataReadMock = vi.hoisted(() => ({
+  trackedPaths: new Set<string>(),
+  fullReads: [] as string[],
+}));
 const processTreeKillMock = vi.hoisted(() => ({
   outcome: 'actual' as 'actual' | 'unknown' | 'close_then_unknown' | 'close_then_reject',
   childPid: undefined as number | undefined,
@@ -178,6 +186,13 @@ vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
   return {
     ...actual,
+    readFileSync: vi.fn((...args: Parameters<typeof actual.readFileSync>) => {
+      const target = args[0];
+      if (typeof target === 'string' && boundedMetadataReadMock.trackedPaths.has(path.resolve(target))) {
+        boundedMetadataReadMock.fullReads.push(path.resolve(target));
+      }
+      return actual.readFileSync(...args);
+    }),
     renameSync: vi.fn((
       oldPath: Parameters<typeof actual.renameSync>[0],
       newPath: Parameters<typeof actual.renameSync>[1],
@@ -534,6 +549,18 @@ vi.mock('node:child_process', async (importOriginal) => {
         let stdin = '';
         child.stdin.on('data', (chunk: Buffer) => { stdin += chunk.toString('utf8'); });
         child.stdin.once('finish', () => {
+          if (textMutationStdinMock.failNext) {
+            textMutationStdinMock.failNext = false;
+            textMutationStdinMock.observedErrorListener = child.stdin.listenerCount('error') > 0;
+            child.stdout.end();
+            child.stderr.end('injected text helper stdin failure');
+            if (textMutationStdinMock.observedErrorListener) {
+              child.stdin.emit('error', new Error('injected text helper stdin failure'));
+            }
+            child.emit('close', 1, null);
+            child.emit('exit', 1, null);
+            return;
+          }
           const attest = (): void => {
             if (textMutationRequest.observationFile !== undefined) {
               writeFileSync(textMutationRequest.observationFile, JSON.stringify({
@@ -932,6 +959,10 @@ afterEach(async () => {
   workspaceSessionControl.releaseClose = undefined;
   workspaceSessionControl.closeExitCode = 0;
   stubbornBroker.mode = 'none';
+  textMutationStdinMock.failNext = false;
+  textMutationStdinMock.observedErrorListener = false;
+  boundedMetadataReadMock.trackedPaths.clear();
+  boundedMetadataReadMock.fullReads.length = 0;
   await _resetFileSystemEffectLeasesForTests();
   await resetAsrtWorkspaceSessionsForTest();
   capturedBrokerRequests.length = 0;
@@ -1012,6 +1043,28 @@ async function markSandboxRuntimeUnavailable(): Promise<void> {
 }
 
 describe('ASRT workspace shell adapter', () => {
+  it('observes helper stdin failures and rejects only the text mutation operation', async () => {
+    processTreeKillMock.childPid = process.pid;
+    textMutationStdinMock.failNext = true;
+    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-text-stdin-'));
+    tempRoots.push(root);
+    const target = path.join(root, 'target.txt');
+    await writeFile(target, 'before', 'utf8');
+    const sandbox = createAsrtTextFileMutationSandbox({
+      workspaceRoot: root,
+      shouldSandbox: () => true,
+    });
+
+    await expect(sandbox.read({
+      toolCallId: 'stdin-failure-read',
+      toolName: 'edit',
+      toolInput: { path: target },
+      path: target,
+    })).rejects.toThrow(/text mutation|stdin failure/i);
+    expect(textMutationStdinMock.observedErrorListener).toBe(true);
+    await expect(readFile(target, 'utf8')).resolves.toBe('before');
+  });
+
   it('reads and compare-writes direct text tools through the workspace sandbox', async () => {
     processTreeKillMock.childPid = process.pid;
     const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-text-mutation-'));
@@ -6557,6 +6610,34 @@ describe('Windows git safe.directory argv takeover', () => {
       } finally {
         await forgedPrepared.cleanup();
       }
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'bounds linked-worktree relationship metadata before granting main .git access',
+    async () => {
+      const base = await mkdtemp(path.join(os.tmpdir(), 'kodax-git-metadata-bound-'));
+      tempRoots.push(base);
+      const mainGit = path.join(base, 'main', '.git');
+      const workspace = path.join(base, 'linked');
+      const linkedGit = path.join(mainGit, 'worktrees', 'linked');
+      const gitfile = path.join(workspace, '.git');
+      const commondir = path.join(linkedGit, 'commondir');
+      const backlink = path.join(linkedGit, 'gitdir');
+      await mkdir(linkedGit, { recursive: true });
+      await mkdir(workspace, { recursive: true });
+      await writeFile(path.join(mainGit, 'HEAD'), 'ref: refs/heads/main\n', 'utf8');
+      await writeFile(gitfile, `gitdir: ${linkedGit}\n`, 'utf8');
+      await writeFile(commondir, `${'x'.repeat(4_097)}\n`, 'utf8');
+      await writeFile(backlink, `${gitfile}\n`, 'utf8');
+      boundedMetadataReadMock.trackedPaths.add(path.resolve(gitfile));
+      boundedMetadataReadMock.trackedPaths.add(path.resolve(commondir));
+      boundedMetadataReadMock.trackedPaths.add(path.resolve(backlink));
+
+      const readRoots = await capturedSandboxReadRoots(workspace, 'oversized-linked-metadata');
+
+      expect(readRoots).not.toContain(path.resolve(mainGit));
+      expect(boundedMetadataReadMock.fullReads).toEqual([]);
     },
   );
 
