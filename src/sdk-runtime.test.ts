@@ -8935,6 +8935,216 @@ describe("createKodaXRuntime", () => {
     await runtime.close();
   });
 
+  it("settles a failed Run as unknown when its terminal event cannot be persisted", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "run-settlement-fence-sessions"),
+      defaultProvider: "mock-provider",
+    });
+    const session = await runtime.sessions.create({
+      title: "Run Settlement Persistence Fence",
+    });
+    let activeEvents: KodaXOptions["events"];
+    let rejectRun: ((error: Error) => void) | undefined;
+    codingMock.startKodaX.mockImplementation(
+      (options: KodaXOptions): RunningSession => {
+        activeEvents = options.events;
+        return fakeRunningSession(
+          options,
+          new Promise<KodaXResult>((_resolve, reject) => {
+            rejectRun = reject;
+          }),
+        );
+      },
+    );
+    const run = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "fail after the Session journal is fenced",
+    });
+    startTestOutputSegment(activeEvents, "request-run-settlement-fence");
+    const eventFile = runtimeEventLogPath(tempRoot, run.runId);
+    const appendFileSync = mutableNodeFs.appendFileSync;
+    mutableNodeFs.appendFileSync = ((file, data, options) => {
+      if (String(file) === eventFile) {
+        throw new Error("terminal settlement append failure");
+      }
+      return appendFileSync(file, data, options);
+    }) as typeof nodeFs.appendFileSync;
+    syncBuiltinESMExports();
+
+    try {
+      emitTestTextDelta(
+        activeEvents,
+        "request-run-settlement-fence",
+        "not durable",
+      );
+      activeEvents?.onToolUseStart?.({ id: "settlement-boundary", name: "read" });
+      await expect(runtime.events.replay({ runId: run.runId })).rejects.toThrow(
+        "terminal settlement append failure",
+      );
+    } finally {
+      mutableNodeFs.appendFileSync = appendFileSync;
+      syncBuiltinESMExports();
+    }
+
+    const statusFile = path.join(
+      tempRoot,
+      ".kodax",
+      "runtime",
+      "runs",
+      run.runId,
+      "status.json",
+    );
+    const renameSync = mutableNodeFs.renameSync;
+    mutableNodeFs.renameSync = ((source, destination) => {
+      if (String(destination) === statusFile) {
+        throw Object.assign(new Error("terminal status persistence failure"), {
+          code: "EIO",
+        });
+      }
+      return renameSync(source, destination);
+    }) as typeof nodeFs.renameSync;
+    syncBuiltinESMExports();
+    try {
+      rejectRun?.(new Error("provider failed after persistence fence"));
+      await expect(run.result).resolves.toMatchObject({
+        runId: run.runId,
+        sessionId: session.id,
+        phase: "unknown",
+        error: expect.objectContaining({
+          name: "RuntimeRunSettlementError",
+        }),
+      });
+    } finally {
+      mutableNodeFs.renameSync = renameSync;
+      syncBuiltinESMExports();
+    }
+    await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+      phase: "unknown",
+      stage: "unknown",
+      lifecycleError: {
+        code: "run_settlement_not_persisted",
+        retryable: false,
+      },
+    });
+    await expect(runtime.status.preflight()).resolves.toMatchObject({
+      canStop: false,
+      blockers: expect.arrayContaining(["active_runs"]),
+      activeRuns: [expect.objectContaining({ runId: run.runId, phase: "unknown" })],
+    });
+    await runtime.close().catch(() => undefined);
+  });
+
+  it("keeps a durable terminal status authoritative when only its event journal is fenced", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "durable-terminal-fenced-events-sessions"),
+      defaultProvider: "mock-provider",
+    });
+    const session = await runtime.sessions.create({ title: "Durable Terminal" });
+    let activeEvents: KodaXOptions["events"];
+    let rejectRun: ((error: Error) => void) | undefined;
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions) => {
+      activeEvents = options.events;
+      return fakeRunningSession(options, new Promise<KodaXResult>((_resolve, reject) => {
+        rejectRun = reject;
+      }));
+    });
+    const run = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "keep the durable terminal authoritative",
+    });
+    startTestOutputSegment(activeEvents, "request-durable-terminal");
+    const eventFile = runtimeEventLogPath(tempRoot, run.runId);
+    const appendFileSync = mutableNodeFs.appendFileSync;
+    mutableNodeFs.appendFileSync = ((file, data, options) => {
+      if (String(file) === eventFile) throw new Error("event journal unavailable");
+      return appendFileSync(file, data, options);
+    }) as typeof nodeFs.appendFileSync;
+    syncBuiltinESMExports();
+    try {
+      emitTestTextDelta(activeEvents, "request-durable-terminal", "not durable");
+      activeEvents?.onToolUseStart?.({ id: "durable-boundary", name: "read" });
+      await expect(runtime.events.replay({ runId: run.runId })).rejects.toThrow(
+        "event journal unavailable",
+      );
+    } finally {
+      mutableNodeFs.appendFileSync = appendFileSync;
+      syncBuiltinESMExports();
+    }
+
+    rejectRun?.(new Error("provider failed after event fence"));
+    await expect(run.result).resolves.toMatchObject({
+      phase: "failed",
+      terminal: { kind: "failed", code: "run_failed" },
+    });
+    await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+      phase: "failed",
+      terminal: { kind: "failed", code: "run_failed" },
+    });
+    await runtime.close();
+  });
+
+  it("keeps a successful durable terminal free of a synthetic provider failure", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "durable-completion-fenced-events-sessions"),
+      defaultProvider: "mock-provider",
+    });
+    const session = await runtime.sessions.create({ title: "Durable Completion" });
+    let activeEvents: KodaXOptions["events"];
+    let resolveRun: ((result: KodaXResult) => void) | undefined;
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions) => {
+      activeEvents = options.events;
+      return fakeRunningSession(options, new Promise<KodaXResult>((resolve) => {
+        resolveRun = resolve;
+      }));
+    });
+    const run = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "complete after the event journal is fenced",
+    });
+    startTestOutputSegment(activeEvents, "request-durable-completion");
+    const eventFile = runtimeEventLogPath(tempRoot, run.runId);
+    const appendFileSync = mutableNodeFs.appendFileSync;
+    mutableNodeFs.appendFileSync = ((file, data, options) => {
+      if (String(file) === eventFile) throw new Error("event journal unavailable");
+      return appendFileSync(file, data, options);
+    }) as typeof nodeFs.appendFileSync;
+    syncBuiltinESMExports();
+    try {
+      emitTestTextDelta(activeEvents, "request-durable-completion", "not durable");
+      activeEvents?.onToolUseStart?.({ id: "completion-boundary", name: "read" });
+      await expect(runtime.events.replay({ runId: run.runId })).rejects.toThrow(
+        "event journal unavailable",
+      );
+    } finally {
+      mutableNodeFs.appendFileSync = appendFileSync;
+      syncBuiltinESMExports();
+    }
+
+    resolveRun?.({
+      success: true,
+      lastText: "completed",
+      messages: [],
+      sessionId: session.id,
+    });
+    await expect(run.result).resolves.toMatchObject({
+      phase: "completed",
+      result: { success: true },
+      terminal: { kind: "completed", code: "completed" },
+    });
+    expect((await run.result).error).toBeUndefined();
+    await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+      phase: "completed",
+      terminal: { kind: "completed", code: "completed" },
+    });
+    await runtime.close();
+  });
+
   it("does not retry an appended batch when only event-log trimming fails", async () => {
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
     const sessionsDir = path.join(tempRoot, "sessions");
@@ -13998,7 +14208,9 @@ describe("createKodaXRuntime", () => {
       options.events?.onError?.(new Error(`provider emitted ${secret}`));
       return fakeRunningSession(
         options,
-        Promise.reject(new Error(`provider rejected ${secret}`)),
+        Promise.reject(Object.assign(new Error(`provider rejected ${secret}`), {
+          code: "ETIMEDOUT",
+        })),
       );
     });
     const trustedInput = {
@@ -14017,6 +14229,12 @@ describe("createKodaXRuntime", () => {
       error: {
         message: "Provider run failed while using a run-scoped credential.",
       },
+      terminal: {
+        failureKind: "network",
+      },
+    });
+    await expect(runtime.runs.get(handle.runId)).resolves.toMatchObject({
+      terminal: { failureKind: "network" },
     });
     expect(JSON.stringify(await runtime.runs.get(handle.runId))).not.toContain(
       secret,

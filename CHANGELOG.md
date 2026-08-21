@@ -20,6 +20,16 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Run terminal convergence now observes every finalization rejection. A durable
+  terminal status remains authoritative if only event publication fails; when
+  neither terminal record can be persisted, the public Run resolves as
+  `unknown` with `run_settlement_not_persisted` and the Session execution fence
+  remains closed instead of escalating the rejection to the daemon process.
+- Workspace-sandbox and managed-child emergency termination promises are now
+  observed and retain fail-closed diagnostics when process-tree drain cannot be
+  confirmed. Daemon transport disconnects expose typed connection facts, reject
+  oversized outbound frames before socket write, and credential-safe terminals
+  preserve a bounded `failureKind` without persisting provider error text.
 - Explicit `/<name>` and `/skill:<name>` tokens now resolve at the query head or
   middle, preserve suffix arguments, and use the same host-owned expansion,
   hooks, and permission pipeline in Classic, Ink, non-interactive CLI, queued

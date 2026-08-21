@@ -282,7 +282,12 @@ describe('runtime daemon transport', () => {
 
     await expect(transport.request('daemon.logs')).rejects.toThrow('log stream failed');
     const pending = transport.request('daemon.status');
-    const rejected = expect(pending).rejects.toThrow('Runtime daemon transport closed.');
+    const rejected = expect(pending).rejects.toMatchObject({
+      name: 'RuntimeDaemonDisconnectError',
+      code: 'client_closed',
+      reconnectable: false,
+      connectionId: expect.stringMatching(/^connection_/),
+    });
     await transport.close?.();
     await rejected;
   });
@@ -308,7 +313,9 @@ describe('runtime daemon transport', () => {
     expect(states[0]).toMatchObject({ state: 'connected' });
     expect(states.at(-1)).toMatchObject({
       state: 'disconnected',
+      code: 'protocol_closed',
       reconnectable: true,
+      connectionId: expect.stringMatching(/^connection_/),
     });
     subscription?.close();
   });
@@ -379,20 +386,49 @@ describe('runtime daemon transport', () => {
     const endpoint = await makeTestEndpoint();
     const server = await listen(endpoint, (socket) => {
       socket.once('data', () => {
-        socket.write('x'.repeat(65));
+        socket.write('x'.repeat(257));
       });
     });
     cleanupTasks.push(() => closeServer(server));
     const transport = await createRuntimeDaemonSocketClientTransport(endpoint, {
-      maxFrameBytes: 64,
+      maxFrameBytes: 256,
     });
     cleanupTasks.push(async () => {
       await transport.close?.();
     });
 
     await expect(transport.request('ping')).rejects.toMatchObject({
+      name: 'RuntimeDaemonDisconnectError',
       code: 'invalid_frame',
+      reconnectable: true,
+      connectionId: expect.stringMatching(/^connection_/),
     });
+  });
+
+  it('rejects an oversized outbound request before writing it to the socket', async () => {
+    const endpoint = await makeTestEndpoint();
+    let receivedBytes = 0;
+    const server = await listen(endpoint, (socket) => {
+      socket.on('data', (chunk) => {
+        receivedBytes += chunk.length;
+      });
+    });
+    cleanupTasks.push(() => closeServer(server));
+    const transport = await createRuntimeDaemonSocketClientTransport(endpoint, {
+      maxFrameBytes: 96,
+    });
+    cleanupTasks.push(async () => {
+      await transport.close?.();
+    });
+
+    await expect(transport.request('session.create', {
+      title: 'x'.repeat(256),
+    })).rejects.toMatchObject({
+      code: 'invalid_frame',
+      data: expect.objectContaining({ maxFrameBytes: 96 }),
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(receivedBytes).toBe(0);
   });
 
   it('fails non-serializable request and response payloads without leaking requests', async () => {

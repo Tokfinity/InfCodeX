@@ -24,6 +24,7 @@ import {
   bashSignalCollector,
   CANCELLED_TOOL_RESULT_MESSAGE,
   checkAbsoluteDeny,
+  classifyResilienceError,
   createExternalActorTurnExecutor,
   createOutputSegmentProjection,
   effectiveOutputSegmentText,
@@ -241,6 +242,7 @@ export type { RuntimeLearningService } from "./runtime-learning.js";
 import {
   createRuntimeDaemonClient,
   type RuntimeDaemonClientTransport,
+  type RuntimeDaemonTransportLifecycleState,
 } from "./runtime-daemon/client.js";
 import { acquireRuntimeDaemonLease } from "./runtime-daemon/manager.js";
 import {
@@ -319,6 +321,7 @@ export class RuntimeAutoModeConfigurationError extends Error {
   }
 }
 export type {
+  RuntimeDaemonDisconnectCode,
   RuntimeDaemonClientTransport,
   RuntimeDaemonRequestControl,
   RuntimeDaemonTransportLifecycleState,
@@ -364,6 +367,10 @@ export type {
   RuntimeDaemonProtocolSchema,
 } from "./runtime-daemon/schema.js";
 export type { RuntimeDaemonEndpoint } from "./runtime-daemon/transport.js";
+export {
+  RuntimeDaemonDisconnectError,
+  isRuntimeDaemonDisconnectError,
+} from "./runtime-daemon/transport.js";
 export type {
   KodaXPromptCacheDiagnosticEvent,
   RuntimeContextBudgetSnapshot,
@@ -871,6 +878,7 @@ export interface RuntimeConnectionState {
   readonly connectionId: string;
   readonly runtimeEpoch: string;
   readonly journalEpoch?: string;
+  readonly code?: RuntimeDaemonTransportLifecycleState["code"];
   readonly reason?: string;
   readonly reconnectable: boolean;
 }
@@ -1260,6 +1268,7 @@ export type RuntimeSessionDiagnosticErrorCode =
   | "stop_outcome_unconfirmed"
   | "actor_settlement_retrying"
   | "actor_settlement_not_persisted"
+  | "run_settlement_not_persisted"
   | "run_failed"
   | "terminal_time_unknown";
 
@@ -1901,7 +1910,8 @@ export interface RuntimeRunStatus {
 export interface RuntimeRunLifecycleError {
   readonly code:
     | "actor_settlement_retrying"
-    | "actor_settlement_not_persisted";
+    | "actor_settlement_not_persisted"
+    | "run_settlement_not_persisted";
   readonly message: string;
   readonly retryable: boolean;
 }
@@ -1978,12 +1988,22 @@ export type RuntimeTerminalCode =
   | "actor_settlement_not_persisted"
   | "control_history_untrusted";
 
+export type RuntimeRunFailureKind =
+  | "auth"
+  | "rate_limit"
+  | "network"
+  | "provider_aborted"
+  | "invalid_response"
+  | "runtime_cleanup"
+  | "provider";
+
 export interface RuntimeTerminalFact {
   readonly revision: number;
   readonly kind: "completed" | "failed" | "cancelled" | "interrupted";
   readonly code: RuntimeTerminalCode;
   readonly effectOutcome: "none" | "known" | "unknown";
   readonly message?: string;
+  readonly failureKind?: RuntimeRunFailureKind;
 }
 
 export interface RuntimeRunResult {
@@ -7945,24 +7965,56 @@ function createRuntimeRunService(deps: {
     delete record.unconfirmedResult;
     delete record.unconfirmedFailure;
     releaseAbortSignalSubscription(record);
-    deps.permissions.rejectForRun(record.runId, "runtime run ended");
-    deps.userInputs.rejectForRun(record.runId, "runtime run ended");
-    record.start?.options.guardrails
-      ?.find(isRuntimeAutoModeGuardrail)
-      ?.clearAllowedCalls();
+    runSettlementCleanupStep(record, "permission cleanup", () => {
+      deps.permissions.rejectForRun(record.runId, "runtime run ended");
+    });
+    runSettlementCleanupStep(record, "user-input cleanup", () => {
+      deps.userInputs.rejectForRun(record.runId, "runtime run ended");
+    });
+    runSettlementCleanupStep(record, "guardrail cleanup", () => {
+      record.start?.options.guardrails
+        ?.find(isRuntimeAutoModeGuardrail)
+        ?.clearAllowedCalls();
+    });
     resolveRunStart(record, result);
-    releaseActiveQueueRoute(record);
-    releaseActiveRun(record);
-    pruneTerminalRuns(deps.runs);
-    drainNext(record.sessionId);
+    runSettlementCleanupStep(record, "queue-route cleanup", () => {
+      releaseActiveQueueRoute(record);
+    });
+    runSettlementCleanupStep(record, "active-run cleanup", () => {
+      releaseActiveRun(record);
+    });
+    runSettlementCleanupStep(record, "terminal-record pruning", () => {
+      pruneTerminalRuns(deps.runs);
+    });
+    runSettlementCleanupStep(record, "queued-Run admission", () => {
+      drainNext(record.sessionId);
+    });
     return result;
+  };
+
+  const runSettlementCleanupStep = (
+    record: RuntimeRunRecord,
+    step: string,
+    action: () => void,
+  ): void => {
+    try {
+      action();
+    } catch (error: unknown) {
+      emitKodaXDiagnostic({
+        source: "runtime.run-settlement",
+        level: "error",
+        message: `Runtime run ${record.runId} failed ${step}.`,
+        detail: normalizeError(error),
+      });
+    }
   };
 
   const finishUnconfirmedRun = (
     record: RuntimeRunRecord,
     result: RuntimeRunResult,
+    publish = true,
   ): RuntimeRunResult => {
-    if (record.settlementFinished === true) {
+    if (record.settlementFinished === true && record.start === undefined) {
       // A terminal callback may have resolved the public Run result while the
       // executor Promise was still pending. Retain a later Promise payload as
       // the authoritative replay fact without resolving or publishing twice.
@@ -7978,19 +8030,90 @@ function createRuntimeRunService(deps: {
       record.stage = "unknown";
       record.stageChangedAt = new Date().toISOString();
       record.error = result.error?.message ?? "Actor settlement persistence is unknown.";
-      publishRunUpdate(record);
+      if (publish) publishRunUpdate(record);
     }
     releaseAbortSignalSubscription(record);
-    deps.permissions.rejectForRun(record.runId, "runtime run state is unknown");
-    deps.userInputs.rejectForRun(record.runId, "runtime run state is unknown");
-    record.start?.options.guardrails
-      ?.find(isRuntimeAutoModeGuardrail)
-      ?.clearAllowedCalls();
+    runSettlementCleanupStep(record, "unknown permission cleanup", () => {
+      deps.permissions.rejectForRun(record.runId, "runtime run state is unknown");
+    });
+    runSettlementCleanupStep(record, "unknown user-input cleanup", () => {
+      deps.userInputs.rejectForRun(record.runId, "runtime run state is unknown");
+    });
+    runSettlementCleanupStep(record, "unknown guardrail cleanup", () => {
+      record.start?.options.guardrails
+        ?.find(isRuntimeAutoModeGuardrail)
+        ?.clearAllowedCalls();
+    });
     resolveRunStart(record, result);
-    releaseActiveQueueRoute(record);
+    runSettlementCleanupStep(record, "unknown queue-route cleanup", () => {
+      releaseActiveQueueRoute(record);
+    });
     // Keep activeRunBySession fenced. No later Run may execute until the
     // uncertain Actor settlement is explicitly repaired or exported.
     return result;
+  };
+
+  const finishDurableRunAfterEventFailure = (
+    record: RuntimeRunRecord,
+    cause: Error,
+    terminal: RuntimeTerminalFact,
+  ): RuntimeRunResult => {
+    emitKodaXDiagnostic({
+      source: "runtime.run-settlement",
+      level: "error",
+      message: `Runtime run ${record.runId} retained its durable terminal status after event publication failed.`,
+      detail: cause,
+    });
+    return finishRun(record, {
+      runId: record.runId,
+      sessionId: record.sessionId,
+      phase: record.phase,
+      ...(record.capturedExecutorResult !== undefined
+        ? { result: record.capturedExecutorResult }
+        : {}),
+      ...(record.capturedExecutorFailure?.error !== undefined
+        ? { error: record.capturedExecutorFailure.error }
+        : {}),
+      terminal,
+      ...(record.stop !== undefined ? { stop: record.stop } : {}),
+    });
+  };
+
+  const finishRunSettlementFailure = (
+    record: RuntimeRunRecord,
+    error: unknown,
+  ): RuntimeRunResult => {
+    const cause = normalizeError(error);
+    if (record.terminalEmitted && record.terminal !== undefined) {
+      return finishDurableRunAfterEventFailure(record, cause, record.terminal);
+    }
+    const message = `Run terminal settlement was not persisted: ${cause.message}`;
+    const settlementError = Object.assign(new Error(message, { cause }), {
+      name: "RuntimeRunSettlementError",
+      code: "run_settlement_not_persisted" as const,
+      retryable: false as const,
+    });
+    record.terminalEmitted = false;
+    delete record.terminal;
+    delete record.endedAt;
+    record.lifecycleError = {
+      code: "run_settlement_not_persisted",
+      message,
+      retryable: false,
+    };
+    emitKodaXDiagnostic({
+      source: "runtime.run-settlement",
+      level: "error",
+      message: `Runtime run ${record.runId} entered an unknown settlement state.`,
+      detail: settlementError,
+    });
+    return finishUnconfirmedRun(record, {
+      runId: record.runId,
+      sessionId: record.sessionId,
+      phase: "unknown",
+      error: settlementError,
+      ...(record.stop !== undefined ? { stop: record.stop } : {}),
+    }, false);
   };
 
   const activeManagedActorTurnIds = (
@@ -8413,6 +8536,7 @@ function createRuntimeRunService(deps: {
           message: `Failed to settle Runtime run ${record.runId} after its executor terminal signal.`,
           detail: error,
         });
+        finishRunSettlementFailure(record, error);
       });
     });
   };
@@ -8442,12 +8566,18 @@ function createRuntimeRunService(deps: {
     }
     const normalized = normalizeRuntimeRunError(error, record);
     const failure = classifyRuntimeRunFailure(error);
+    const failureKind = record.hadProviderCredential
+      ? classifyCredentialSafeFailureKind(error)
+      : undefined;
     const capturedError = new Error(normalized.message);
     capturedError.name = normalized.name;
     return {
       phase: failure.phase,
       error: capturedError,
-      terminal: failure.terminal,
+      terminal: {
+        ...failure.terminal,
+        ...(failureKind !== undefined ? { failureKind } : {}),
+      },
     };
   };
 
@@ -8995,8 +9125,7 @@ function createRuntimeRunService(deps: {
               : {}),
             ...(record.stop !== undefined ? { stop: record.stop } : {}),
           };
-        })
-        .catch(async (error: unknown) => {
+        }, async (error: unknown) => {
           const failure = captureRunFailureFact(record, error);
           record.capturedExecutorFailure = failure;
           const actorHealth = await awaitActorFinalization(record);
@@ -9006,7 +9135,8 @@ function createRuntimeRunService(deps: {
           }
           return applyRunFailureFact(record, failure);
         })
-        .then((result) => finishAccordingToTerminalFact(record, result));
+        .then((result) => finishAccordingToTerminalFact(record, result))
+        .catch((error: unknown) => finishRunSettlementFailure(record, error));
       return;
     }
 
@@ -9071,8 +9201,7 @@ function createRuntimeRunService(deps: {
           result: value,
           ...(record.stop !== undefined ? { stop: record.stop } : {}),
         };
-      })
-      .catch(async (error: unknown) => {
+      }, async (error: unknown) => {
         const failure = captureRunFailureFact(record, error);
         record.capturedExecutorFailure = failure;
         const actorHealth = await awaitActorFinalization(record);
@@ -9082,7 +9211,8 @@ function createRuntimeRunService(deps: {
         }
         return applyRunFailureFact(record, failure);
       })
-      .then((result) => finishAccordingToTerminalFact(record, result));
+      .then((result) => finishAccordingToTerminalFact(record, result))
+      .catch((error: unknown) => finishRunSettlementFailure(record, error));
   };
 
   const startRecord = (
@@ -9094,14 +9224,18 @@ function createRuntimeRunService(deps: {
     } catch (error) {
       const failure = captureRunFailureFact(record, error);
       record.capturedExecutorFailure = failure;
-      void awaitActorFinalization(record).then((actorHealth) => {
-        if (actorHealth.state === "unknown") {
-          record.unconfirmedFailure = failure;
-          finishUnconfirmedRun(record, unknownActorSettlementResult(record));
-          return;
-        }
-        finishRun(record, applyRunFailureFact(record, failure));
-      });
+      void awaitActorFinalization(record)
+        .then((actorHealth) => {
+          if (actorHealth.state === "unknown") {
+            record.unconfirmedFailure = failure;
+            finishUnconfirmedRun(record, unknownActorSettlementResult(record));
+            return;
+          }
+          finishRun(record, applyRunFailureFact(record, failure));
+        })
+        .catch((settlementError: unknown) => {
+          finishRunSettlementFailure(record, settlementError);
+        });
       return { error };
     }
   };
@@ -15519,6 +15653,7 @@ function parseRuntimeRunLifecycleError(
     || (
       value.code !== "actor_settlement_retrying"
       && value.code !== "actor_settlement_not_persisted"
+      && value.code !== "run_settlement_not_persisted"
     )
     || typeof value.message !== "string"
     || typeof value.retryable !== "boolean"
@@ -15638,7 +15773,24 @@ function parseRuntimeTerminalFact(
     code: value.code,
     effectOutcome: value.effectOutcome,
     ...(typeof value.message === "string" ? { message: value.message } : {}),
+    ...(isRuntimeRunFailureKind(value.failureKind)
+      ? { failureKind: value.failureKind }
+      : {}),
   };
+}
+
+function isRuntimeRunFailureKind(
+  value: unknown,
+): value is RuntimeRunFailureKind {
+  return (
+    value === "auth" ||
+    value === "rate_limit" ||
+    value === "network" ||
+    value === "provider_aborted" ||
+    value === "invalid_response" ||
+    value === "runtime_cleanup" ||
+    value === "provider"
+  );
 }
 
 function isRuntimeTerminalKind(
@@ -20161,7 +20313,6 @@ function markRunTerminal(
       resolvedAt: endedAt,
     };
   }
-  run.terminalEmitted = true;
   const kind: RuntimeTerminalFact["kind"] =
     phase === "completed"
       ? "completed"
@@ -20177,6 +20328,9 @@ function markRunTerminal(
     effectOutcome:
       terminal?.effectOutcome ?? (kind === "interrupted" ? "unknown" : "known"),
     ...(terminal?.message !== undefined ? { message: terminal.message } : {}),
+    ...(terminal?.failureKind !== undefined
+      ? { failureKind: terminal.failureKind }
+      : {}),
   };
   const type: RuntimeEventType =
     phase === "completed"
@@ -20187,21 +20341,24 @@ function markRunTerminal(
           ? "run.interrupted"
           : "run.failed";
   const proposed = statusFromRecord(run);
-  const authoritative = saveRunStatusSafely(
-    bus,
-    persistence,
-    run,
-    proposed,
-  );
+  let statusPersisted = false;
+  const authoritative = saveRunStatusSafely(bus, persistence, run, proposed);
+  statusPersisted = authoritative !== undefined;
   if (authoritative !== undefined && authoritative !== proposed) {
     applyAuthoritativeRunStatus(run, authoritative);
     return;
   }
-  bus.emit(type, statusFromRecord(run), {
-    sessionId: run.sessionId,
-    runId: run.runId,
-    ...(run.turnId !== undefined ? { turnId: run.turnId } : {}),
-  });
+  run.terminalEmitted = true;
+  try {
+    bus.emit(type, statusFromRecord(run), {
+      sessionId: run.sessionId,
+      runId: run.runId,
+      ...(run.turnId !== undefined ? { turnId: run.turnId } : {}),
+    });
+  } catch (error: unknown) {
+    if (!statusPersisted) run.terminalEmitted = false;
+    throw error;
+  }
 }
 
 function terminalizeQueuedInterruptInputs(run: RuntimeRunRecord): void {
@@ -20357,6 +20514,70 @@ function normalizeRuntimeRunError(
   );
   safe.name = "KodaXProviderRunError";
   return safe;
+}
+
+function classifyCredentialSafeFailureKind(
+  error: unknown,
+): RuntimeRunFailureKind {
+  const normalized = normalizeError(error);
+  const status = readNumericErrorField(error, "status")
+    ?? readNumericErrorField(error, "statusCode");
+  const code = readStringErrorField(error, "code")?.toLowerCase();
+  if (
+    status === 401 ||
+    status === 403 ||
+    normalized.name === "AuthenticationError" ||
+    normalized.name === "PermissionDeniedError" ||
+    code === "unauthorized" ||
+    code === "invalid_api_key" ||
+    code === "authentication_error"
+  ) {
+    return "auth";
+  }
+  if (
+    code === "actor_settlement_not_persisted" ||
+    code === "run_settlement_not_persisted" ||
+    normalized.name === "AgentSettlementPersistenceError"
+  ) {
+    return "runtime_cleanup";
+  }
+  const errorClass = classifyResilienceError(normalized).errorClass;
+  if (errorClass === "rate_limit") return "rate_limit";
+  if (
+    errorClass === "request_timeout" ||
+    errorClass === "stream_idle_timeout" ||
+    errorClass === "chunk_timeout" ||
+    errorClass === "connection_failure" ||
+    errorClass === "provider_overloaded"
+  ) {
+    return "network";
+  }
+  if (errorClass === "user_abort") return "provider_aborted";
+  if (
+    errorClass === "incomplete_stream" ||
+    errorClass === "reasoning_content_required"
+  ) {
+    return "invalid_response";
+  }
+  return "provider";
+}
+
+function readStringErrorField(
+  error: unknown,
+  field: string,
+): string | undefined {
+  if (!isRecord(error)) return undefined;
+  const value = error[field];
+  return typeof value === "string" ? value : undefined;
+}
+
+function readNumericErrorField(
+  error: unknown,
+  field: string,
+): number | undefined {
+  if (!isRecord(error)) return undefined;
+  const value = error[field];
+  return typeof value === "number" ? value : undefined;
 }
 
 function permissionMatchesFilter(

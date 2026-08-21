@@ -121,6 +121,7 @@ const workspaceSessionControl = vi.hoisted(() => ({
   afterWrapResponse: undefined as (() => void) | undefined,
   cleanupRequests: 0,
   malformedReady: false,
+  malformedResponseFor: undefined as 'wrap' | 'cleanup' | undefined,
   delayClose: false,
   releaseClose: undefined as (() => void) | undefined,
   closeExitCode: 0,
@@ -422,7 +423,9 @@ vi.mock('node:child_process', async (importOriginal) => {
                     error: workspaceSessionControl.cleanupFailure,
                   };
             const reportResponse = (): void => {
-              control.write(`${JSON.stringify(response)}\n`);
+              control.write(workspaceSessionControl.malformedResponseFor === message.type
+                ? `${JSON.stringify({ type: 'unexpected' })}\n`
+                : `${JSON.stringify(response)}\n`);
               if (message.type === 'wrap') workspaceSessionControl.afterWrapResponse?.();
             };
             if (message.type === 'wrap' && workspaceSessionControl.delayWrap) {
@@ -923,6 +926,7 @@ afterEach(async () => {
   workspaceSessionControl.afterWrapResponse = undefined;
   workspaceSessionControl.cleanupRequests = 0;
   workspaceSessionControl.malformedReady = false;
+  workspaceSessionControl.malformedResponseFor = undefined;
   workspaceSessionControl.delayClose = false;
   workspaceSessionControl.releaseClose?.();
   workspaceSessionControl.releaseClose = undefined;
@@ -4599,6 +4603,41 @@ describe('ASRT workspace shell adapter', () => {
     processTreeKillMock.releaseUnknown = undefined;
     processTreeKillMock.outcome = 'actual';
     workspaceSessionControl.malformedReady = false;
+  });
+
+  it('observes a failed workspace-session termination after a malformed live response', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-session-live-malformed-'));
+    tempRoots.push(root);
+    workspaceSessionControl.malformedResponseFor = 'wrap';
+    processTreeKillMock.outcome = 'unknown';
+    const sandbox = createAsrtShellSandbox({
+      workspaceRoot: root,
+      shouldSandbox: () => true,
+    });
+    const unhandled: unknown[] = [];
+    const observeUnhandled = (error: unknown): void => {
+      unhandled.push(error);
+    };
+    process.on('unhandledRejection', observeUnhandled);
+    try {
+      await expect(sandbox.prepare({
+        toolCallId: 'bash-live-malformed-response',
+        toolInput: { command: 'node --version' },
+        command: 'node --version',
+        executable: process.execPath,
+        args: ['--version'],
+        cwd: root,
+        env: process.env,
+      })).resolves.toBeUndefined();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', observeUnhandled);
+      processTreeKillMock.releaseUnknown?.();
+      processTreeKillMock.releaseUnknown = undefined;
+      processTreeKillMock.outcome = 'actual';
+      workspaceSessionControl.malformedResponseFor = undefined;
+    }
   });
 
   it('force-terminates a malformed owner and recovers after verified ACL cleanup', async () => {

@@ -9,6 +9,7 @@ import { emitKodaXDiagnostic } from '@kodax-ai/agent';
 import type { RuntimeSubscription } from '../sdk-runtime.js';
 import type {
   RuntimeDaemonClientTransport,
+  RuntimeDaemonDisconnectCode,
   RuntimeDaemonTransportLifecycleState,
 } from './client.js';
 import {
@@ -79,6 +80,25 @@ export function isRuntimeDaemonTransportError(
   error: unknown,
 ): error is RuntimeDaemonTransportError {
   return error instanceof RuntimeDaemonTransportError;
+}
+
+export class RuntimeDaemonDisconnectError extends Error {
+  constructor(
+    message: string,
+    readonly code: RuntimeDaemonDisconnectCode,
+    readonly connectionId: string,
+    readonly reconnectable: boolean,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = 'RuntimeDaemonDisconnectError';
+  }
+}
+
+export function isRuntimeDaemonDisconnectError(
+  error: unknown,
+): error is RuntimeDaemonDisconnectError {
+  return error instanceof RuntimeDaemonDisconnectError;
 }
 
 export function defaultRuntimeDaemonEndpoint(
@@ -171,6 +191,7 @@ export async function createRuntimeDaemonSocketClientTransport(
 
   await waitForConnect(socket, options.connectTimeoutMs);
 
+  const maxFrameBytes = options.maxFrameBytes ?? RUNTIME_DAEMON_MAX_FRAME_BYTES;
   let closed = false;
   let journalEpoch: string | undefined;
   const clientInstanceId = `transport_${randomUUID().replace(/-/g, '')}`;
@@ -185,11 +206,25 @@ export async function createRuntimeDaemonSocketClientTransport(
     connectionId,
     reconnectable: false,
   };
-  const disconnect = (reason: string, reconnectable: boolean): void => {
-    if (lifecycleState.state === 'disconnected') return;
+  let disconnectError: RuntimeDaemonDisconnectError | undefined;
+  const disconnect = (
+    code: RuntimeDaemonDisconnectCode,
+    reason: string,
+    reconnectable: boolean,
+    cause?: Error,
+  ): RuntimeDaemonDisconnectError => {
+    if (disconnectError !== undefined) return disconnectError;
+    disconnectError = new RuntimeDaemonDisconnectError(
+      reason,
+      code,
+      connectionId,
+      reconnectable,
+      cause === undefined ? undefined : { cause },
+    );
     lifecycleState = {
       state: 'disconnected',
       connectionId,
+      code,
       reason,
       reconnectable,
     };
@@ -204,6 +239,7 @@ export async function createRuntimeDaemonSocketClientTransport(
         });
       }
     }
+    return disconnectError;
   };
   const pending = new Map<string, {
     readonly resolve: (value: unknown) => void;
@@ -308,29 +344,43 @@ export async function createRuntimeDaemonSocketClientTransport(
     } catch (error: unknown) {
       closed = true;
       const normalized = normalizeTransportError(error);
-      disconnect(normalized.message, true);
-      rejectPending(pending, normalized);
+      const disconnected = disconnect(
+        'invalid_frame',
+        normalized.message,
+        true,
+        normalized,
+      );
+      rejectPending(pending, disconnected);
       clearLateResults();
       socket.destroy(normalized);
     }
   });
   socket.on('close', () => {
     closed = true;
-    disconnect('Runtime daemon transport closed.', true);
-    rejectPending(pending, new Error('Runtime daemon transport closed.'));
+    const error = disconnect(
+      'protocol_closed',
+      'Runtime daemon transport closed.',
+      true,
+    );
+    rejectPending(pending, error);
     clearLateResults();
   });
   socket.on('error', (error) => {
     closed = true;
-    disconnect(error.message, true);
-    rejectPending(pending, error);
+    const disconnected = disconnect('transport_error', error.message, true, error);
+    rejectPending(pending, disconnected);
     clearLateResults();
   });
 
   return {
     request(method, params, operation, control) {
       if (closed) {
-        return Promise.reject(new Error('Runtime daemon transport is closed.'));
+        return Promise.reject(disconnectError ?? new RuntimeDaemonDisconnectError(
+          'Runtime daemon transport is closed.',
+          'protocol_closed',
+          connectionId,
+          true,
+        ));
       }
       const id = `req_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
       const requestParams = method === 'initialize' || method === 'runtime.initialize'
@@ -348,7 +398,9 @@ export async function createRuntimeDaemonSocketClientTransport(
       let encoded: string;
       try {
         encoded = JSON.stringify(frame);
+        assertFrameSize(encoded, maxFrameBytes);
       } catch (error: unknown) {
+        if (isRuntimeDaemonTransportError(error)) return Promise.reject(error);
         return Promise.reject(new RuntimeDaemonTransportError(
           `Runtime daemon request params are not JSON-serializable: ${normalizeTransportError(error).message}`,
           'invalid_params',
@@ -423,7 +475,11 @@ export async function createRuntimeDaemonSocketClientTransport(
       let flushError: Error | undefined;
       if (!closed) {
         closed = true;
-        disconnect('Runtime daemon transport closed by client.', false);
+        const error = disconnect(
+          'client_closed',
+          'Runtime daemon transport closed by client.',
+          false,
+        );
         try {
           parser.flush();
         } catch (error: unknown) {
@@ -431,7 +487,7 @@ export async function createRuntimeDaemonSocketClientTransport(
         }
         socket.end();
         socket.destroy();
-        rejectPending(pending, new Error('Runtime daemon transport closed.'));
+        rejectPending(pending, error);
         clearLateResults();
       }
       await socketClosed;

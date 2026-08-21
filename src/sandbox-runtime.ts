@@ -4235,6 +4235,16 @@ async function startWorkspaceSessionClientWithFence(
     })().finally(evict);
     return terminatePromise;
   };
+  const observeFailedTermination = (reason: string): void => {
+    void terminate().catch((error: unknown) => {
+      emitKodaXDiagnostic({
+        source: 'runtime.sandbox.workspace-session',
+        level: 'error',
+        message: `ASRT workspace session termination failed after ${reason}.`,
+        detail: error,
+      });
+    });
+  };
   const fail = (error: Error): void => {
     if (exited) return;
     exited = true;
@@ -4254,7 +4264,7 @@ async function startWorkspaceSessionClientWithFence(
       response = JSON.parse(line) as WorkspaceSessionResponse;
     } catch {
       fail(new Error('ASRT workspace session returned malformed control data.'));
-      void terminate();
+      observeFailedTermination('malformed control data');
       return;
     }
     if (response.type === 'ready') {
@@ -4267,7 +4277,7 @@ async function startWorkspaceSessionClientWithFence(
     }
     if (response.type !== 'result' || !response.id) {
       fail(new Error('ASRT workspace session returned an invalid control response.'));
-      void terminate();
+      observeFailedTermination('an invalid control response');
       return;
     }
     const item = pending.get(response.id);
@@ -4277,12 +4287,12 @@ async function startWorkspaceSessionClientWithFence(
   });
   child.once('error', (error) => {
     fail(error);
-    void terminate();
+    observeFailedTermination('a child-process error');
   });
   responses.once('close', () => {
     if (closing || exited) return;
     fail(new Error('ASRT workspace session control pipe closed unexpectedly.'));
-    void terminate();
+    observeFailedTermination('an unexpected control-pipe close');
   });
   child.once('exit', (code, signal) => {
     if (idleTimer) clearTimeout(idleTimer);
@@ -4299,7 +4309,7 @@ async function startWorkspaceSessionClientWithFence(
   });
   const startupTimer = setTimeout(() => {
     fail(new Error('ASRT workspace session initialization timed out.'));
-    void terminate();
+    observeFailedTermination('an initialization timeout');
   }, WORKSPACE_SESSION_START_TIMEOUT_MS);
   try {
     await ready.finally(() => clearTimeout(startupTimer));
@@ -4368,7 +4378,7 @@ async function startWorkspaceSessionClientWithFence(
       pending.delete(id);
       clearTimeout(timeout);
       fail(error instanceof Error ? error : new Error(String(error)));
-      void terminate();
+      observeFailedTermination('a control request write failure');
       throw error;
     }
     return response.finally(() => clearTimeout(timeout));

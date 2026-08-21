@@ -86,6 +86,22 @@ describe('runtime daemon protocol schema', () => {
     })).toContain('$.unexpected is not allowed.');
   });
 
+  it('admits credential-safe terminal failure classifications', () => {
+    const schema = RUNTIME_DAEMON_METHOD_SCHEMAS['run.await'].result;
+    expect(validateRuntimeDaemonJsonSchema(schema, {
+      runId: 'run-1',
+      sessionId: 'session-1',
+      phase: 'failed',
+      terminal: {
+        revision: 1,
+        kind: 'failed',
+        code: 'run_failed',
+        effectOutcome: 'known',
+        failureKind: 'network',
+      },
+    })).toEqual([]);
+  });
+
   it('accepts the daemon owner process-start identity returned by management inspection', () => {
     const schema = RUNTIME_DAEMON_METHOD_SCHEMAS['daemon.management.get'].result;
 

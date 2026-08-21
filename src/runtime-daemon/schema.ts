@@ -1328,6 +1328,17 @@ function runtimeTerminalFactSchema(): RuntimeDaemonJsonSchema {
     },
     effectOutcome: { enum: ['none', 'known', 'unknown'] },
     message: stringSchema,
+    failureKind: {
+      enum: [
+        'auth',
+        'rate_limit',
+        'network',
+        'provider_aborted',
+        'invalid_response',
+        'runtime_cleanup',
+        'provider',
+      ],
+    },
   }, ['revision', 'kind', 'code', 'effectOutcome']);
 }
 

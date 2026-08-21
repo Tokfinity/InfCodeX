@@ -731,7 +731,24 @@ export function registerManagedChildProcess(
       writeRecord(refreshed);
     } catch (error: unknown) {
       if (options.requireDurableRecord) {
-        void killChildProcessTree(child);
+        void killChildProcessTree(child)
+          .then((outcome) => {
+            if (outcome.status !== 'unknown') return;
+            emitKodaXDiagnostic({
+              source: 'agent.managed-child-processes',
+              level: 'error',
+              message: 'Managed process-tree termination could not be confirmed after a durable-record failure.',
+              detail: { pid, registrationId },
+            });
+          })
+          .catch((terminationError: unknown) => {
+            emitKodaXDiagnostic({
+              source: 'agent.managed-child-processes',
+              level: 'error',
+              message: 'Managed process-tree termination failed after a durable-record failure.',
+              detail: { pid, registrationId, error: terminationError },
+            });
+          });
       }
       emitKodaXDiagnostic({
         source: 'agent.managed-child-processes',

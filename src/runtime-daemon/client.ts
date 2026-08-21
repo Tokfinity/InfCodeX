@@ -123,9 +123,16 @@ export interface RuntimeDaemonRequestControl {
 export interface RuntimeDaemonTransportLifecycleState {
   readonly state: 'connected' | 'disconnected';
   readonly connectionId: string;
+  readonly code?: RuntimeDaemonDisconnectCode;
   readonly reason?: string;
   readonly reconnectable: boolean;
 }
+
+export type RuntimeDaemonDisconnectCode =
+  | 'protocol_closed'
+  | 'transport_error'
+  | 'invalid_frame'
+  | 'client_closed';
 
 export class RuntimeTransportBoundaryError extends Error {
   readonly code = 'invalid_transport_value' as const;
