@@ -919,8 +919,12 @@ ceilings; a corrupt or concurrently replaced generation is rejected rather
 than trusted. Pages are fetched newest-tail-first while each page is internally in
 forward order, so prepend each fetched page to reconstruct `conversation().entries`;
 do not append pages in fetch order.
-Request `requirements: { conversationHistory: 1 }` when connecting to a daemon
-that must support this contract.
+Request `requirements: { conversationHistory: 2 }` when connecting to a daemon
+that must keep this projection topology-transparent across managed context and
+preserve direct clone provenance. `conversationHistory: 1` is only the older
+folding and paging floor. Inspect
+`KODAX_RUNTIME_SDK_CAPABILITIES.conversationHistory` before auto-start so an
+idle daemon that still exposes the legacy projection can be replaced.
 
 For write-side hosts that already own a newly produced append tail,
 `await FileSessionStorage.prepareSessionAppend(id)` returns an authenticated
@@ -4419,6 +4423,11 @@ the physical request id. Raw replay retains every attempt; use
 observation join or reconnect. Do not append a provider's cumulative response
 again during recovery, and do not infer replacement from attempt numbers or
 text equality.
+
+`KODAX_RUNTIME_SDK_CAPABILITIES.conversationHistory` is now `2`.
+Require it before auto-start so an idle daemon that still exposes the legacy
+ordinary-history projection is replaced; a busy or otherwise unsafe owner
+produces the normal capability-upgrade error.
 
 `KODAX_RUNTIME_SDK_CAPABILITIES.sandboxRuntime` is now `4` and
 `crashOutcomeModel` is `2`. Windows auto-start requires `sandboxRuntime:4` so

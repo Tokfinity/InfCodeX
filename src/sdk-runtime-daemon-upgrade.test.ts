@@ -608,6 +608,7 @@ describe('Runtime daemon capability upgrade', () => {
   it('publishes the required pre-spawn daemon capabilities', () => {
     expect(KODAX_RUNTIME_SDK_CAPABILITIES).toEqual({
       actorSettlementConvergence: 2,
+      conversationHistory: 2,
       crashOutcomeModel: 2,
       daemonOrphanExit: 1,
       daemonShutdownVerification: 1,

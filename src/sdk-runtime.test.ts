@@ -273,7 +273,10 @@ describe("createKodaXRuntime", () => {
   });
 
   it("hosts an embedded Runtime in a disposable Worker without changing the service API", async () => {
-    const { createKodaXRuntime } = await import("./sdk-runtime.js");
+    const { createKodaXRuntime, KODAX_RUNTIME_SDK_CAPABILITIES } = await import(
+      "./sdk-runtime.js"
+    );
+    expect(KODAX_RUNTIME_SDK_CAPABILITIES.conversationHistory).toBe(2);
     const runtime = await createKodaXRuntime({
       mode: "embedded",
       isolation: "worker",

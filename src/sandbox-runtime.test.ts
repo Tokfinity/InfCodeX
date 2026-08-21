@@ -739,23 +739,18 @@ vi.mock('@kodax-ai/agent', async (importOriginal) => {
           };
         });
       }
-      if (child.pid === process.pid) {
-        queueMicrotask(() => {
-          child.emit('exit', 0, null);
-          child.emit('close', 0, null);
-        });
-        return Promise.resolve({ status: 'terminated' as const });
+      try {
+        child.kill('SIGTERM');
+      } catch {
+        // Synthetic children still record the termination attempt.
       }
-      return actual.killChildProcessTree(child, {
-        ...options,
-        gracefulMs: 0,
-        forceMs: 0,
-        taskkillMs: 0,
-      }).then((result) => (
-        result.status === 'unknown' && child.pid === undefined
-          ? { status: 'terminated' as const }
-          : result
-      ));
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        child.emit('exit', 0, null);
+        child.emit('close', 0, null);
+      }
+      return Promise.resolve({ status: 'terminated' as const });
     },
     withKodaXFileLock: async <T>(
       lockPath: string,

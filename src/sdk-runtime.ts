@@ -740,6 +740,7 @@ export interface ConnectKodaXRuntimeOptions {
 /** SDK facts that embedders can inspect before auto-starting a daemon. */
 export const KODAX_RUNTIME_SDK_CAPABILITIES = Object.freeze({
   actorSettlementConvergence: 2,
+  conversationHistory: 2,
   crashOutcomeModel: 2,
   daemonOrphanExit: 1,
   daemonShutdownVerification: 1,

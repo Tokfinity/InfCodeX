@@ -12,7 +12,8 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
-- Runtime capability negotiation now advertises `conversationHistory:2` only when
+- Runtime capability negotiation and pre-start SDK facts now advertise
+  `conversationHistory:2` only when
   ordinary history is topology-transparent across managed context and direct
   clone provenance is preserved. Embedders can require v2 to reject stale daemon
   processes that still expose the legacy projection contract.
