@@ -166,13 +166,17 @@ AbortSignals, validates timeout defaults at the Runtime boundary, and keeps
 stale prepared Session tails recoverable through an authoritative delta merge
 instead of silently losing the latest host state.
 
-The v0.7.94 release candidate keeps `sandboxRuntime:4` and `crashOutcomeModel:2`.
+The v0.7.94 release keeps `sandboxRuntime:4` and `crashOutcomeModel:2`.
 Runtime text tools may overlap a compatible live Bash lease through the same
 ASRT workspace policy. Windows sandboxed git trusts authorized repo roots
-only (`gitSafeDirectory: authorized-repo-roots`). Scheduled daemon shutdown
-reports failed cleanup. A missing workspace directory omits the concurrent
-text sandbox at Run start. Runtime advertises `conversationHistory:2`.
-Explicit Skill invocation is independent of model discovery. Run settlement
+only (`gitSafeDirectory: authorized-repo-roots`). Linked-worktree and
+submodule relationship files are byte-bounded before that trust. Sandboxed
+text-helper stdin failures stay on the operation Promise. Scheduled daemon
+shutdown reports failed cleanup. A missing workspace directory omits the
+concurrent text sandbox at Run start. Runtime advertises `conversationHistory:2`.
+Explicit Skill invocation is independent of model discovery. Invalid
+`allowed-tools` and malformed hook JSON are diagnosed; `PostToolUse` still
+runs if an embedder result observer throws. Run settlement
 observes finalization rejections and recovers an admitted `runId` through
 `runs.get()` / `runs.await()` instead of replaying `runs.start()`. See the
 [SDK Embedder Guide](../../public_docs/sdk/embedder-guide.md)

@@ -83,8 +83,10 @@ workspace policy, with same-path FIFO. A covered workspace target fails closed
 when that sandbox is unavailable. Hard-linked workspace targets are rejected.
 Windows sandboxed git trusts authorized repo roots only
 (`gitSafeDirectory: authorized-repo-roots`) and never emits `safe.directory=*`.
-A missing workspace directory omits the concurrent text sandbox at Run start
-instead of aborting the Run.
+Linked-worktree and submodule relationship files are read through strict byte
+bounds before that trust. Sandboxed text-helper stdin failures stay on the
+operation Promise. A missing workspace directory omits the concurrent text
+sandbox at Run start instead of aborting the Run.
 
 ## SDK sandbox
 

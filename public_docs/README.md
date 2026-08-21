@@ -2,9 +2,7 @@
 
 Public documentation for KodaX users and SDK integrators.
 
-The current released version is `v0.7.93`. The current source candidate is
-`v0.7.94`; its tag and GitHub Release remain pending release gates. Its SDK
-guidance carries concurrent
+The current release is `v0.7.94`. Its SDK guidance carries concurrent
 sandboxed text mutations, Issue 300 authorized-root git trust, scheduled
 shutdown failure reporting, missing-workspace Run start, and
 `conversationHistory:2` on top of the
@@ -51,9 +49,12 @@ prepared-Session-tail recovery after a `data_changed` race.
 
 The v0.7.94 SDK guidance documents concurrent sandboxed text mutations,
 authorized-root git trust (`gitSafeDirectory: authorized-repo-roots`),
-scheduled shutdown failure reporting, omitting the text sandbox when the
-workspace directory does not exist, `conversationHistory:2`, independent
-explicit Skill invocation, fail-closed Run terminal settlement, observed
+byte-bounded linked-worktree and submodule relationship reads, observed
+text-helper stdin failures, scheduled shutdown failure reporting, omitting
+the text sandbox when the workspace directory does not exist,
+`conversationHistory:2`, independent explicit Skill invocation, diagnosed
+invalid `allowed-tools` / malformed hook JSON, `PostToolUse` after an
+embedder observer throw, fail-closed Run terminal settlement, observed
 sandbox/managed-child cleanup rejection, typed daemon disconnect facts,
 bounded credential-safe `failureKind`, and exact-`runId` result recovery. An
 admitted Run is queried and awaited after reconnect; it is never started

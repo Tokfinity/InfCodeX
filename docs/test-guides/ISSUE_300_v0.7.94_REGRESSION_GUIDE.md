@@ -22,6 +22,8 @@ Required assertions:
 4. Linked-worktree metadata must prove `commondir` / `gitdir` backlinks
    before the main `.git` receives a read ACE. Submodules must prove
    `core.worktree`. Arbitrary real `.git` targets stay untrusted.
+   Relationship files are read through strict byte bounds. Helper stdin
+   failures reject only the text-mutation operation.
 5. Broker and bundled rewriting share one implementation; the production
    minified broker still applies the same trust set.
 6. A missing workspace directory starts a Runtime Run without attaching the

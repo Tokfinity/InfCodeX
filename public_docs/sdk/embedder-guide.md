@@ -10,7 +10,9 @@ manual maintainer step. The release keeps `sandboxRuntime:4` and
 `crashOutcomeModel:2`, and adds concurrent sandboxed text mutations,
 authorized-root git trust (`gitSafeDirectory: authorized-repo-roots`),
 scheduled shutdown failure reporting, missing-workspace Run start,
-`conversationHistory:2`, independent explicit Skill invocation, observed
+`conversationHistory:2`, independent explicit Skill invocation, diagnosed
+invalid `allowed-tools` / malformed hook JSON, observed text-helper stdin
+failures, byte-bounded git-metadata reads, observed
 Run-finalization and process-cleanup rejections, typed disconnect facts,
 bounded safe failure categories, and exact-`runId` recovery after reconnect
 on top of v0.7.93 failed-exit fast settlement, previous-boot ACL recovery, and

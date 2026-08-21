@@ -126,13 +126,18 @@ and other host-side file sinks keep the existing filesystem-effect exclusion.
 Same-path text operations remain FIFO, worktree namespace changes remain
 fenced, and a concurrent shell write to the same file is detected
 optimistically where possible rather than promised as an atomic transaction.
-Windows sandboxed git trusts authorized repo roots only (Issue 300). A missing
+Windows sandboxed git trusts authorized repo roots only (Issue 300).
+Linked-worktree and submodule relationship files are read through strict byte
+bounds before that trust. Sandboxed text-helper stdin failures stay on the
+operation Promise. A missing
 workspace directory omits that concurrent sandbox at Run start instead of
 aborting the Run. Scheduled daemon shutdown reports failed cleanup instead of
 a safe stop. Runtime advertises `conversationHistory:2` so hosts can reject
 daemons that still expose the legacy ordinary-history projection.
 Explicit Skill invocation stays available for every enabled Skill;
 `disable-model-invocation` only hides the Skill from the model tool path.
+Invalid `allowed-tools` entries and malformed hook JSON are diagnosed.
+`PostToolUse` still runs if an embedder result observer throws.
 A single Run or process-cleanup failure must not escape as a process-global
 unhandled rejection. If terminal durability cannot be proved, Runtime reports
 `unknown` / `run_settlement_not_persisted` and keeps the Session fenced.

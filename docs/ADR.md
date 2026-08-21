@@ -2,7 +2,7 @@
 
 > Last updated: 2026-08-21
 >
-> **v0.7.94 release-candidate addendum:** a direct text mutation may overlap a
+> **v0.7.94 release addendum:** a direct text mutation may overlap a
 > model-started shell only after Runtime has acquired the same workspace ASRT
 > policy and moved both snapshot and write into that sandbox. The complete
 > text transaction keeps its normalized-path FIFO and uses a file-identity-aware
@@ -15,7 +15,11 @@
 > incompatible Windows ACL policies, while worktree creation/removal retains
 > both its target-path queue and namespace/process-tree lease. Windows
 > sandboxed git trusts authorized repo roots only and never emits
-> `safe.directory=*` (Issue 300). `gitSafeDirectory: authorized-repo-roots`
+> `safe.directory=*` (Issue 300). Linked-worktree and submodule relationship
+> files are read through strict byte bounds. Helper stdin failures stay on the
+> text-mutation operation Promise. Invalid Skill `allowed-tools` entries and
+> malformed hook JSON are diagnosed; `PostToolUse` still runs if an embedder
+> result observer throws. `gitSafeDirectory: authorized-repo-roots`
 > is a v4 marker, not a version bump. Scheduled daemon shutdown reports failed
 > cleanup. `conversationHistory` advances to v2 as an additive negotiation
 > fact. Explicit Skill invocation remains available for every enabled Skill;

@@ -266,14 +266,17 @@ SDK 系统代码契约更新，但没有放宽 shell/sandbox 的 fail-closed 边
 `handleRuntimePermissionRequest()` 管理 SDK 权限 UI，并在 prepared Session 尾部遇到
 `data_changed` 时通过权威 delta 合并恢复；后台持久化失败会显示为诊断，不再静默丢失。
 
-**v0.7.94 发布候选版**：Runtime 文本工具可以与兼容的长驻/后台 Bash 并发，因为
+**v0.7.94 发布**：Runtime 文本工具可以与兼容的长驻/后台 Bash 并发，因为
 snapshot 与 commit 走同一套 ASRT workspace 策略。硬链接工作区目标会被拒绝。
 Windows 沙箱 git 只信任已授权的仓库根，不再发出 `safe.directory=*`（Issue 300）。
+linked-worktree / submodule 关系文件在授予 git trust 前按严格字节上限读取。
+沙箱文本 helper 的 stdin 失败留在该操作 Promise 上。
 计划中的 daemon shutdown 在 cleanup 失败时报告失败，而不是声称安全停止。
 工作区目录尚不存在时，Run 启动会省略并发文本沙箱，而不是中止 option 构造。
 Runtime 广告 `conversationHistory:2`。显式 Skill 调用（`/<name>`、
 `/skill:<name>`）对每个已启用 Skill 始终可用；`disable-model-invocation`
-只关闭模型工具路径。所有 Run 终态收敛以及 sandbox / managed-child
+只关闭模型工具路径。无效 `allowed-tools` 与畸形 hook JSON 会被诊断；
+embedder 的 result observer 抛错时 `PostToolUse` 仍会运行。所有 Run 终态收敛以及 sandbox / managed-child
 终止 Promise 都会显式观察 rejection。若两种终态记录都无法持久化，Run 以
 `unknown` + `run_settlement_not_persisted` 收敛，并继续关闭 Session 执行门禁。
 daemon 断线公开 typed code、`connectionId` 和 `reconnectable` 事实。宿主一旦取得

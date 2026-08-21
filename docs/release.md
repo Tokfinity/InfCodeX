@@ -153,6 +153,11 @@ remains a separate manual operator step. It includes every commit after
   model discovery; `disable-model-invocation` cannot be bypassed by a
   model-authored slash token, and structured `skillInvocation` provenance
   follows Workflow/child execution;
+- invalid Skill `allowed-tools` entries and malformed hook JSON are diagnosed;
+  `PostToolUse` still runs if an embedder result observer throws;
+- sandboxed text-helper stdin failures stay on the operation Promise, and
+  linked-worktree / submodule relationship files are read through strict byte
+  bounds before git trust;
 - Run terminal settlement observes every finalization rejection, reports
   `run_settlement_not_persisted` when durability is unknown, and recovers an
   admitted `runId` through `runs.get()` / `runs.await()` instead of
@@ -173,9 +178,11 @@ Before tagging, all of the following must be true:
    feature tracker, known-issue record, public SDK guide, this checklist,
    `docs/features`, and `kodax_manual` agree on v0.7.94;
 2. focused tests cover concurrent sandboxed text mutations, Issue 300 git
-   trust, scheduled shutdown failure reporting, missing-workspace Run start,
-   explicit vs model Skill invocation, Run-settlement / typed-disconnect
-   recovery, and the existing v0.7.93 regression contracts;
+   trust, helper stdin observation, bounded git-metadata reads, scheduled
+   shutdown failure reporting, missing-workspace Run start, explicit vs
+   model Skill invocation, invalid `allowed-tools` / malformed hook
+   diagnosis, Run-settlement / typed-disconnect recovery, and the existing
+   v0.7.93 regression contracts;
 3. TypeScript, config-template checks, bundled SDK/Worker/sidecar builds, fast,
    unit, contract, and system suites pass, with any host-only Windows sandbox
    limitation documented rather than silently changing system code;

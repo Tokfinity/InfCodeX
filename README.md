@@ -726,15 +726,20 @@ permission UI, and recovers stale prepared Session tails through an
 authoritative merge. Background persistence failures are surfaced as
 diagnostics rather than hidden.
 
-**v0.7.94 release candidate:** Runtime text tools may overlap a compatible live Bash
+**v0.7.94 release:** Runtime text tools may overlap a compatible live Bash
 lease because snapshot and commit run through the same ASRT workspace policy.
 Hard-linked workspace targets are rejected. Windows sandboxed git trusts
 authorized repo roots only and never emits `safe.directory=*` (Issue 300).
-Scheduled daemon shutdown reports failed cleanup instead of a safe stop.
+Linked-worktree and submodule relationship files are read through strict byte
+bounds before that git trust is granted. Sandboxed text-helper stdin failures
+stay on the operation Promise. Scheduled daemon shutdown reports failed
+cleanup instead of a safe stop.
 A missing workspace directory omits the concurrent text sandbox at Run start.
 Runtime advertises `conversationHistory:2`. Explicit Skill invocation
 (`/<name>`, `/skill:<name>`) remains available for every enabled Skill;
-`disable-model-invocation` only blocks the model tool path. Every Run
+`disable-model-invocation` only blocks the model tool path. Invalid
+`allowed-tools` entries and malformed hook JSON are diagnosed; `PostToolUse`
+still runs if an embedder result observer throws. Every Run
 finalization and sandbox/managed-child termination rejection is observed. If
 neither terminal record can be persisted, the Run resolves `unknown` with
 `run_settlement_not_persisted` and keeps the Session fenced. Daemon connection

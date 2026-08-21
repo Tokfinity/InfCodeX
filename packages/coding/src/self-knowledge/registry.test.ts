@@ -116,9 +116,15 @@ describe('FEATURE_218 manual registry', () => {
     expect(sdk).toContain('missing workspace directory');
     expect(sdk).toContain('conversationHistory:2');
     expect(sdk).toContain('disable-model-invocation');
+    expect(sdk).toContain('Invalid `allowed-tools`');
+    expect(sdk).toContain('PostToolUse');
+    expect(sdk).toContain('stdin failures stay on the operation Promise');
+    expect(sdk).toContain('strict byte bounds');
     expect(sandbox).toContain('gitSafeDirectory: authorized-repo-roots');
     expect(sandbox).toContain('never emits `safe.directory=*`');
     expect(sandbox).toContain('compatible live Bash lease');
+    expect(sandbox).toContain('strict byte bounds');
+    expect(sandbox).toContain('stdin failures stay on the operation Promise');
   });
 
   it('documents the v0.7.94 Runtime settlement and reconnect contracts', () => {
@@ -325,6 +331,8 @@ describe('FEATURE_218 manual registry', () => {
     expect(content).toContain('user-invocable');
     expect(content).toContain('structured `skillInvocation`');
     expect(content).toContain('model-authored child objective');
+    expect(content).toContain('Invalid `allowed-tools`');
+    expect(content).toContain('PostToolUse');
     expect(commands).toContain('/<name>');
     expect(commands).toContain('/skill:<name>');
     expect(commands).toContain('disable-model-invocation');

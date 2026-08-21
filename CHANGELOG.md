@@ -10,9 +10,6 @@ All notable changes to this project will be documented in this file.
 
 ## [0.7.94] - 2026-08-21
 
-> Release candidate prepared in source. The `v0.7.94` tag and GitHub Release
-> remain pending until the release gates pass; npm publication remains manual.
-
 ### Changed
 
 - Runtime capability negotiation and pre-start SDK facts now advertise

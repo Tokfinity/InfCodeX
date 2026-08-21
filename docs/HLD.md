@@ -99,9 +99,11 @@ run while a compatible background shell remains alive. A standalone Coding
 consumer with no Runtime capability retains the existing direct lease. A
 covered workspace target fails closed when the Runtime capability is
 unavailable; non-workspace targets and all other host sinks retain the direct
-lease. Shell policy owners and namespace owners remain in the coordinator so
-incompatible Windows ACL transitions and worktree path-alias changes are still
-fenced.
+lease. Helper stdin failures stay on the text-mutation operation Promise.
+Linked-worktree and submodule relationship files are read through strict byte
+bounds before git trust. Shell policy owners and namespace owners remain in the
+coordinator so incompatible Windows ACL transitions and worktree path-alias
+changes are still fenced.
 
 The v0.7.94 Runtime recovery boundary does not change
 capability versions. Run finalization owns and observes
@@ -109,7 +111,9 @@ its complete persistence chain. A durable terminal status wins over a failed
 event append; failure to persist either authority produces an explicit
 `unknown` lifecycle error and keeps Session execution fenced. Sandbox and
 managed-child cleanup errors are observed and recorded instead of escaping as
-process-global Promise rejections.
+process-global Promise rejections. Invalid Skill `allowed-tools` entries and
+malformed hook JSON are diagnosed; `PostToolUse` still runs if an embedder
+result observer throws.
 
 Daemon transport reports connection facts independently from Run outcome.
 Clients receive a close code, `connectionId`, and `reconnectable` marker, while

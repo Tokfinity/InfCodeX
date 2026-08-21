@@ -24,12 +24,16 @@ reference and does not duplicate every type. It should answer three questions:
 The published package is `@kodax-ai/kodax@0.7.94`. The v0.7.94 maintenance
 slice lets Runtime text tools overlap a compatible live Bash lease through
 the same ASRT workspace policy, rejects hard-linked sandboxed targets, trusts
-Windows git `safe.directory` for authorized repo roots only (Issue 300), and
+Windows git `safe.directory` for authorized repo roots only (Issue 300), reads
+linked-worktree / submodule relationship files through strict byte bounds,
+observes text-helper stdin failures on the operation Promise, and
 reports scheduled shutdown cleanup failures. A missing workspace directory
 omits the concurrent text sandbox at Run start. Runtime advertises
 `conversationHistory:2`. Explicit Skill invocation is independent of model
-discovery. Run settlement observes finalization rejections and recovers an
-admitted `runId` without replaying `runs.start()`. The v0.7.93 maintenance
+discovery. Invalid `allowed-tools` and malformed hook JSON are diagnosed;
+`PostToolUse` still runs if an embedder result observer throws. Run settlement
+observes finalization rejections and recovers an admitted `runId` without
+replaying `runs.start()`. The v0.7.93 maintenance
 slice observes a durable Windows `failed` shutdown outcome during orderly
 exit wait, recovers previous-boot shared ACL markers only after a verified
 boot change, and classifies Anthropic/OpenAI abort wrappers by isolated SDK

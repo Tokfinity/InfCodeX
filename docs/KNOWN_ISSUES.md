@@ -12,13 +12,17 @@ _Last Updated: 2026-08-21_
 The v0.7.94 maintenance release closes Issue 300 and the post-v0.7.93
 sandboxed-text concurrency gaps. Windows sandboxed git trusts authorized
 repo roots only, never emits `safe.directory=*`, and requires linked-worktree
-/ submodule backlinks. Runtime text tools may overlap a compatible live Bash
-lease through the same ASRT workspace policy; hard-linked targets are
-rejected. Scheduled daemon shutdown reports failed cleanup. A missing
+/ submodule backlinks. Relationship files for those backlinks are read
+through strict byte bounds. Runtime text tools may overlap a compatible live
+Bash lease through the same ASRT workspace policy; hard-linked targets are
+rejected. Sandboxed text-helper stdin failures stay on the operation
+Promise. Scheduled daemon shutdown reports failed cleanup. A missing
 workspace directory omits the concurrent text sandbox at Run start.
 Runtime advertises `conversationHistory:2`. Explicit Skill invocation remains
 available for every enabled Skill; `disable-model-invocation` only blocks the
-model tool path. Run finalization, sandbox termination, and managed-child
+model tool path. Invalid `allowed-tools` and malformed hook JSON are
+diagnosed; `PostToolUse` still runs if an embedder result observer throws.
+Run finalization, sandbox termination, and managed-child
 cleanup rejections are observed so a local failure cannot escape as an
 unhandled daemon-process rejection. Total terminal persistence failure
 reports `unknown` / `run_settlement_not_persisted` and retains the Session
