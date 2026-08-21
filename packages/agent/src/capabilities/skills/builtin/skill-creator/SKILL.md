@@ -47,6 +47,11 @@ compatibility: "Optimized for KodaX and Agent Skills style directories. Bundled 
 - 大块参考资料放到 `references/`。
 - 模板或静态文件放到 `assets/`。
 - 如果某个专家流程只服务这个 skill，可以放进 `agents/`，但先把它当私有 contract，不要自动上升成全局产品概念。
+- `description` 同时决定模型发现。自然语言只会看到未设置 `disable-model-invocation: true` 的 name/description。
+- 需要只在显式 slash 后加载时，写 `disable-model-invocation: true`。这只关闭模型 catalog 与模型 `skill` 工具。
+- 每个已启用 Skill 都接受 `/<name>` 和 `/skill:<name>`。
+- token 可在 query 头部或中间。后续文本是 Skill 参数。
+- `user-invocable` 只保留解析兼容。不要把它当成执行权限：宿主忽略该字段后，作者会误以为 `false` 能禁止 slash/SDK 调用。
 
 ### 4. Bundled scripts 默认用 Node.js
 

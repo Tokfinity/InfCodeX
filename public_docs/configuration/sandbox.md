@@ -75,6 +75,17 @@ replaces an idle v3-or-older daemon and fails closed while it is busy. Do not
 delete `model-filesystem-effects.lock` by hand; on Windows the coordinator
 state lives under `C:\ProgramData\KodaX\sandbox-runtime\runtime\`.
 
+## Concurrent text tools (v0.7.94)
+
+Runtime `write`, `edit`, `multi_edit`, `insert_after_anchor`, and `undo` may
+overlap a compatible live Bash lease. Snapshot and commit use the same ASRT
+workspace policy, with same-path FIFO. A covered workspace target fails closed
+when that sandbox is unavailable. Hard-linked workspace targets are rejected.
+Windows sandboxed git trusts authorized repo roots only
+(`gitSafeDirectory: authorized-repo-roots`) and never emits `safe.directory=*`.
+A missing workspace directory omits the concurrent text sandbox at Run start
+instead of aborting the Run.
+
 ## SDK sandbox
 
 SDK callers pass the same shape per Run as `KodaXOptions.sandbox`, so concurrent

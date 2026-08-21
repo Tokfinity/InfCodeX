@@ -24,8 +24,9 @@ All notable changes to this project will be documented in this file.
   model discovery and blocks the model `skill` tool. The legacy
   `user-invocable` field remains parse-compatible but is no longer an execution
   permission.
-- The public README files, package SDK guides, Embedder Guide, HLD/DD,
-  `kodax_manual`, and Runtime SDK type comments now document the same Skill
+- The public README files, package SDK guides, Embedder Guide, public sandbox
+  guide, HLD/DD, `kodax_manual` commands/skills topics, skill-creator
+  authoring contract, and Runtime SDK type comments now document the same Skill
   catalog, slash-argument, provenance, child-delegation, Run-settlement,
   typed-disconnect, safe-failure, and exact-`runId` recovery contracts.
 

@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import { validateSkillDirectory } from './builtin/skill-creator/scripts/quick-validate.js';
 import {
   analyzeBenchmark,
@@ -85,6 +86,18 @@ Follow the workflow.
 }
 
 describe('skill-creator scripts', () => {
+  it('documents explicit invocation independently of model discovery', async () => {
+    const skillCreatorManual = await readFile(
+      join(dirname(fileURLToPath(import.meta.url)), 'builtin/skill-creator/SKILL.md'),
+      'utf8',
+    );
+
+    expect(skillCreatorManual).toContain('disable-model-invocation: true');
+    expect(skillCreatorManual).toContain('/<name>');
+    expect(skillCreatorManual).toContain('/skill:<name>');
+    expect(skillCreatorManual).toContain('user-invocable');
+  });
+
   it('validates a well-formed skill directory', async () => {
     const skillDir = await createTempDir('kodax-skill-creator-');
     await writeFile(
@@ -120,7 +133,9 @@ Follow the workflow.
     });
 
     expect(result.skillDir).toBe(join(skillsRoot, 'release-notes'));
-    expect(await readFile(join(result.skillDir, 'SKILL.md'), 'utf8')).toContain('name: release-notes');
+    const skillMarkdown = await readFile(join(result.skillDir, 'SKILL.md'), 'utf8');
+    expect(skillMarkdown).toContain('name: release-notes');
+    expect(skillMarkdown).toContain('disable-model-invocation: false');
     expect(await readFile(join(result.skillDir, 'evals', 'evals.json'), 'utf8')).toContain('"skill_name": "release-notes"');
 
     const validation = await validateSkillDirectory(result.skillDir);

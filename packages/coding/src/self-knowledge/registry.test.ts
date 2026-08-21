@@ -315,6 +315,7 @@ describe('FEATURE_218 manual registry', () => {
 
   it('documents explicit user invocation separately from model Skill discovery', () => {
     const content = resolveKodaXManual({ topic: 'skills' }).content;
+    const commands = resolveKodaXManual({ topic: 'commands' }).content;
 
     expect(content).toContain('disable-model-invocation: true');
     expect(content).toContain('/<name>');
@@ -324,6 +325,10 @@ describe('FEATURE_218 manual registry', () => {
     expect(content).toContain('user-invocable');
     expect(content).toContain('structured `skillInvocation`');
     expect(content).toContain('model-authored child objective');
+    expect(commands).toContain('/<name>');
+    expect(commands).toContain('/skill:<name>');
+    expect(commands).toContain('disable-model-invocation');
+    expect(MANUAL_REGISTRY.commands.nextTopics).toContain('skills');
   });
 
   it('documents the v0.7.73 setup, Qwen Token Plan, and Runtime permission contracts', () => {

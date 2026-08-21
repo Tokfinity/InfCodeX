@@ -578,6 +578,10 @@ const TOPICS: readonly KodaXManualTopic[] = [
       "  /fork, /rewind, /delete.",
       "- capabilities: /mcp, /repo-intel, /repointel (legacy redirect), /skill, /extensions,",
       "  /reload, /agents.",
+      "Enabled Skills are also invoked with `/<name>` or `/skill:<name>` at the query head or middle.",
+      "Text after the selected token is the Skill argument.",
+      "`disable-model-invocation` does not hide those explicit tokens.",
+      "See the skills topic for model discovery versus explicit invocation.",
       "- governance/work: /memory, /learn, /goal, /review, /workflow, /verifier-log, /stall-log.",
       "Setup: `/setup` initializes missing config files and chooses a provider;",
       "`/setup --custom` opens the explained custom-provider writer, while",
@@ -598,7 +602,7 @@ const TOPICS: readonly KodaXManualTopic[] = [
     sources: [
       { label: "commands", path: "packages/repl/src/interactive/commands.ts" },
     ],
-    nextTopics: ["doctor", "sessions", "permissions"],
+    nextTopics: ["doctor", "sessions", "permissions", "skills"],
   },
   {
     id: "tools",

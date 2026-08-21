@@ -19,6 +19,7 @@ export function renderSkillTemplate(name, description) {
 name: ${name}
 description: ${description}
 user-invocable: true
+disable-model-invocation: false
 allowed-tools: "Read, Grep, Glob"
 compatibility: "Optimized for KodaX and Agent Skills style directories."
 ---
