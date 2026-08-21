@@ -726,6 +726,18 @@ permission UI, and recovers stale prepared Session tails through an
 authoritative merge. Background persistence failures are surfaced as
 diagnostics rather than hidden.
 
+**v0.7.94 release:** Runtime text tools may overlap a compatible live Bash
+lease because snapshot and commit run through the same ASRT workspace policy.
+Hard-linked workspace targets are rejected. Windows sandboxed git trusts
+authorized repo roots only and never emits `safe.directory=*` (Issue 300).
+Scheduled daemon shutdown reports failed cleanup instead of a safe stop.
+A missing workspace directory omits the concurrent text sandbox at Run start.
+Runtime advertises `conversationHistory:2`. Capability versions
+`sandboxRuntime:4` and `crashOutcomeModel:2` are unchanged. Issue 256 remains
+open. See the
+[v0.7.94 release checklist](docs/release.md#v0794-release-preparation)
+and [SDK Embedder Guide](public_docs/sdk/embedder-guide.md).
+
 **v0.7.93 release:** Runtime exit settlement no longer spends the 170-second
 Windows orderly-exit window after a durable `failed` shutdown outcome, can
 recover previous-boot shared ACL markers after a verified boot change, and

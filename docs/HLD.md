@@ -1,9 +1,9 @@
 # KodaX High-Level Design
 
-> Last updated: 2026-08-19
+> Last updated: 2026-08-21
 >
-> Current published baseline: `v0.7.93`
-> (`@kodax-ai/kodax@0.7.93`; `sandboxRuntime:4`, `crashOutcomeModel:2`;
+> Current published baseline: `v0.7.94`
+> (`@kodax-ai/kodax@0.7.94`; `sandboxRuntime:4`, `crashOutcomeModel:2`;
 > npm publication remains manual)
 >
 > This HLD is intentionally current-state only. The old pre-v0.7.43
@@ -91,7 +91,7 @@ isolated Anthropic/OpenAI abort-class identity so a typed SDK abort is not
 redacted as a credential failure. Same-boot ACL and POSIX recovery remain
 fail-closed.
 
-The Unreleased filesystem-effect refinement separates sandboxed text sinks from
+The v0.7.94 filesystem-effect refinement separates sandboxed text sinks from
 host-privileged sinks. Runtime `write`, `edit`, `multi_edit`,
 `insert_after_anchor`, and `undo` execute their snapshot and commit through the
 same ASRT workspace policy, keep only a normalized-path FIFO, and may therefore

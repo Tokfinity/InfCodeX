@@ -782,8 +782,8 @@ export interface RuntimeCapabilityRequirements {
   readonly transcriptPaging?: 1;
   /** Require deterministic exact-history search over merged persisted lineage. */
   readonly transcriptSearch?: 1;
-  /** Require SDK-resolved ordinary history with explicit legacy ambiguity. */
-  readonly conversationHistory?: 1;
+  /** v2 also requires topology-transparent managed context and direct clone provenance. */
+  readonly conversationHistory?: 1 | 2;
   readonly connectionLifecycle?: 1;
   readonly typedRuntimeEvents?: 1;
   readonly daemonSafeRunInput?: 1;
@@ -3758,10 +3758,12 @@ export async function createKodaXRuntime(
       citedEntries: true,
     },
     conversationHistory: {
-      version: 1,
+      version: 2,
       immutablePaging: true,
       revisionedBoundaries: true,
       ambiguityReporting: true,
+      topologyTransparentManagedContext: true,
+      directCloneProvenance: true,
     },
     learningCenter: { version: 1 },
     skillLearningLoop: {
@@ -10479,10 +10481,18 @@ function buildRunOptions(input: {
     workspaceRoot,
     shouldSandbox: selectWorkspaceSandbox,
   });
-  const textFileMutationSandbox = createAsrtTextFileMutationSandbox({
-    workspaceRoot,
-    shouldSandbox: selectWorkspaceSandbox,
-  });
+  let textFileMutationSandbox: ReturnType<typeof createAsrtTextFileMutationSandbox> | undefined;
+  try {
+    textFileMutationSandbox = createAsrtTextFileMutationSandbox({
+      workspaceRoot,
+      shouldSandbox: selectWorkspaceSandbox,
+    });
+  } catch (error: unknown) {
+    // Missing workspace identity cannot be canonicalized yet. Omit the
+    // concurrent sandbox so the Run still starts; covered-path tools then
+    // keep the existing host fence until a resolvable workspace exists.
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
   const shellSandbox =
     runtimeWorkspaceShellSandbox !== undefined && callerShellSandbox !== undefined
       ? {
@@ -10565,7 +10575,7 @@ function buildRunOptions(input: {
       ...ownerSafeContext,
       configHome: input.defaultConfigHome,
       ...(shellSandbox !== undefined ? { shellSandbox } : {}),
-      textFileMutationSandbox,
+      ...(textFileMutationSandbox === undefined ? {} : { textFileMutationSandbox }),
       ...(hideUnwiredExitPlanMode
         ? {
             // Runtime daemon options cannot transport callback functions. Do

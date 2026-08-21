@@ -1366,10 +1366,12 @@ describe('runtime daemon dispatcher', () => {
             citedEntries: true,
           },
           conversationHistory: {
-            version: 1,
+            version: 2,
             immutablePaging: true,
             revisionedBoundaries: true,
             ambiguityReporting: true,
+            topologyTransparentManagedContext: true,
+            directCloneProvenance: true,
           },
           skillLearningLoop: {
             version: 1,

@@ -1,20 +1,25 @@
 # KodaX Architecture Decision Records
 
-> Last updated: 2026-08-20
+> Last updated: 2026-08-21
 >
-> **Unreleased filesystem-effect concurrency addendum:** a direct text mutation
-> may overlap a model-started shell only after Runtime has acquired the same
-> workspace ASRT policy and moved both snapshot and write into that sandbox.
-> The complete text transaction keeps its normalized-path FIFO and uses a
-> file-identity-aware optimistic compare-and-write check. Standalone Coding
-> consumers and every other host filesystem sink retain the direct lease;
-> Runtime ASRT unavailability for a covered workspace target fails closed
-> instead of silently changing authority; non-workspace targets retain the
-> legacy host fence. Shell owners still coordinate incompatible Windows ACL
-> policies, while worktree creation/removal retains both its target-path queue
-> and namespace/process-tree lease. This intentionally removes only the global
-> shell-versus-sandbox-text edge; it does not make arbitrary same-file writers
-> atomic.
+> **v0.7.94 release addendum:** a direct text mutation may overlap a
+> model-started shell only after Runtime has acquired the same workspace ASRT
+> policy and moved both snapshot and write into that sandbox. The complete
+> text transaction keeps its normalized-path FIFO and uses a file-identity-aware
+> optimistic compare-and-write check. Hard-linked workspace targets are
+> rejected. Standalone Coding consumers and every other host filesystem sink
+> retain the direct lease; Runtime ASRT unavailability for a covered workspace
+> target fails closed instead of silently changing authority; non-workspace
+> targets retain the legacy host fence. A missing workspace directory omits
+> that concurrent sandbox at Run start. Shell owners still coordinate
+> incompatible Windows ACL policies, while worktree creation/removal retains
+> both its target-path queue and namespace/process-tree lease. Windows
+> sandboxed git trusts authorized repo roots only and never emits
+> `safe.directory=*` (Issue 300). `gitSafeDirectory: authorized-repo-roots`
+> is a v4 marker, not a version bump. Scheduled daemon shutdown reports failed
+> cleanup. `conversationHistory` advances to v2 as an additive negotiation
+> fact. Capability versions `sandboxRuntime:4` / `crashOutcomeModel:2` and
+> Issue 256 remain unchanged.
 >
 > **v0.7.93 release addendum:** Runtime exit settlement observes a durable
 > Windows `failed` shutdown outcome during the orderly wait and enters exact

@@ -739,6 +739,13 @@ vi.mock('@kodax-ai/agent', async (importOriginal) => {
           };
         });
       }
+      if (child.pid === process.pid) {
+        queueMicrotask(() => {
+          child.emit('exit', 0, null);
+          child.emit('close', 0, null);
+        });
+        return Promise.resolve({ status: 'terminated' as const });
+      }
       return actual.killChildProcessTree(child, {
         ...options,
         gracefulMs: 0,

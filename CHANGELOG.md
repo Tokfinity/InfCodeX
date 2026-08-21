@@ -6,6 +6,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+---
+
+## [0.7.94] - 2026-08-21
+
+### Changed
+
+- Runtime capability negotiation now advertises `conversationHistory:2` only when
+  ordinary history is topology-transparent across managed context and direct
+  clone provenance is preserved. Embedders can require v2 to reject stale daemon
+  processes that still expose the legacy projection contract.
+
 ### Fixed
 
 - Scheduled Runtime daemon shutdown now rejects the public host lifecycle when
@@ -20,7 +31,8 @@ All notable changes to this project will be documented in this file.
   even when no authorized root survives, rejects malformed `GIT_CONFIG_*`
   shapes, and generates broker and bundled rewriting from one implementation.
   Linked-worktree metadata must prove its backlink before the main `.git` earns
-  read trust; repository-bearing metadata read roots join the exact trust set.
+  read trust; repository-bearing metadata read roots join the exact trust set
+  (Issue 300).
 - Long-running and background Bash processes no longer block Runtime `write`,
   `edit`, `multi_edit`, `insert_after_anchor`, or `undo` solely because a shell
   lease is alive. Those tools now perform both snapshot and identity-aware
@@ -41,6 +53,8 @@ All notable changes to this project will be documented in this file.
   workspace-session startup no longer conflicts with unrelated live shell
   policies because its sandbox policy is process-local; Windows retains its
   shared-account ACL transition fence.
+- Runtime start omits the concurrent text-mutation sandbox when the workspace
+  directory does not exist yet, instead of aborting option construction.
 
 ---
 

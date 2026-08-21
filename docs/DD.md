@@ -1,9 +1,9 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-08-19
+> Last updated: 2026-08-21
 >
-> Current published baseline: `v0.7.93`
-> (`@kodax-ai/kodax@0.7.93`; `sandboxRuntime:4`, `crashOutcomeModel:2`;
+> Current published baseline: `v0.7.94`
+> (`@kodax-ai/kodax@0.7.94`; `sandboxRuntime:4`, `crashOutcomeModel:2`;
 > npm publication remains manual)
 >
 > This DD describes current implementation structure. Retired V1 chain details
@@ -21,7 +21,13 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The published package is `@kodax-ai/kodax@0.7.93`. The v0.7.93 maintenance
+The published package is `@kodax-ai/kodax@0.7.94`. The v0.7.94 maintenance
+slice lets Runtime text tools overlap a compatible live Bash lease through
+the same ASRT workspace policy, rejects hard-linked sandboxed targets, trusts
+Windows git `safe.directory` for authorized repo roots only (Issue 300), and
+reports scheduled shutdown cleanup failures. A missing workspace directory
+omits the concurrent text sandbox at Run start. Runtime advertises
+`conversationHistory:2`. The v0.7.93 maintenance
 slice observes a durable Windows `failed` shutdown outcome during orderly
 exit wait, recovers previous-boot shared ACL markers only after a verified
 boot change, and classifies Anthropic/OpenAI abort wrappers by isolated SDK
@@ -104,7 +110,7 @@ after the Run is no longer active. `src/sdk-runtime.ts` keeps managed
 `onComplete` non-authoritative and requires `sandboxRuntime:4` plus
 `crashOutcomeModel:2` so idle older daemons are replaced.
 
-The Unreleased direct-text path narrows this coordinator without deleting it.
+The v0.7.94 direct-text path narrows this coordinator without deleting it.
 `withFileMutation()` remains the host-sink primitive: normalized-path FIFO plus
 a direct lease that conflicts with shell and namespace effects.
 `withSandboxedFileMutation()` is used only after Runtime supplies a concrete

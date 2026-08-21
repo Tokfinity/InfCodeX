@@ -1,9 +1,9 @@
 # KodaX Product Requirements
 
-> Last updated: 2026-08-19
+> Last updated: 2026-08-21
 >
-> Current implementation baseline: `@kodax-ai/kodax@0.7.93`
-> (`v0.7.93` Git tag / GitHub Release; npm publication remains manual)
+> Current implementation baseline: `@kodax-ai/kodax@0.7.94`
+> (`v0.7.94` Git tag / GitHub Release; npm publication remains manual)
 >
 > This document describes the current product. Historical pre-v0.7.43
 > chain/harness designs have been removed from this current PRD because they no
@@ -117,7 +117,7 @@ outcome, can recover previous-boot shared ACL markers after a verified boot
 change, and preserves managed Stop interruption when an Anthropic or OpenAI
 SDK abort wrapper does not carry the `APIUserAbortError` runtime name.
 
-The Unreleased concurrency fix allows a compatible long-running or background
+The v0.7.94 maintenance release allows a compatible long-running or background
 Bash process to remain alive while Runtime text tools update workspace files.
 Only workspace text operations whose actual read and write are both inside the
 Runtime ASRT policy receive this concurrency. Sandbox failure for a covered
@@ -126,6 +126,11 @@ and other host-side file sinks keep the existing filesystem-effect exclusion.
 Same-path text operations remain FIFO, worktree namespace changes remain
 fenced, and a concurrent shell write to the same file is detected
 optimistically where possible rather than promised as an atomic transaction.
+Windows sandboxed git trusts authorized repo roots only (Issue 300). A missing
+workspace directory omits that concurrent sandbox at Run start instead of
+aborting the Run. Scheduled daemon shutdown reports failed cleanup instead of
+a safe stop. Runtime advertises `conversationHistory:2` so hosts can reject
+daemons that still expose the legacy ordinary-history projection.
 
 ## 2. Target Users
 

@@ -5,12 +5,16 @@
 > extensions, custom CLIs. If you are an end-user running the `kodax`
 > command-line tool, see the root [README.md](../../README.md) instead.
 
-This guide reflects the `v0.7.93` SDK contract. npm publication remains a
+This guide reflects the `v0.7.94` SDK contract. npm publication remains a
 manual maintainer step. The release keeps `sandboxRuntime:4` and
-`crashOutcomeModel:2`, and adds failed-exit fast settlement, previous-boot
-ACL recovery, and isolated Anthropic/OpenAI abort classification on top of the
-v0.7.92 filesystem-effect operation-token coordinator, recorded-release
-owners, managed Session-before-completion ordering, and canonical-first resume
+`crashOutcomeModel:2`, and adds concurrent sandboxed text mutations,
+authorized-root git trust (`gitSafeDirectory: authorized-repo-roots`),
+scheduled shutdown failure reporting, missing-workspace Run start, and
+`conversationHistory:2` on top
+of v0.7.93 failed-exit fast settlement, previous-boot ACL recovery, and
+isolated Anthropic/OpenAI abort classification, plus the v0.7.92
+filesystem-effect operation-token coordinator, recorded-release owners,
+managed Session-before-completion ordering, and canonical-first resume
 reconstruction. v0.7.91 still supplies bounded owner-scoped interactions,
 stale prepared-Session recovery, crash-resumable Runtime exit settlement,
 effective live output segments, and standalone lazy provider dependency

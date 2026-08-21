@@ -106,6 +106,20 @@ describe('FEATURE_218 manual registry', () => {
     expect(sessions).toContain('authoritative full delta path');
   });
 
+  it('documents the v0.7.94 sandboxed text concurrency and git trust contracts', () => {
+    const sdk = resolveKodaXManual({ topic: 'sdk' }).content;
+    const sandbox = resolveKodaXManual({ topic: 'sandbox' }).content;
+
+    expect(sdk).toContain('v0.7.94 SDK keeps `sandboxRuntime:4`');
+    expect(sdk).toContain('compatible live Bash lease');
+    expect(sdk).toContain('gitSafeDirectory: authorized-repo-roots');
+    expect(sdk).toContain('missing workspace directory');
+    expect(sdk).toContain('conversationHistory:2');
+    expect(sandbox).toContain('gitSafeDirectory: authorized-repo-roots');
+    expect(sandbox).toContain('never emits `safe.directory=*`');
+    expect(sandbox).toContain('compatible live Bash lease');
+  });
+
   it('documents the v0.7.93 exit settlement and abort classification contracts', () => {
     const sdk = resolveKodaXManual({ topic: 'sdk' }).content;
 
@@ -160,7 +174,7 @@ describe('FEATURE_218 manual registry', () => {
     expect(sdk).toContain('runtimeEventCoalescing:1');
     expect(sdk).toContain('sessions.status()');
     expect(sdk).toContain('sessions.conversation()');
-    expect(sdk).toContain('conversationHistory:1');
+    expect(sdk).toContain('conversationHistory:2');
     expect(sdk).toContain('captureRuntimeSessionDiagnostics()');
     expect(sdk).toContain('sessions.diagnostics()');
     expect(sdk).toContain('Job Object');

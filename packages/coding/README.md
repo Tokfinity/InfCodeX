@@ -166,11 +166,12 @@ AbortSignals, validates timeout defaults at the Runtime boundary, and keeps
 stale prepared Session tails recoverable through an authoritative delta merge
 instead of silently losing the latest host state.
 
-The v0.7.93 release keeps `sandboxRuntime:4` and `crashOutcomeModel:2`. Runtime
-exit settlement ends the 170-second orderly wait after a durable Windows
-`failed` shutdown outcome, can recover previous-boot shared ACL markers after a
-verified boot change, and classifies Anthropic/OpenAI abort wrappers by
-isolated SDK class identity so managed Stop stays interrupted. See the
+The v0.7.94 release keeps `sandboxRuntime:4` and `crashOutcomeModel:2`.
+Runtime text tools may overlap a compatible live Bash lease through the same
+ASRT workspace policy. Windows sandboxed git trusts authorized repo roots
+only (`gitSafeDirectory: authorized-repo-roots`). Scheduled daemon shutdown
+reports failed cleanup. A missing workspace directory omits the concurrent
+text sandbox at Run start. Runtime advertises `conversationHistory:2`. See the
 [SDK Embedder Guide](../../public_docs/sdk/embedder-guide.md)
 for host capability requirements.
 

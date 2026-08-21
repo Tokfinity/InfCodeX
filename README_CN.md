@@ -266,6 +266,16 @@ SDK 系统代码契约更新，但没有放宽 shell/sandbox 的 fail-closed 边
 `handleRuntimePermissionRequest()` 管理 SDK 权限 UI，并在 prepared Session 尾部遇到
 `data_changed` 时通过权威 delta 合并恢复；后台持久化失败会显示为诊断，不再静默丢失。
 
+**v0.7.94 发布**：Runtime 文本工具可以与兼容的长驻/后台 Bash 并发，因为
+snapshot 与 commit 走同一套 ASRT workspace 策略。硬链接工作区目标会被拒绝。
+Windows 沙箱 git 只信任已授权的仓库根，不再发出 `safe.directory=*`（Issue 300）。
+计划中的 daemon shutdown 在 cleanup 失败时报告失败，而不是声称安全停止。
+工作区目录尚不存在时，Run 启动会省略并发文本沙箱，而不是中止 option 构造。
+Runtime 广告 `conversationHistory:2`。`sandboxRuntime:4` 与
+`crashOutcomeModel:2` 不变。Issue 256 仍保持 Open。
+详见 [v0.7.94 发布清单](docs/release.md#v0794-release-preparation) 与
+[SDK Embedder Guide](public_docs/sdk/embedder-guide.md)。
+
 **v0.7.93 发布**：Windows 退出结算在精确 owner 已写入 durable `failed`
 shutdown outcome 后不再空等 170 秒有序窗口，改为立即进入既有精确恢复路径。
 验证 boot 变化后，可在 machine lock 下回收上一启动留下的共享 ACL marker，

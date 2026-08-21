@@ -2381,10 +2381,12 @@ function runtimeDaemonCapabilities(
       citedEntries: true,
     },
     conversationHistory: {
-      version: 1,
+      version: 2,
       immutablePaging: true,
       revisionedBoundaries: true,
       ambiguityReporting: true,
+      topologyTransparentManagedContext: true,
+      directCloneProvenance: true,
     },
     learningCenter: { version: 1 },
     skillLearningLoop: {

@@ -1,11 +1,26 @@
 # Known Issues
 
-_Last Updated: 2026-08-19_
+_Last Updated: 2026-08-21_
 
 ---
 
 > **Archive Notice**: Historical issue records are maintained in `docs/ISSUES_ARCHIVED.md`.
 > This file tracks the active issue backlog plus recently resolved issue records that have not yet been archived.
+
+## v0.7.94 Release Corrections
+
+The v0.7.94 maintenance release closes Issue 300 and the post-v0.7.93
+sandboxed-text concurrency gaps. Windows sandboxed git trusts authorized
+repo roots only, never emits `safe.directory=*`, and requires linked-worktree
+/ submodule backlinks. Runtime text tools may overlap a compatible live Bash
+lease through the same ASRT workspace policy; hard-linked targets are
+rejected. Scheduled daemon shutdown reports failed cleanup. A missing
+workspace directory omits the concurrent text sandbox at Run start.
+Runtime advertises `conversationHistory:2`. Capability versions
+`sandboxRuntime:4` / `crashOutcomeModel:2` and Issue 256 remain unchanged. See
+[ISSUE_300_v0.7.94_REGRESSION_GUIDE.md](test-guides/ISSUE_300_v0.7.94_REGRESSION_GUIDE.md).
+
+---
 
 ## v0.7.93 Release Corrections
 
@@ -75,7 +90,7 @@ by the focused sandbox, lineage, REPL, and coding-runtime tests.
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
-| 300 | Medium | Resolved | Sandboxed git `safe.directory` trust set misaligned with authorized roots | v0.7.93 ASRT 0.0.65 git trust | Unreleased | 2026-08-20 | 2026-08-21 |
+| 300 | Medium | Resolved | Sandboxed git `safe.directory` trust set misaligned with authorized roots | v0.7.93 ASRT 0.0.65 git trust | v0.7.94 | 2026-08-20 | 2026-08-21 |
 | 299 | High | Resolved | Previous-boot foreign Windows ACL markers blocked SDK-owned Runtime exit settlement | v0.7.91 Runtime exit settlement | v0.7.93 | 2026-08-19 | 2026-08-19 |
 | 298 | High | Resolved | Provider SDK abort wrapper bypasses managed Stop classification and becomes a credential failure | v0.7.69 managed run-scoped credentials | v0.7.93 | 2026-08-19 | 2026-08-19 |
 | 297 | Medium | Resolved | Durable Windows cleanup failure still consumed the full orderly daemon-exit window before exact recovery | v0.7.91 Runtime exit settlement | v0.7.93 | 2026-08-19 | 2026-08-19 |
@@ -269,7 +284,7 @@ by the focused sandbox, lineage, REPL, and coding-runtime tests.
 - **Priority**: Medium
 - **Status**: Resolved
 - **Introduced**: v0.7.93 ASRT 0.0.65 git trust
-- **Fixed**: Unreleased
+- **Fixed**: v0.7.94
 - **Created**: 2026-08-20
 - **Resolved**: 2026-08-21
 
@@ -313,6 +328,9 @@ backlinks. Submodules must prove the canonical workspace through
 not receive read ACEs. The workspace gitfile remains write-denied, and the v4
 capability exposes `gitSafeDirectory: authorized-repo-roots` for stale-daemon
 diagnosis.
+
+See
+[`ISSUE_300_v0.7.94_REGRESSION_GUIDE.md`](test-guides/ISSUE_300_v0.7.94_REGRESSION_GUIDE.md).
 
 ### 299: Previous-boot foreign Windows ACL markers blocked SDK-owned Runtime exit settlement
 
@@ -12851,7 +12869,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 
 ## Changelog
 
-### 2026-08-21: Issue 300 resolved
+### 2026-08-21: Issue 300 resolved (v0.7.94)
 - Replaced ASRT wildcard git trust with a bounded authorized-root set, including
   repo-bearing read grants that remain prioritized under the eight-root cap.
 - Added verified linked-worktree and submodule metadata relationships, a

@@ -127,6 +127,61 @@ Before tagging, all of the following must be true:
 
 Only after these gates pass may the exact commit be tagged `v0.7.90`.
 
+## v0.7.94 release preparation
+
+Release state: the root package, all four workspace packages, and every
+`package-lock.json` workspace entry must be version `0.7.94`. This maintenance
+release is prepared for the `v0.7.94` tag and GitHub Release; npm publication
+remains a separate manual operator step. It includes every commit after
+`v0.7.93`:
+
+- Runtime text tools may overlap a compatible live Bash lease because snapshot
+  and commit run through the same ASRT workspace policy, with same-path FIFO
+  and fail-closed sandbox unavailability for covered workspace targets;
+- sandboxed text mutations reject hard links, mint backup identity from the
+  opened helper, and keep worktree Git drain fail-closed when process-tree
+  completion is unprovable;
+- Windows sandboxed git trusts authorized repo roots only, never
+  `safe.directory=*`, and requires linked-worktree / submodule backlinks
+  (Issue 300);
+- scheduled daemon shutdown reports a failed cleanup instead of a safe stop;
+- a missing workspace directory omits the concurrent text sandbox at Run start
+  instead of aborting option construction;
+- Runtime advertises `conversationHistory:2` so hosts can reject daemons that
+  still expose the legacy ordinary-history projection;
+- synchronized product, architecture, detailed-design, public SDK, release
+  checklist, feature index, known-issue, regression-guide, and `kodax_manual`
+  content.
+
+The release does not add a Feature slot, does not change
+`sandboxRuntime` / `crashOutcomeModel` versions, and does not close Issue 256's
+lost-ancestor descendant-closure boundary. `gitSafeDirectory:
+authorized-repo-roots` is a v4 marker field, not a capability bump. No system
+implementation is silently changed by the release-documentation pass.
+
+Before tagging, all of the following must be true:
+
+1. all package versions, `CHANGELOG.md`, README/README_CN, PRD/HLD/DD/ADR,
+   feature tracker, known-issue record, public SDK guide, this checklist,
+   `docs/features`, and `kodax_manual` agree on v0.7.94;
+2. focused tests cover concurrent sandboxed text mutations, Issue 300 git
+   trust, scheduled shutdown failure reporting, missing-workspace Run start,
+   and the existing v0.7.93 regression contracts;
+3. TypeScript, config-template checks, bundled SDK/Worker/sidecar builds, fast,
+   unit, contract, and system suites pass, with any host-only Windows sandbox
+   limitation documented rather than silently changing system code;
+4. the packed `kodax-ai-kodax-0.7.94.tgz` is inspected and smoke-installed into
+   an empty consumer for the root package and all 12 SDK subpaths;
+5. root and `docs/features` are clean, with the submodule commit reachable from
+   its remote; `.codex*` local artifacts and alternate pnpm metadata are ignored
+   and not tracked;
+6. GitHub CI is green for the exact commit on Node 20/22, Unix Runtime,
+   Windows Shell, and packaged Electron gates; the tag-triggered Release job
+   produces all platform archives, sidecars, and `SHA256SUMS`. npm publication is
+   left to the maintainer.
+
+Only after these gates pass may the exact commit be tagged `v0.7.94`.
+
 ## v0.7.93 release preparation
 
 Release state: the root package, all four workspace packages, and every

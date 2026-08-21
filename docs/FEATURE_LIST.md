@@ -11,8 +11,8 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.93` (Git tag / GitHub Release) |
-| Current package version | `@kodax-ai/kodax@0.7.93` release (npm publication remains manual) |
+| Current released version | `v0.7.94` (Git tag / GitHub Release) |
+| Current package version | `@kodax-ai/kodax@0.7.94` release (npm publication remains manual) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `78` |
 | InProgress | `1` |
@@ -28,7 +28,7 @@
 |---|---:|---|---|
 | Completed | 55 | `294, 293, 292, 291, 290, 289, 286, 284, 281, 277, 276, 263, 275, 274, 273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `293` and `294` are complete in the v0.7.89 release; `292`, `291`, `290`, and `289` shipped in v0.7.85. npm publication remains manual. |
 | InProgress | 1 | `225` | `225` remains the bounded v0.8.25 cleanup (moved from v0.7.105 on 2026-08-08; slid v0.8.15 -> v0.8.25 on 2026-08-20). |
-| Planned, near-term | 0 | `-` | `v0.7.93` released failed-exit fast settlement, previous-boot ACL recovery, and provider abort classification (Issues 297/298/299); Issue 256 descendant-closure remains open and npm publication remains manual. |
+| Planned, near-term | 0 | `-` | `v0.7.94` released concurrent sandboxed text mutations, Issue 300 git trust, and scheduled shutdown failure reporting; Issue 256 descendant-closure remains open and npm publication remains manual. |
 | Planned, 0.8.x | 10 | `278, 279, 282, 283, 285, 280, 287, 288, 265, 105` | `v0.8.10` -> `v0.8.11` -> `v0.8.13` -> `v0.8.14` -> `v0.8.15` -> `v0.8.20` -> `v0.8.25` |
 | Planned, 0.9.x | 6 | `007, 030, 093, 113, 139, 262` | `v0.9.0` -> `v0.9.5` -> `v0.9.7` -> `v0.9.25` |
 | Reviewed out, 2026-07-12 | 6 | `244, 231, 235, 238, 232, 108` | Shelved, deferred, absorbed, or cancelled after the post-v0.7.70 roadmap review; F105 was restored by the 2026-07-29 MoA redesign. |
@@ -556,6 +556,40 @@ Agent lineage, Coding runtime, and REPL persistence system-code fixes; no
 fail-closed safety boundary is weakened.
 
 The release checklist is [docs/release.md](release.md#v0790-release-preparation).
+
+---
+
+## v0.7.94 Release Record
+
+`v0.7.94` is a non-Feature maintenance release. It closes post-v0.7.93
+sandbox and host-lifecycle gaps without changing capability versions.
+
+Runtime `write`, `edit`, `multi_edit`, `insert_after_anchor`, and `undo` may
+overlap a compatible live Bash lease because snapshot and commit run through
+the same ASRT workspace policy. Covered workspace targets fail closed when
+that sandbox is unavailable. Hard-linked targets are rejected. Backup
+identity comes from the opened helper. Worktree Git drain stays fail-closed
+when process-tree completion is unprovable. A missing workspace directory
+omits the concurrent text sandbox at Run start instead of aborting the Run.
+
+Issue 300 replaces Windows sandboxed git wildcard trust with authorized repo
+roots, including linked-worktree and submodule backlinks. The v4 capability
+exposes `gitSafeDirectory: authorized-repo-roots` as a stale-daemon marker.
+
+Scheduled daemon shutdown reports failed cleanup instead of a safe stop.
+Runtime advertises `conversationHistory:2` for topology-transparent managed
+context and direct clone provenance.
+
+Issue 256 remains Open: this slice does not prove descendant closure after an
+intermediate parent exits. FEATURE_287 remains planned for a later 0.8.x slot
+and is not shipped here.
+
+The design and acceptance contract are
+[v0.7.94](features/v0.7.94.md) and
+[Issue 300 v0.7.94](test-guides/ISSUE_300_v0.7.94_REGRESSION_GUIDE.md).
+
+The release checklist is
+[docs/release.md](release.md#v0794-release-preparation).
 
 ---
 

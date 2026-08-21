@@ -322,6 +322,14 @@ describe("createKodaXRuntime", () => {
       unknownAfterTurnQueue: true,
       terminal: "failed",
     });
+    expect(runtime.capabilities.conversationHistory).toEqual({
+      version: 2,
+      immutablePaging: true,
+      revisionedBoundaries: true,
+      ambiguityReporting: true,
+      topologyTransparentManagedContext: true,
+      directCloneProvenance: true,
+    });
     const session = await runtime.sessions.create({ title: "Worker Session" });
     await expect(runtime.sessions.list()).resolves.toEqual([
       expect.objectContaining({ id: session.id, title: "Worker Session" }),
@@ -550,6 +558,44 @@ describe("createKodaXRuntime", () => {
         requirements: { hardDispose: true },
       }),
     ).rejects.toThrow(/does not support.*hardDispose/i);
+  });
+
+  it("rejects a daemon with the legacy conversation history contract when v2 is required", async () => {
+    const { createKodaXRuntime } = await import("./sdk-runtime.js");
+    const transport: RuntimeDaemonClientTransport = {
+      async request(method) {
+        if (method !== "initialize") return null;
+        return {
+          identity: {
+            runtimeId: "daemon-legacy-conversation-history",
+            mode: "daemon",
+            profile: "default",
+            startedAt: "2026-08-21T00:00:00.000Z",
+            version: "0.7.93",
+          },
+          capabilities: {
+            ...SESSION_EVENT_JOURNAL_CAPABILITY,
+            conversationHistory: {
+              version: 1,
+              immutablePaging: true,
+              revisionedBoundaries: true,
+              ambiguityReporting: true,
+            },
+          },
+        };
+      },
+      subscribe() {
+        return { close() {} };
+      },
+    };
+
+    await expect(
+      createKodaXRuntime({
+        mode: "daemon",
+        daemonTransport: transport,
+        requirements: { conversationHistory: 2 },
+      }),
+    ).rejects.toThrow(/does not support.*conversationHistory/i);
   });
 
   it("rejects an older daemon without the Session event journal contract", async () => {
@@ -16803,6 +16849,42 @@ describe("createKodaXRuntime", () => {
     } finally {
       await invocation?.cleanup();
       await runtime.runs.abort(handle.runId);
+      await runtime.close();
+    }
+  });
+
+  it("starts a Run without a text sandbox when the workspace identity is missing", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const missingWorkspace = path.join(tempRoot, `missing-workspace-${randomUUID()}`);
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "sessions"),
+      defaultProvider: "mock-provider",
+      sharedDaemonHost: true,
+    });
+    const session = await runtime.sessions.create({ title: "Missing workspace identity" });
+    await runtime.sessions.updateSettings(session.id, {
+      executionCwd: missingWorkspace,
+    });
+    let runOptions: KodaXOptions | undefined;
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => {
+      runOptions = options;
+      return fakeRunningSession(options, Promise.resolve({
+        success: true,
+        lastText: "ok",
+        messages: [],
+        sessionId: session.id,
+      }));
+    });
+    try {
+      await (
+        await runtime.runs.start({
+          sessionId: session.id,
+          prompt: "start without a workspace directory",
+        })
+      ).result;
+      expect(runOptions?.context?.textFileMutationSandbox).toBeUndefined();
+    } finally {
       await runtime.close();
     }
   });
