@@ -116,6 +116,29 @@ describe('runSubstrate physical request accounting', { timeout: 30_000 }, () => 
     expect(snapshots[0]!.tokenBreakdown.skillCatalog).toBe(0);
   });
 
+  it('injects an explicit Skill into the SA wire prompt even with a child override', async () => {
+    await runSubstrate({
+      provider: PROVIDER_NAME,
+      model: 'capacity-model',
+      maxIter: 1,
+      reasoningMode: 'off',
+      context: {
+        systemPromptOverride: 'CHILD AGENT SYSTEM PROMPT',
+        skillInvocation: {
+          name: 'hidden-skill',
+          path: 'C:/skills/hidden-skill/SKILL.md',
+          expandedContent: '<skill name="hidden-skill">SA_SKILL_SENTINEL</skill>',
+        },
+      },
+    }, 'run child objective');
+
+    expect(CapacityAccountingProvider.requests).toHaveLength(1);
+    const systemPrompt = CapacityAccountingProvider.requests[0]!.systemPrompt;
+    expect(systemPrompt).toContain('CHILD AGENT SYSTEM PROMPT');
+    expect(systemPrompt).toContain('SA_SKILL_SENTINEL');
+    expect(systemPrompt.match(/SA_SKILL_SENTINEL/g)).toHaveLength(1);
+  });
+
   it('rebases a no-usage snapshot from the final request envelope through assistant and tool appends', async () => {
     CapacityAccountingProvider.mode = 'tool';
     const result = await runSubstrate({

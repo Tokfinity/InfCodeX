@@ -51,6 +51,48 @@ describe("runQueuedPromptSequence", () => {
     expect(result.prompt).toBe("solo");
   });
 
+  it("does not batch a host-owned Skill with a later Runtime prompt", async () => {
+    const prompts = [
+      { text: "/skill-a args", delivery: "host" as const },
+      { text: "ordinary follow-up", delivery: "runtime" as const },
+    ];
+    const runRound = vi.fn(async (prompt: string) => ({ prompt }));
+
+    await runQueuedPromptSequence({
+      initialPrompt: "initial",
+      runRound,
+      peekPendingPromptDelivery: () => prompts[0]?.delivery,
+      shiftPendingPrompt: () => prompts.shift()?.text,
+    });
+
+    expect(runRound.mock.calls.map(([prompt]) => prompt)).toEqual([
+      "initial",
+      "/skill-a args",
+      "ordinary follow-up",
+    ]);
+  });
+
+  it("executes consecutive host-owned Skills as separate queued rounds", async () => {
+    const prompts = [
+      { text: "/skill-a one", delivery: "host" as const },
+      { text: "/skill-b two", delivery: "host" as const },
+    ];
+    const runRound = vi.fn(async (prompt: string) => ({ prompt }));
+
+    await runQueuedPromptSequence({
+      initialPrompt: "initial",
+      runRound,
+      peekPendingPromptDelivery: () => prompts[0]?.delivery,
+      shiftPendingPrompt: () => prompts.shift()?.text,
+    });
+
+    expect(runRound.mock.calls.map(([prompt]) => prompt)).toEqual([
+      "initial",
+      "/skill-a one",
+      "/skill-b two",
+    ]);
+  });
+
   it("stops before consuming queued prompts when the current round should not continue", async () => {
     const runRound = vi.fn(async (prompt: string) => ({
       prompt,

@@ -2,6 +2,7 @@ export interface QueuedPromptSequenceOptions<TResult> {
   initialPrompt: string;
   runRound: (prompt: string) => Promise<TResult>;
   shiftPendingPrompt: () => string | undefined;
+  peekPendingPromptDelivery?: () => 'runtime' | 'host' | undefined;
   onRoundComplete?: (result: TResult) => Promise<void> | void;
   onBeforeQueuedRound?: (prompt: string) => Promise<void> | void;
   shouldContinue?: (result: TResult) => boolean;
@@ -25,6 +26,7 @@ export async function runQueuedPromptSequence<TResult>(
     initialPrompt,
     runRound,
     shiftPendingPrompt,
+    peekPendingPromptDelivery,
     onRoundComplete,
     onBeforeQueuedRound,
     shouldContinue = () => true,
@@ -51,11 +53,22 @@ export async function runQueuedPromptSequence<TResult>(
     // user intent rather than processing each in isolation). Empty
     // entries are filtered as they were in the legacy single-shift loop.
     const drained: string[] = [];
+    let batchDelivery: 'runtime' | 'host' | undefined;
     while (true) {
+      const nextDelivery = peekPendingPromptDelivery?.();
+      if (
+        drained.length > 0
+        && (batchDelivery === 'host' || nextDelivery === 'host')
+      ) {
+        break;
+      }
       const next = shiftPendingPrompt();
       if (next === undefined) break;
       const trimmed = typeof next === "string" ? next.trim() : "";
-      if (trimmed.length > 0) drained.push(trimmed);
+      if (trimmed.length > 0) {
+        drained.push(trimmed);
+        batchDelivery = nextDelivery;
+      }
     }
 
     if (drained.length === 0) {

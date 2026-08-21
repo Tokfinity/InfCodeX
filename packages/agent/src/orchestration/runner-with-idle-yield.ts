@@ -34,7 +34,10 @@
 import type { Agent } from '../primitives/agent.js';
 import type { AgentMessage } from '../primitives/agent.js';
 import { attachRunnerRecoveryTranscript } from '../primitives/runner.js';
-import type { MessageQueue } from '../messaging/index.js';
+import {
+  createRuntimeDeliveryPredicate,
+  type MessageQueue,
+} from '../messaging/index.js';
 
 import { composeIdleYieldUserMessage, type EnvelopeAggregateEnforcer } from './idle-yield.js';
 import { detectIdleYield } from './idle-yield.js';
@@ -251,6 +254,7 @@ export async function runWithIdleYield<
       error.name = 'AbortError';
       throw error;
     }
+    if (wakeEvent.kind === 'host-input-arrived') break;
 
     // FEATURE_159 (v0.7.40) — `composeIdleYieldUserMessage` now returns
     // an array; mode-split may emit two separate messages (synthetic
@@ -265,6 +269,10 @@ export async function runWithIdleYield<
         opts.messageQueue.dequeue({
           agentId: opts.agentId,
           maxPriority: 'background',
+          predicate: createRuntimeDeliveryPredicate(
+            opts.messageQueue.getSnapshot(),
+            opts.agentId,
+          ),
         }),
       opts.envelopeAggregateEnforcer,
       // FEATURE_213 — surface the user-typed prompt(s) drained on this wake to

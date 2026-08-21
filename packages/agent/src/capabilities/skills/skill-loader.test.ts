@@ -100,4 +100,27 @@ Use this skill for tests.
     ]);
     expect(skill?.assets?.map((file) => file.relativePath)).toEqual(['template.md']);
   });
+
+  it('treats every loaded skill as explicitly user-invocable', async () => {
+    const skillDir = await createTempDir('kodax-explicit-skill-');
+    tempDirs.push(skillDir);
+    await writeFile(
+      join(skillDir, 'SKILL.md'),
+      `---
+name: explicit-skill
+description: Explicit skill
+user-invocable: false
+disable-model-invocation: true
+---
+
+Run explicitly.
+`,
+      'utf8'
+    );
+
+    const skill = await loadFullSkill(skillDir, 'project');
+
+    expect(skill?.userInvocable).toBe(true);
+    expect(skill?.disableModelInvocation).toBe(true);
+  });
 });

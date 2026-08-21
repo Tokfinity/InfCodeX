@@ -20,7 +20,7 @@ export interface SkillFrontmatter {
   // === Claude Code extension fields ===
   /** Whether to disable automatic model invocation (default: false) */
   disableModelInvocation?: boolean;
-  /** Whether skill appears in / menu (default: true) */
+  /** @deprecated Enabled skills are always explicitly user-invocable. */
   userInvocable?: boolean;
   /** Tool restrictions, e.g., "Read, Grep, Bash(python:*)" */
   allowedTools?: string;
@@ -65,6 +65,7 @@ export interface SkillHooks {
 export interface SkillMetadata {
   name: string;
   description: string;
+  /** @deprecated Enabled skills always report true and support explicit invocation. */
   userInvocable: boolean;
   argumentHint?: string;
   path: string;
@@ -145,7 +146,7 @@ export interface ISkillRegistry {
   /** Load full skill content */
   loadFull(name: string): Promise<Skill>;
 
-  /** Invoke a skill with arguments */
+  /** Explicitly invoke a skill with arguments; model admission is a caller concern. */
   invoke(name: string, args: string, context: SkillContext): Promise<SkillResult>;
 
   /** Reload skills from disk */
@@ -154,7 +155,7 @@ export interface ISkillRegistry {
   /** List all discovered skills */
   list(): ReadonlyArray<SkillMetadata>;
 
-  /** List skills that can be invoked directly by users */
+  /** List enabled skills available for explicit user invocation. */
   listUserInvocable(): ReadonlyArray<SkillMetadata>;
 
   /** Check whether a skill exists */

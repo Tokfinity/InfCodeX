@@ -17,6 +17,7 @@ export function parseInlineSkillReferences(input: string): readonly InlineSkillR
     if (!name) continue;
     const start = match.index + lead.length;
     const raw = `/skill:${name}`;
+    if (input[start + raw.length] === '/') continue;
     matches.push({ name, raw, start, end: start + raw.length });
   }
   return matches;
@@ -34,6 +35,7 @@ export function parseBareInlineSlashReferences(input: string): readonly InlineSk
     if (!name) continue;
     const start = match.index + lead.length;
     const raw = `/${name}`;
+    if (input[start + raw.length] === '/') continue;
     matches.push({ name, raw, start, end: start + raw.length });
   }
   return matches;

@@ -47,7 +47,7 @@ export function parseSkillMarkdown(content: string): {
     name: parsedRecord.name,
     description: parsedRecord.description,
     disableModelInvocation: parsedRecord['disable-model-invocation'] === true,
-    userInvocable: parsedRecord['user-invocable'] !== false, // Default true
+    userInvocable: parsedRecord['user-invocable'] !== false,
     allowedTools: normalizeAllowedToolsString(parsedRecord['allowed-tools']),
     context: parsedRecord.context === 'fork' ? 'fork' : undefined,
     agent: typeof parsedRecord.agent === 'string' ? parsedRecord.agent : undefined,
@@ -82,7 +82,7 @@ export async function loadSkillMetadata(
     return {
       name: frontmatter.name,
       description: frontmatter.description,
-      userInvocable: frontmatter.userInvocable ?? true,
+      userInvocable: true,
       argumentHint: frontmatter.argumentHint,
       path: skillDir,
       source,
@@ -124,6 +124,9 @@ export async function loadFullSkill(
 
     const skill: Skill = {
       ...frontmatter,
+      // Keep parsing the legacy frontmatter field, but do not turn it into an
+      // execution permission: every enabled Skill supports explicit invocation.
+      userInvocable: true,
       path: skillDir,
       skillFilePath,
       content: body,

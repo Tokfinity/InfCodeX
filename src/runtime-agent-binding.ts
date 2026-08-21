@@ -379,7 +379,7 @@ class PinnedSkillRegistry implements ISkillRegistry {
   get(name: string): SkillMetadata | undefined { return this.#metadata.get(name); }
   has(name: string): boolean { return this.#metadata.has(name); }
   list(): SkillMetadata[] { return [...this.#metadata.values()]; }
-  listUserInvocable(): SkillMetadata[] { return this.list().filter((skill) => skill.userInvocable); }
+  listUserInvocable(): SkillMetadata[] { return this.list(); }
   async loadFull(name: string): Promise<Skill> {
     if (!this.has(name)) throw new Error(`Skill not admitted by Runtime binding: ${name}`);
     return this.#delegate.loadFull(name);
@@ -426,7 +426,7 @@ class CompositeSkillRegistry implements ISkillRegistry {
     return [...combined.values()];
   }
   listUserInvocable(): SkillMetadata[] {
-    return this.list().filter((skill) => skill.userInvocable);
+    return this.list();
   }
   loadFull(name: string): Promise<Skill> {
     return this.formal.has(name) ? this.formal.loadFull(name) : this.learned.loadFull(name);

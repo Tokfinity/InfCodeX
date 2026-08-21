@@ -7,7 +7,13 @@ import { executeCommand, getCommandRegistry, parseCommand, type CommandCallbacks
 
 const tempDirs: string[] = [];
 
-async function writeProjectSkill(root: string, name: string, body: string, dirName = name): Promise<void> {
+async function writeProjectSkill(
+  root: string,
+  name: string,
+  body: string,
+  dirName = name,
+  frontmatter = '',
+): Promise<void> {
   const skillDir = path.join(root, '.kodax', 'skills', dirName);
   await mkdir(skillDir, { recursive: true });
   await writeFile(
@@ -15,6 +21,7 @@ async function writeProjectSkill(root: string, name: string, body: string, dirNa
     `---
 name: ${name}
 description: ${body}
+${frontmatter}
 ---
 
 # ${name}
@@ -69,6 +76,39 @@ describe('direct skill slash invocation', () => {
         skillInvocation: {
           name: 'code-review-local',
           arguments: 'src/',
+        },
+      },
+    });
+  });
+
+  it('keeps explicit slash invocation available for every enabled skill', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-explicit-skill-'));
+    tempDirs.push(root);
+    await writeProjectSkill(
+      root,
+      'explicit-skill',
+      'Run only when the user names this skill.',
+      'explicit-skill',
+      'user-invocable: false\ndisable-model-invocation: true',
+    );
+
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const result = await executeCommand(
+      { command: 'explicit-skill', args: ['inspect', 'src/'] },
+      buildContext(root) as never,
+      {} as CommandCallbacks,
+      {} as never,
+    );
+
+    expect(result).toMatchObject({
+      invocation: {
+        source: 'skill',
+        displayName: 'explicit-skill',
+        disableModelInvocation: true,
+        skillInvocation: {
+          name: 'explicit-skill',
+          arguments: 'inspect src/',
         },
       },
     });

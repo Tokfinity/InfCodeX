@@ -7,6 +7,7 @@
 export type {
   DequeueFilter,
   EnqueueInput,
+  MessageDelivery,
   MessageMode,
   MessagePriority,
   QueueEvent,
@@ -31,6 +32,7 @@ export {
 export type { MaybeDrainMidTurnInput } from './drain.js';
 export {
   YIELD_TOOL_NAMES,
+  createRuntimeDeliveryPredicate,
   maybeDrainMidTurn,
   midTurnDrainPriority,
 } from './drain.js';

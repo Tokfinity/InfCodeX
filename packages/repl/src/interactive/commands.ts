@@ -78,10 +78,9 @@ import { loadCompactionConfig } from '../common/compaction-config.js';
 import {
   getSkillRegistry,
   initializeSkillRegistry,
-  expandSkillForLLM,
   type SkillMetadata,
-  type SkillContext,
 } from '@kodax-ai/agent';
+import { createUserSkillInvocation } from './user-skill-invocation.js';
 import { CommandRegistry } from '../commands/registry.js';
 import { formatLearningStatus } from '../ui/view-models/learning-summary.js';
 import { copyCommand } from '../commands/copy-command.js';
@@ -2872,6 +2871,10 @@ export function getCommandRegistry(projectRoot?: string): CommandRegistry {
   return commandRegistry;
 }
 
+export function isRegisteredUserCommand(name: string, projectRoot?: string): boolean {
+  return getCommandRegistry(projectRoot).has(name) || Boolean(getActiveExtensionCommand(name));
+}
+
 // Parse command.
 function getActiveExtensionCommands(): ExtensionCommandDefinition[] {
   const runtime = getActiveExtensionRuntime();
@@ -3062,67 +3065,6 @@ async function executeExtensionCommand(
   return true;
 }
 
-/**
- * FEATURE_143 (v0.7.36) — mid-line `/skill:NAME` reference.
- *
- * Distinct from `parseCommand`: that function only resolves a leading
- * `/cmd` (the entire input is the command). This represents one
- * occurrence of `/skill:NAME` anywhere in a user message — typically
- * in the middle of natural-language prose like "use /skill:foo to
- * sketch the layout".
- */
-export interface InlineSkillReference {
-  /** The skill name as written, without the `/skill:` prefix. */
-  readonly name: string;
-  /** The full matched substring including the `/skill:` prefix. */
-  readonly raw: string;
-  /** Offset of `raw` in the original input string. */
-  readonly start: number;
-  readonly end: number;
-}
-
-/**
- * Scan `input` for inline `/skill:NAME` references. Mirrors the
- * pi-mono in-text skill annotation pattern. Each match must be
- * preceded by start-of-string or whitespace so we don't accidentally
- * pick up `https://example.com/skill:foo` URLs or code paths.
- *
- * Skipping the leading `/skill:` at column 0 of a trimmed input is
- * intentional — that case is already handled by `parseCommand`'s
- * leading-slash branch, and feeding it into this scanner too would
- * produce a duplicate skill load.
- *
- * Returns matches in textual order. Caller decides what to do —
- * typically: preload each match's `SKILL.md` and inject it as system
- * context immediately before the user's message.
- */
-export function parseInlineSkillReferences(input: string): readonly InlineSkillReference[] {
-  if (typeof input !== 'string' || input.length === 0) return [];
-  const trimmed = input.trim();
-  // If the whole input is a leading-slash command (`/skill:foo args...`),
-  // defer to parseCommand — don't double-load the skill.
-  if (trimmed.startsWith('/skill:')) return [];
-
-  const matches: InlineSkillReference[] = [];
-  // Allow word chars, dashes, dots, and `:` (for nested namespace forms).
-  const regex = /(^|\s)\/skill:([\w][\w.\-:]*)/g;
-  let match: RegExpExecArray | null;
-  while ((match = regex.exec(input)) !== null) {
-    const lead = match[1] ?? '';
-    const name = match[2] ?? '';
-    if (!name) continue;
-    const rawStart = match.index + lead.length;
-    const raw = `/skill:${name}`;
-    matches.push({
-      name,
-      raw,
-      start: rawStart,
-      end: rawStart + raw.length,
-    });
-  }
-  return matches;
-}
-
 export function parseCommand(input: string): { command: string; args: string[]; skillInvocation?: { name: string } } | null {
   const trimmed = input.trim();
   if (!trimmed.startsWith('/')) return null;
@@ -3266,13 +3208,13 @@ async function resolveDirectSkillCommand(
   name: string,
   context: InteractiveContext
 ): Promise<SkillMetadata | undefined> {
-  const registry = getSkillRegistry(context.gitRoot);
+  let registry = getSkillRegistry(context.gitRoot);
   if (registry.size === 0) {
-    await initializeSkillRegistry(context.gitRoot);
+    registry = await initializeSkillRegistry(context.gitRoot);
   }
 
   const skill = registry.get(name);
-  return skill?.userInvocable ? skill : undefined;
+  return skill;
 }
 
 // Execute skill command.
@@ -3280,12 +3222,12 @@ async function executeSkillCommand(
   parsed: { command: string; args: string[] },
   context: InteractiveContext
 ): Promise<CommandResult> {
-  const registry = getSkillRegistry(context.gitRoot);
+  let registry = getSkillRegistry(context.gitRoot);
   const skillName = parsed.command;
   const skillArgs = parsed.args.join(' ');
 
   if (registry.size === 0) {
-    await initializeSkillRegistry(context.gitRoot);
+    registry = await initializeSkillRegistry(context.gitRoot);
   }
 
   try {
@@ -3294,23 +3236,14 @@ async function executeSkillCommand(
       console.log(chalk.red(`\n[Skill not found: ${skillName}]`));
       return false;
     }
-    if (!skill.userInvocable) {
-      console.log(chalk.yellow(`\n[Skill "${skillName}" is not user-invocable]`));
-      return false;
-    }
-
     console.log(chalk.cyan(`\n[Invoking skill: ${skillName}]`));
     if (skill.argumentHint) {
       console.log(chalk.dim(`Arguments: ${skillArgs || '(none)'}`));
     }
     console.log();
 
-    // Load the full skill and get its resolved content.
-    const fullSkill = await registry.loadFull(skillName);
-
-    // Create skill context for variable resolution.
-    const skillContext: SkillContext = {
-      workingDirectory: process.cwd(),
+    const invocation = await createUserSkillInvocation(skillName, skillArgs, {
+      workingDirectory: context.runtimeInfo?.executionCwd ?? process.cwd(),
       projectRoot: context.gitRoot ?? undefined,
       sessionId: context.sessionId,
       environment: {},
@@ -3318,10 +3251,8 @@ async function executeSkillCommand(
       // /skill path too, so a sandbox host's disable/broker applies everywhere.
       executeDynamicContext: context.skillDynamicContext?.execute,
       disableDynamicContext: context.skillDynamicContext?.disable,
-    };
-
-    // Expand the skill content for LLM injection.
-    const expanded = await expandSkillForLLM(fullSkill, skillArgs, skillContext);
+    });
+    if (!invocation) return false;
 
     // Show skill activation message.
     console.log(chalk.green(`Skill activated: ${skillName}`));
@@ -3329,37 +3260,7 @@ async function executeSkillCommand(
     console.log();
 
     return {
-      invocation: {
-        prompt: expanded.content,
-        source: 'skill',
-        displayName: skillName,
-        path: fullSkill.skillFilePath,
-        disableModelInvocation: expanded.disableModelInvocation,
-        userInvocable: fullSkill.userInvocable,
-        allowedTools: fullSkill.allowedTools,
-        context: fullSkill.context,
-        agent: fullSkill.agent,
-        argumentHint: fullSkill.argumentHint,
-        model: fullSkill.model,
-        hooks: fullSkill.hooks,
-        skillInvocation: {
-          name: skillName,
-          path: fullSkill.skillFilePath,
-          description: fullSkill.description,
-          arguments: skillArgs || undefined,
-          allowedTools: fullSkill.allowedTools,
-          context: fullSkill.context,
-          agent: fullSkill.agent,
-          argumentHint: fullSkill.argumentHint,
-          model: fullSkill.model,
-          hookEvents: fullSkill.hooks
-            ? Object.entries(fullSkill.hooks)
-                .filter(([, hooks]) => Array.isArray(hooks) && hooks.length > 0)
-                .map(([eventName]) => eventName)
-            : undefined,
-          expandedContent: expanded.content,
-        },
-      },
+      invocation,
     };
   } catch (error) {
     console.log(chalk.red(`\n[Error invoking skill: ${error instanceof Error ? error.message : String(error)}]`));

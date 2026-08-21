@@ -33,6 +33,7 @@ describe('parseInlineSkillReferences', () => {
   it('does not treat urls or path fragments as skill references', () => {
     expect(parseInlineSkillReferences('https://example.com/skill:foo')).toEqual([]);
     expect(parseInlineSkillReferences('Path is dir/skill:foo/bar')).toEqual([]);
+    expect(parseInlineSkillReferences('Path is /skill:foo/bar')).toEqual([]);
   });
 });
 
@@ -64,6 +65,7 @@ describe('parseBareInlineSlashReferences', () => {
   it('does not treat urls or path fragments as bare slash candidates', () => {
     expect(parseBareInlineSlashReferences('https://example.com/feature-list-tracker')).toEqual([]);
     expect(parseBareInlineSlashReferences('Path is dir/feature-list-tracker/file')).toEqual([]);
+    expect(parseBareInlineSlashReferences('Path is /src/file.ts')).toEqual([]);
   });
 });
 

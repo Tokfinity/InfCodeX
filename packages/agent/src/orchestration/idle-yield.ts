@@ -52,6 +52,7 @@ import type {
   QueuedInputArtifact,
   QueuedMessage,
 } from '../messaging/index.js';
+import { createRuntimeDeliveryPredicate } from '../messaging/index.js';
 
 interface PromptFragment {
   readonly id: string;
@@ -253,6 +254,7 @@ export type WakeEvent =
       readonly kind: 'messages-arrived';
       readonly messages: readonly QueuedMessage[];
     }
+  | { readonly kind: 'host-input-arrived' }
   | { readonly kind: 'aborted' };
 
 export interface WaitForWakeEventOptions {
@@ -327,9 +329,21 @@ export function waitForWakeEvent(
     // the enqueue gap between the first snapshot and listener registration.
     const drain = (): void => {
       if (settled) return;
+      const snapshot = messageQueue.getSnapshot();
+      const hasHostPrompt = snapshot.some((message) => (
+        message.agentId === agentId
+        && message.priority === 'user'
+        && message.mode === 'prompt'
+        && message.delivery === 'host'
+      ));
+      if (hasHostPrompt) {
+        settle({ kind: 'host-input-arrived' });
+        return;
+      }
       const messages = messageQueue.dequeue({
         agentId,
         maxPriority: 'background',
+        predicate: createRuntimeDeliveryPredicate(snapshot, agentId),
       });
       if (messages.length > 0) {
         settle({ kind: 'messages-arrived', messages });
@@ -450,6 +464,7 @@ export async function composeIdleYieldUserMessage(
   resolveTurnId?: () => string | undefined | Promise<string | undefined>,
   priorMessages: readonly KodaXMessage[] = [],
 ): Promise<readonly KodaXMessage[]> {
+  if (wakeEvent.kind === 'host-input-arrived') return [];
   const promptFragments: PromptFragment[] = [];
   const syntheticFragments: string[] = [];
   // Tag the composed synthetic message when an actor result notification was

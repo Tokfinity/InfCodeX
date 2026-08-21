@@ -37,6 +37,39 @@ describe('mid-turn message drain', () => {
     ]);
   });
 
+  it('leaves host-owned explicit invocations for the host command pipeline', () => {
+    const queue = getMessageQueue();
+    queue.enqueue({
+      priority: 'user',
+      mode: 'prompt',
+      delivery: 'host',
+      content: 'please use /hidden-skill args',
+    });
+    queue.enqueue({ priority: 'user', mode: 'prompt', content: 'ordinary follow-up' });
+
+    expect(maybeDrainMidTurn({ lastTurnToolNames: [] }).map((message) => message.content))
+      .toEqual([]);
+    expect(queue.peek({ maxPriority: 'user' }).map((message) => message.content))
+      .toEqual(['please use /hidden-skill args', 'ordinary follow-up']);
+  });
+
+  it('drains only user prompts that precede the first host-owned prompt', () => {
+    const queue = getMessageQueue();
+    queue.enqueue({ priority: 'user', mode: 'prompt', content: 'first runtime prompt' });
+    queue.enqueue({
+      priority: 'user',
+      mode: 'prompt',
+      delivery: 'host',
+      content: '/hidden-skill args',
+    });
+    queue.enqueue({ priority: 'user', mode: 'prompt', content: 'later runtime prompt' });
+
+    expect(maybeDrainMidTurn({ lastTurnToolNames: [] }).map((message) => message.content))
+      .toEqual(['first runtime prompt']);
+    expect(queue.peek({ maxPriority: 'user' }).map((message) => message.content))
+      .toEqual(['/hidden-skill args', 'later runtime prompt']);
+  });
+
   it('opens background mailbox delivery only after explicit wait_agent yield', () => {
     expect(midTurnDrainPriority(['spawn_agent'])).toBe('user');
     expect(midTurnDrainPriority(['spawn_agent', 'wait_agent'])).toBe('background');

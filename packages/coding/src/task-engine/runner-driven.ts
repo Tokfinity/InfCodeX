@@ -1749,6 +1749,8 @@ async function runManagedTaskViaRunnerInner(
       'session-scratch-directory',
       'repo-intelligence-context',
       'execution-guidance',
+      // Injected through selectedSkillText below with the same formatter.
+      'active-skill-invocation',
     ]);
     const filtered = capabilitySections.filter(
       (section) => !AMA_OWNED_SECTION_IDS.has(section.id),

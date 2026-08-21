@@ -114,6 +114,7 @@ import {
   collectGuardrails,
   createAgent,
   ContextCapacityError,
+  createRuntimeDeliveryPredicate,
   emitKodaXDiagnostic,
   getSessionMessageEntryId,
   getMessageQueue,
@@ -784,6 +785,10 @@ export async function runSubstrate(
       agentId: messageQueueAgentId,
       maxPriority: 'user' as const,
       mode: 'prompt' as const,
+      predicate: createRuntimeDeliveryPredicate(
+        queue.getSnapshot(),
+        messageQueueAgentId,
+      ),
     };
     const prompts = queue.peek(promptFilter);
     if (prompts.length === 0) return false;

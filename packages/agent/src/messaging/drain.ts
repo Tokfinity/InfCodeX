@@ -49,6 +49,43 @@ export function midTurnDrainPriority(
 }
 
 /**
+ * Build the predicate used by Runtime-owned queue drains.
+ *
+ * A host-owned prompt is a head-of-line barrier for later user prompts in the
+ * same Agent scope: the host must first expand and execute that explicit
+ * command. Non-prompt Runtime traffic (for example an Agent completion) may
+ * still pass the barrier so a waiting run cannot deadlock behind host work.
+ */
+export function createRuntimeDeliveryPredicate(
+  snapshot: readonly QueuedMessage[],
+  agentId?: string,
+): (message: QueuedMessage) => boolean {
+  const deliverablePromptIds = new Set<string>();
+  let reachedHostPrompt = false;
+
+  for (const message of snapshot) {
+    if (
+      message.agentId !== agentId
+      || message.priority !== 'user'
+      || message.mode !== 'prompt'
+    ) {
+      continue;
+    }
+    if (message.delivery === 'host') {
+      reachedHostPrompt = true;
+    } else if (!reachedHostPrompt) {
+      deliverablePromptIds.add(message.id);
+    }
+  }
+
+  return (message) => {
+    if (message.delivery === 'host') return false;
+    if (message.priority !== 'user' || message.mode !== 'prompt') return true;
+    return deliverablePromptIds.has(message.id);
+  };
+}
+
+/**
  * Drain queued messages destined for `agentId` (main-thread by default)
  * up to the priority ceiling decided by yield gating. Returns the drained
  * messages in `dequeue` order (priority-first FIFO).
@@ -57,10 +94,12 @@ export function maybeDrainMidTurn(
   input: MaybeDrainMidTurnInput,
 ): QueuedMessage[] {
   const maxPriority = midTurnDrainPriority(input.lastTurnToolNames);
-  return getMessageQueue().dequeue({
+  const queue = getMessageQueue();
+  return queue.dequeue({
     agentId: input.agentId,
     maxPriority,
     limit: input.limit,
+    predicate: createRuntimeDeliveryPredicate(queue.getSnapshot(), input.agentId),
   });
 }
 

@@ -173,6 +173,84 @@ describe('runKodaX Runtime terminal interrupt continuation', { timeout: 30_000 }
     })).toBe(false);
   });
 
+  it('does not consume a Runtime prompt queued behind a host-owned Skill invocation', async () => {
+    const sessionId = 'host-owned-terminal-interrupt';
+    const queueAgentId = actorQueueId(sessionId, '/root');
+    const delivered: string[][] = [];
+    let turn = 0;
+
+    class HostOwnedInterruptProvider extends KodaXBaseProvider {
+      readonly name = PROVIDER_NAME;
+      readonly supportsThinking = false;
+      protected readonly config: KodaXProviderConfig = {
+        apiKeyEnv: API_KEY_ENV,
+        model: 'baseline-model',
+        supportsThinking: false,
+      };
+
+      async stream(): Promise<KodaXStreamResult> {
+        turn += 1;
+        getMessageQueue().enqueue({
+          agentId: queueAgentId,
+          priority: 'user',
+          mode: 'prompt',
+          delivery: 'host',
+          content: '/hidden-skill args',
+        });
+        getMessageQueue().enqueue({
+          agentId: queueAgentId,
+          priority: 'user',
+          mode: 'prompt',
+          content: 'later Runtime prompt',
+        });
+        return {
+          textBlocks: [{ type: 'text', text: 'first answer' }],
+          toolBlocks: [],
+          thinkingBlocks: [],
+        };
+      }
+    }
+
+    registerModelProvider(PROVIDER_NAME, () => new HostOwnedInterruptProvider());
+    actorSession = new CodingActorSession({ sessionId });
+
+    const result = await runKodaX({
+      provider: PROVIDER_NAME,
+      model: 'baseline-model',
+      maxIter: 1,
+      lsp: false,
+      session: { id: sessionId },
+      context: {
+        actorSession,
+        gitRoot: process.cwd(),
+        executionCwd: process.cwd(),
+        repoIntelligenceMode: 'off',
+        interruptInput: {
+          closeInputWindow() {},
+          reopenInputWindow() {},
+        },
+      },
+      events: {
+        onMidTurnUserMessages(contents) {
+          delivered.push([...contents]);
+        },
+      },
+    }, 'first prompt');
+
+    expect(result.success).toBe(true);
+    expect(result.lastText).toBe('first answer');
+    expect(turn).toBe(1);
+    expect(delivered).toEqual([]);
+    expect(getMessageQueue().peek({
+      agentId: queueAgentId,
+      maxPriority: 'user',
+      mode: 'prompt',
+    }).map((message) => message.content)).toEqual([
+      '/hidden-skill args',
+      'later Runtime prompt',
+    ]);
+  });
+
   it('persists a Runtime-owned interrupt before exposing its exact entry reference', async () => {
     const sessionId = 'runtime-terminal-interrupt-entry-reference';
     const queueAgentId = actorQueueId(sessionId, '/root');

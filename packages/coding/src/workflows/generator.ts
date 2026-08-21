@@ -32,7 +32,12 @@ import type { KodaXMessage } from '@kodax-ai/llm';
 
 import { renderWorkflowPatternGuidance } from '../orchestration/pattern-catalog.js';
 import type { WorkflowScriptSnapshotInput } from './run-graph.js';
-import { uniqueBareInlineSlashNames, uniqueInlineSkillNames } from '../skill-references.js';
+import {
+  parseBareInlineSlashReferences,
+  parseInlineSkillReferences,
+  uniqueBareInlineSlashNames,
+  uniqueInlineSkillNames,
+} from '../skill-references.js';
 import type { KodaXOptions } from '../types.js';
 import {
   parseTimeoutSecEnvMs,
@@ -1028,6 +1033,16 @@ export async function buildWorkflowGenerationSkillContext(
   if (skillNames.length === 0) return undefined;
 
   const blocks: string[] = [];
+  const references = [
+    ...parseInlineSkillReferences(request),
+    ...parseBareInlineSlashReferences(request),
+  ].sort((left, right) => left.start - right.start);
+  const firstReferenceByName = new Map<string, (typeof references)[number]>();
+  for (const reference of references) {
+    if (!firstReferenceByName.has(reference.name)) {
+      firstReferenceByName.set(reference.name, reference);
+    }
+  }
 
   for (const skillName of explicitSkillNames) {
     if (!registry.has(skillName)) {
@@ -1040,10 +1055,9 @@ export async function buildWorkflowGenerationSkillContext(
 
   for (const skillName of skillNames) {
     const skill = await registry.loadFull(skillName);
-    const expanded = await expandSkillForLLM(skill, '', skillContext);
-    if (expanded.disableModelInvocation) {
-      throw new Error(`workflow generation referenced disabled skill "${skillName}"`);
-    }
+    const reference = firstReferenceByName.get(skillName);
+    const argumentsText = reference ? request.slice(reference.end).trim() : '';
+    const expanded = await expandSkillForLLM(skill, argumentsText, skillContext);
     blocks.push(expanded.content);
   }
 

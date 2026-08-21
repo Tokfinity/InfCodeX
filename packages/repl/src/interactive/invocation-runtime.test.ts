@@ -1,10 +1,16 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { prepareInvocationExecution } from './invocation-runtime.js';
 
 describe('prepareInvocationExecution', () => {
-  it('returns manual mode when model invocation is disabled', async () => {
+  it('executes an explicit skill invocation when model invocation is disabled', async () => {
     const prepared = await prepareInvocationExecution(
-      { provider: 'zhipu-coding' },
+      {
+        provider: 'zhipu-coding',
+        events: { beforeToolExecute: async () => true },
+      },
       {
         prompt: 'Do the thing',
         source: 'skill',
@@ -15,13 +21,17 @@ describe('prepareInvocationExecution', () => {
       vi.fn()
     );
 
-    expect(prepared.mode).toBe('manual');
-    expect(prepared.manualOutput).toContain('model invocation disabled');
+    expect(prepared.mode).toBe('inline');
+    expect(prepared.prompt).toContain('Do the thing');
+    expect(prepared.prompt).toContain('/skill:manual-skill');
   });
 
   it('adds hook output to the prepared prompt', async () => {
     const prepared = await prepareInvocationExecution(
-      { provider: 'zhipu-coding' },
+      {
+        provider: 'zhipu-coding',
+        events: { beforeToolExecute: async () => true },
+      },
       {
         prompt: 'Base prompt',
         source: 'skill',
@@ -119,6 +129,109 @@ describe('prepareInvocationExecution', () => {
     expect(allowWrite).toBe(false);
   });
 
+  it('fails closed when a host lifecycle hook has no permission broker', async () => {
+    const prepared = await prepareInvocationExecution(
+      { provider: 'zhipu-coding' },
+      {
+        prompt: 'Base prompt',
+        source: 'skill',
+        displayName: 'hooked-skill',
+        hooks: {
+          UserPromptSubmit: [{ command: 'echo must-not-run' }],
+        },
+      },
+      '/skill:hooked-skill',
+      vi.fn(),
+    );
+
+    expect(prepared.mode).toBe('manual');
+    expect(prepared.manualOutput).toContain('stopped by a UserPromptSubmit hook');
+  });
+
+  it('treats a permission broker string result as a hook denial', async () => {
+    const emit = vi.fn();
+    const prepared = await prepareInvocationExecution(
+      {
+        provider: 'zhipu-coding',
+        events: { beforeToolExecute: async () => '[Denied] plan mode' },
+      },
+      {
+        prompt: 'Base prompt',
+        source: 'skill',
+        displayName: 'hooked-skill',
+        hooks: {
+          UserPromptSubmit: [{ command: 'echo must-not-run' }],
+        },
+      },
+      '/skill:hooked-skill',
+      emit,
+    );
+
+    expect(prepared.mode).toBe('manual');
+    expect(emit).toHaveBeenCalledWith(expect.stringContaining('[Denied] plan mode'));
+  });
+
+  it('runs host lifecycle hooks from the invocation execution directory', async () => {
+    const executionCwd = await mkdtemp(path.join(os.tmpdir(), 'kodax-host-hook-cwd-'));
+    try {
+      const prepared = await prepareInvocationExecution(
+        {
+          provider: 'zhipu-coding',
+          context: { executionCwd },
+          events: { beforeToolExecute: async () => true },
+        },
+        {
+          prompt: 'Base prompt',
+          source: 'skill',
+          displayName: 'hooked-skill',
+          hooks: {
+            UserPromptSubmit: [{
+              command: `"${process.execPath}" -e "process.stdout.write(process.cwd())"`,
+            }],
+          },
+        },
+        '/skill:hooked-skill',
+        vi.fn(),
+      );
+
+      expect(prepared.prompt).toContain(executionCwd);
+    } finally {
+      await rm(executionCwd, { recursive: true, force: true });
+    }
+  });
+
+  it('serializes Skill tool policy for daemon and worker reconstruction', async () => {
+    const onToolResult = vi.fn();
+    const prepared = await prepareInvocationExecution(
+      { provider: 'zhipu-coding', events: { onToolResult } },
+      {
+        prompt: 'Use only read tools',
+        source: 'skill',
+        displayName: 'transport-skill',
+        path: 'C:/skills/transport-skill/SKILL.md',
+        allowedTools: 'Read',
+        hooks: {
+          PreToolUse: [{ matcher: 'read', command: 'echo pre' }],
+          PostToolUse: [{ matcher: 'read', command: 'echo post' }],
+        },
+        skillInvocation: {
+          name: 'transport-skill',
+          path: 'C:/skills/transport-skill/SKILL.md',
+          expandedContent: '<skill name="transport-skill">test</skill>',
+        },
+      },
+      '/transport-skill',
+      vi.fn(),
+    );
+
+    expect(prepared.options?.context?.skillInvocation?.runtimePolicy).toEqual({
+      enforceAtRuntime: true,
+    });
+    expect(JSON.stringify(prepared.options?.context?.skillInvocation?.runtimePolicy))
+      .not.toContain('echo');
+    expect(prepared.options?.events?.onToolResult).toBe(onToolResult);
+  });
+
   it('fails closed when allowed-tools contains only invalid entries', async () => {
     const emit = vi.fn();
     const prepared = await prepareInvocationExecution(
@@ -148,7 +261,10 @@ describe('prepareInvocationExecution', () => {
   it('dispatches Notification hooks for runtime messages without recursion', async () => {
     const emit = vi.fn();
     await prepareInvocationExecution(
-      { provider: 'zhipu-coding' },
+      {
+        provider: 'zhipu-coding',
+        events: { beforeToolExecute: async () => true },
+      },
       {
         prompt: 'Use sonnet',
         source: 'skill',
@@ -256,7 +372,12 @@ describe('prepareInvocationExecution', () => {
     );
 
     expect(prepared.mode).toBe('inline');
-    expect(prepared.options?.context?.rawUserInput).toBe('/skill:review-skill --focus coding');
+    expect(prepared.prompt).not.toContain('Expanded skill body');
+    expect(prepared.prompt).not.toContain('/skill:review-skill');
+    expect(prepared.prompt).toContain('the active Skill "review-skill" --focus coding');
+    expect(prepared.options?.context?.rawUserInput).toBe(
+      'the active Skill "review-skill" --focus coding',
+    );
     expect(prepared.options?.context?.skillInvocation).toEqual(
       expect.objectContaining({
         name: 'review-skill',

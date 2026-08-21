@@ -38,7 +38,10 @@ import { resolveModelHintTier } from './model-hint-routing.js';
 import { invokeChildWithFallback } from './child-fallback.js';
 import { createWorkflowWorktree, removeWorkflowWorktree } from './tools/worktree.js';
 import { loadAgentsFiles, formatAgentsForPrompt } from './context/agents-loader.js';
-import { uniqueBareInlineSlashNames, uniqueInlineSkillNames } from './skill-references.js';
+import {
+  parseBareInlineSlashReferences,
+  parseInlineSkillReferences,
+} from './skill-references.js';
 import {
   buildStructuredOutputInstruction,
   buildStructuredOutputRepairPrompt,
@@ -55,6 +58,7 @@ import {
   getSkillRegistry,
   initializeSkillRegistry,
   runFanOut,
+  type ISkillRegistry,
 } from '@kodax-ai/agent';
 import { normalizeReasoningEffortValue } from '@kodax-ai/llm';
 // FEATURE_191 — specialist agent override resolution. `resolveConstructedAgent`
@@ -772,48 +776,57 @@ function buildActiveSkillResourceBriefing(
   return lines.join('\n');
 }
 
-async function resolveKnownBareSlashSkillNames(
-  objective: string,
-  explicitNames: readonly string[],
+async function resolveReferencedSkillRegistry(
+  ctx: KodaXToolExecutionContext,
   projectRoot: string,
-): Promise<readonly string[]> {
-  const candidates = uniqueBareInlineSlashNames(objective)
-    .filter((name) =>
-      !explicitNames.includes(name) &&
-      !objective.includes(`<skill name="${name}"`)
-    );
-  if (candidates.length === 0) return [];
-
-  try {
-    const registry = getSkillRegistry(projectRoot);
-    if (registry.size === 0) {
-      await initializeSkillRegistry(projectRoot);
-    }
-    return candidates.filter((name) => registry.has(name));
-  } catch {
-    return [];
+): Promise<ISkillRegistry> {
+  if (ctx.skillRegistry) return ctx.skillRegistry;
+  let registry = getSkillRegistry(projectRoot);
+  if (registry.size === 0) {
+    registry = await initializeSkillRegistry(projectRoot);
   }
+  return registry;
 }
 
 async function buildReferencedSkillBriefing(
   objective: string,
-  projectRoot: string,
+  ctx: KodaXToolExecutionContext,
 ): Promise<string | undefined> {
-  const explicitNames = uniqueInlineSkillNames(objective)
-    .filter((name) => !objective.includes(`<skill name="${name}"`));
-  const bareNames = await resolveKnownBareSlashSkillNames(
-    objective,
-    explicitNames,
-    projectRoot,
+  const references = [
+    ...parseInlineSkillReferences(objective),
+    ...parseBareInlineSlashReferences(objective),
+  ].sort((left, right) => left.start - right.start);
+  if (references.length === 0) return undefined;
+
+  const childCwd = resolveExecutionCwd(ctx);
+  const projectRoot = ctx.gitRoot ?? childCwd;
+  const registry = await resolveReferencedSkillRegistry(ctx, projectRoot);
+  const activeSkill = ctx.skillInvocation;
+  const activeReferenced = activeSkill !== undefined && references.some(
+    (reference) => reference.name === activeSkill.name,
   );
-  const names = Array.from(new Set([...explicitNames, ...bareNames]));
-  if (names.length === 0) return undefined;
+  const modelReferences = new Set<string>();
+  for (const reference of references) {
+    if (reference.name === activeSkill?.name) continue;
+    if (reference.raw.startsWith('/skill:') || registry.has(reference.name)) {
+      modelReferences.add(reference.name);
+    }
+  }
+  if (!activeReferenced && modelReferences.size === 0) return undefined;
 
   return [
-    '## Referenced Skills',
-    `The objective mentions skill reference(s): ${names.map((name) => `/skill:${name}`).join(', ')}.`,
-    'Before acting on those instructions, invoke the `skill` tool for each referenced skill that is not already expanded in this briefing, then follow the returned skill instructions. Do not infer skill-specific rules from the slash token alone.',
-  ].join('\n');
+    activeReferenced ? '## Explicit User Skill Invocation' : undefined,
+    activeReferenced
+      ? `The host provided the active user-invoked Skill "${activeSkill?.name}" through structured Skill context. Follow that context directly and do not call the \`skill\` tool for it again.`
+      : undefined,
+    modelReferences.size > 0 ? '## Referenced Skills' : undefined,
+    modelReferences.size > 0
+      ? `The child objective mentions Skill reference(s): ${[...modelReferences].map((name) => `/skill:${name}`).join(', ')}.`
+      : undefined,
+    modelReferences.size > 0
+      ? 'These references came through a model-authored child objective, not a direct user invocation. Invoke the `skill` tool before following them so model-invocation policy remains enforced.'
+      : undefined,
+  ].filter((line): line is string => Boolean(line)).join('\n\n');
 }
 
 function shouldRunWorkflowDigestAsync(
@@ -1838,7 +1851,7 @@ async function buildChildBriefing(
   const activeSkillResourceBriefing = buildActiveSkillResourceBriefing(ctx.skillInvocation);
   const referencedSkillBriefing = await buildReferencedSkillBriefing(
     bundle.objective,
-    childGitRoot ?? childCwd,
+    ctx,
   );
 
   const parts: string[] = [

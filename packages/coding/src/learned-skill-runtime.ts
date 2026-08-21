@@ -303,7 +303,7 @@ class CompositeSkillRegistry implements ISkillRegistry {
   }
 
   listUserInvocable(): SkillMetadata[] {
-    return this.list().filter((skill) => skill.userInvocable);
+    return this.list();
   }
 
   loadFull(name: string): Promise<Skill> {

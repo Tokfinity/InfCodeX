@@ -215,9 +215,15 @@ import {
 import {
   parseCommand,
   executeCommand,
+  isRegisteredUserCommand,
   CommandCallbacks,
   CurrentConfig,
 } from "../interactive/commands.js";
+import {
+  findQueueableUserSkillReference,
+  preserveQueuedSkillContextSnapshot,
+  resolveUserSkillInvocation,
+} from "../interactive/user-skill-invocation.js";
 import {
   enforceSessionTransitionGuard,
 } from "../interactive/session-guardrails.js";
@@ -1781,6 +1787,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     setMaxIter,
     addPendingInput,
     removeLastPendingInput,
+    peekPendingInputDelivery,
     shiftPendingInput,
     consumePendingInputs,
   } = useStreamingActions();
@@ -6558,8 +6565,16 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   // Preload skills on mount to ensure they're available for first /skill:xxx call
   // Issue 059: Skills lazy loading caused first skill invocation to fail
   // Issue 064: Must pass projectRoot to discover .kodax/skills/ in project directory
+  const skillRegistryReadyRef = useRef(false);
   useEffect(() => {
-    void initializeSkillRegistry(context.gitRoot);
+    let active = true;
+    skillRegistryReadyRef.current = false;
+    void initializeSkillRegistry(context.gitRoot).finally(() => {
+      if (active) skillRegistryReadyRef.current = true;
+    });
+    return () => {
+      active = false;
+    };
   }, [context.gitRoot]);
 
   // v0.7.41 L2 — prewarm repo-intelligence session caches at REPL mount.
@@ -8554,6 +8569,94 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     touchContext(context);
   }, [addHistoryItem, context]);
 
+  const runQueuedUserSkillRound = useCallback(async (
+    rawInput: string,
+  ): Promise<KodaXResult | undefined> => {
+    const mainContextTokenSnapshot = context.contextTokenSnapshot;
+    const invocation = await resolveUserSkillInvocation(rawInput, {
+      workingDirectory: currentOptionsRef.current.context?.executionCwd ?? process.cwd(),
+      projectRoot: context.gitRoot ?? undefined,
+      sessionId: context.sessionId,
+      environment: {},
+      executeDynamicContext: context.skillDynamicContext?.execute,
+      disableDynamicContext: context.skillDynamicContext?.disable,
+    });
+    if (!invocation) {
+      const parsed = isSlashCommandText(rawInput) ? parseCommand(rawInput.trim()) : null;
+      if (!parsed) return undefined;
+      const unknownName = parsed.skillInvocation?.name ?? parsed.command;
+      const message = `[Unknown command: /${unknownName}. Type /help for available commands]`;
+      return preserveQueuedSkillContextSnapshot({
+        success: true,
+        lastText: message,
+        messages: [
+          ...context.messages,
+          { role: "user", content: rawInput },
+          { role: "assistant", content: message },
+        ],
+        sessionId: context.sessionId,
+      }, mainContextTokenSnapshot);
+    }
+
+    const prepared = await prepareInvocationExecution(
+      {
+        ...currentOptionsRef.current,
+        provider: currentConfig.provider,
+        thinking: currentConfig.thinking,
+        reasoningMode: currentConfig.reasoningMode,
+      },
+      invocation,
+      rawInput,
+      (message) => addHistoryItem({ type: "info", text: message }),
+    );
+    if (prepared.mode === "manual" || !prepared.prompt || !prepared.options) {
+      if (prepared.manualOutput) {
+        addHistoryItem({ type: "info", text: prepared.manualOutput });
+      }
+      await prepared.finalize();
+      return preserveQueuedSkillContextSnapshot({
+        success: false,
+        lastText: '',
+        signal: 'BLOCKED',
+        signalReason: prepared.manualOutput ?? 'Queued Skill invocation was blocked.',
+        messages: [...context.messages],
+        sessionId: context.sessionId,
+      }, mainContextTokenSnapshot);
+    }
+
+    try {
+      const initialMessages = prepared.mode === "fork"
+        ? []
+        : context.lineage
+          ? getSessionMessagesFromLineage(context.lineage, context.lineage.activeEntryId)
+          : context.messages;
+      const result = await runAgentRound(prepared.options, prepared.prompt, initialMessages);
+      await prepared.finalize();
+      if (prepared.mode !== "fork") return result;
+
+      const forkUser = result.messages.find((message) => message.role === "user");
+      const forkAssistant = result.messages.slice().reverse().find((message) => message.role === "assistant");
+      return preserveQueuedSkillContextSnapshot({
+        ...result,
+        messages: [
+          ...context.messages,
+          ...(forkUser ? [forkUser] : []),
+          ...(forkAssistant ? [forkAssistant] : []),
+        ],
+      }, mainContextTokenSnapshot);
+    } catch (error) {
+      await prepared.finalize(error instanceof Error ? error : new Error(String(error)));
+      throw error;
+    }
+  }, [
+    addHistoryItem,
+    context,
+    currentConfig.provider,
+    currentConfig.reasoningMode,
+    currentConfig.thinking,
+    runAgentRound,
+  ]);
+
   const runQueueableAgentSequence = useCallback(async (
     initialPrompt: string,
     runRound: (prompt: string) => Promise<KodaXResult>,
@@ -8571,6 +8674,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         initialPrompt,
         runRound,
         shiftPendingPrompt: shiftPendingInput,
+        peekPendingPromptDelivery: peekPendingInputDelivery,
         onRoundComplete: async (result) => {
           // Issue 116: discard results if a newer prompt has superseded this sequence
           if (promptGenerationRef.current !== sequenceGeneration) return;
@@ -8596,7 +8700,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     } finally {
       setCanQueueFollowUps(false);
     }
-  }, [recordCompletedAgentRound, shiftPendingInput, stageQueuedPrompt]);
+  }, [peekPendingInputDelivery, recordCompletedAgentRound, shiftPendingInput, stageQueuedPrompt]);
 
   const recoverCurrentSession = useCallback(async (prompt?: string): Promise<SessionRecoverStatus> => {
     if (context.messages.length === 0) {
@@ -8702,6 +8806,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       await runQueueableAgentSequence(
         continuation,
         async (nextPrompt) => {
+          const skillResult = await runQueuedUserSkillRound(nextPrompt);
+          if (skillResult) return skillResult;
           const preparedArtifacts = preparePromptInputArtifacts(
             nextPrompt,
             currentOptionsRef.current.context?.executionCwd ?? process.cwd(),
@@ -8735,6 +8841,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     currentConfig,
     reconcileContextLineage,
     runQueueableAgentSequence,
+    runQueuedUserSkillRound,
     stageQueuedPrompt,
     storage,
     teamModeHandle,
@@ -8753,9 +8860,18 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     await stageQueuedPrompt(normalized);
     await runQueueableAgentSequence(
       normalized,
-      async (prompt) => runAgentRound(currentOptionsRef.current, prompt),
+      async (prompt) => (
+        await runQueuedUserSkillRound(prompt)
+        ?? runAgentRound(currentOptionsRef.current, prompt)
+      ),
     );
-  }, [runAgentRound, runQueueableAgentSequence, shiftPendingInput, stageQueuedPrompt]);
+  }, [
+    runAgentRound,
+    runQueueableAgentSequence,
+    runQueuedUserSkillRound,
+    shiftPendingInput,
+    stageQueuedPrompt,
+  ]);
 
   const appendLastAssistantToHistory = useCallback((messages: KodaXMessage[]) => {
     const lastAssistant = messages[messages.length - 1];
@@ -8976,21 +9092,28 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           return;
         }
 
-        // FEATURE_149 (v0.7.38) \u2014 CC parity audit P0-1: reject slash
-        // commands at enqueue time. KodaX's queue stores plain strings
-        // and the drain path (`runQueuedPromptSequence`) feeds them
-        // verbatim to the agent as user prompts \u2014 without re-dispatching
-        // through `parseCommand`. So a `/cost` typed during loading
-        // would silently arrive at the LLM as the literal text "/cost"
-        // (broken). CC handles this by special-casing slash commands at
-        // dequeue (`queueProcessor.ts:70` \u2014 slash items are processed
-        // one-at-a-time via the command pipeline). For v0.7.38 we use
-        // the simpler conservative approach: refuse to queue slash
-        // commands and tell the user to abort first if they want to
-        // run one mid-task. Future versions can layer in CC's
-        // immediate-local-jsx execution path for side-effect-free
-        // commands like `/help` / `/cost`.
-        if (isSlashCommandText(fullText)) {
+        const slashAtHead = isSlashCommandText(fullText);
+        const queuedSlash = slashAtHead ? parseCommand(fullText.trim()) : null;
+        const targetsRegisteredCommand = queuedSlash !== null
+          && queuedSlash.skillInvocation === undefined
+          && isRegisteredUserCommand(queuedSlash.command, context.gitRoot ?? undefined);
+        // Queue admission is synchronous against the preloaded registry.
+        // Dynamic expansion still happens only after the active round yields,
+        // avoiding both an async enqueue race and unknown-slash interception.
+        const queuedSkillRegistry = getSkillRegistry(context.gitRoot);
+        const queuedSkillReference = targetsRegisteredCommand
+          ? undefined
+          : findQueueableUserSkillReference(
+              fullText,
+              (name) => queuedSkillRegistry.has(name),
+              skillRegistryReadyRef.current,
+            );
+
+        // Builtin/extension slash commands still require the immediate command
+        // pipeline. Known Skills are different: keep their raw user text in a
+        // host-owned queue entry so the trusted Skill resolver can expand it
+        // after the active round yields.
+        if (slashAtHead && !queuedSkillReference) {
           emitInfoItemToCorrectLayer({
             type: "info",
             icon: "\u26A0",
@@ -8998,6 +9121,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           }, SLASH_MID_TASK_GUARD_DEDUPE_KEY);
           return;
         }
+        const pendingInputOptions = queuedSkillReference
+          ? { delivery: "host" as const }
+          : undefined;
 
         dismissLearningRecovery();
 
@@ -9021,7 +9147,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         if (activeToolName) {
           const def = getRegisteredToolDefinition(activeToolName);
           if (def?.interruptBehavior === 'cancel') {
-            addPendingInput(fullText);
+            addPendingInput(fullText, pendingInputOptions);
             abort({ preservePendingInputs: true });
             setInputText("");
             setIsInputEmpty(true);
@@ -9032,7 +9158,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         }
 
         // Queue the EXPANDED text — downstream drain path feeds the agent.
-        addPendingInput(fullText);
+        addPendingInput(fullText, pendingInputOptions);
         setInputText("");
         setIsInputEmpty(true);
         setSubmitCounter(prev => prev + 1);
@@ -9266,10 +9392,20 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       };
 
       const parsed = parseCommand(fullText.trim());
-      if (parsed) {
+      const inlineSkillInvocation = parsed || fullText.trim().startsWith('!')
+        ? undefined
+        : await resolveUserSkillInvocation(fullText.trim(), {
+            workingDirectory: currentOptionsRef.current.context?.executionCwd ?? process.cwd(),
+            projectRoot: context.gitRoot ?? undefined,
+            sessionId: context.sessionId,
+            environment: {},
+            executeDynamicContext: context.skillDynamicContext?.execute,
+            disableDynamicContext: context.skillDynamicContext?.disable,
+          });
+      if (parsed || inlineSkillInvocation) {
         let slashWorkflowUserCommitted = false;
         const commitSlashWorkflowFinalMessage = (text: string): void => {
-          if (parsed.command !== "workflow") {
+          if (parsed?.command !== "workflow") {
             return;
           }
           if (!slashWorkflowUserCommitted) {
@@ -9824,11 +9960,13 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           capturedOutput.push(formatCapturedConsoleOutput(args));
         };
 
-        let invocationToExecute: CommandInvocationRequest | undefined = undefined;
+        let invocationToExecute: CommandInvocationRequest | undefined = inlineSkillInvocation;
         let workflowToExecute: CommandWorkflowInvocationRequest | undefined = undefined;
 
         try {
-          const result = await executeCommand(parsed, context, callbacks, currentConfig);
+          const result = parsed
+            ? await executeCommand(parsed, context, callbacks, currentConfig)
+            : undefined;
 
           // Check if result contains invocation metadata to execute
           if (typeof result === 'object' && result !== null && 'invocation' in result) {
@@ -9968,6 +10106,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         await runQueueableAgentSequence(
           processed,
           async (prompt) => {
+            const skillResult = await runQueuedUserSkillRound(prompt);
+            if (skillResult) return skillResult;
             const preparedArtifacts = preparePromptInputArtifacts(
               prompt,
               currentOptionsRef.current.context?.executionCwd ?? process.cwd(),
@@ -10194,6 +10334,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       persistHistoryAdditionsInBackground,
       reconcileContextLineage,
       runQueueableAgentSequence,
+      runQueuedUserSkillRound,
       drainPendingInputsAsFollowUps,
       startCompacting,
       stopCompacting,

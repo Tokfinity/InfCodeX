@@ -21,8 +21,13 @@
  * and are still used at runtime by the Runner path.
  */
 import { mapLegacyReasoningModeToEffortIntent, runWithScopedConfig } from '@kodax-ai/llm';
+import { SkillRegistry, formatSkillsSystemPrompt } from '@kodax-ai/agent';
 import { runKodaX } from './agent.js';
 import { deriveRunScopedConfig } from './run-scoped-config.js';
+import {
+  applyRuntimeSkillInvocationPolicy,
+  awaitRuntimeSkillInvocationPolicy,
+} from './skill-invocation-policy.js';
 import { listToolDefinitions } from './tools/index.js';
 import { hasExplicitNaturalLanguageWorkflowIntent } from './workflows/invocation-policy.js';
 import { emitEffectiveTaskConfig } from './agent-runtime/effective-config.js';
@@ -110,10 +115,35 @@ export const __checkpointTestables = {
   CHECKPOINT_FILE,
 };
 
+/** Bind the default model-visible Skill catalog for every managed entry point. */
+export async function ensureManagedSkillCatalog(
+  options: KodaXOptions,
+): Promise<KodaXOptions> {
+  if (options.context?.skillsPrompt !== undefined) return options;
+
+  const boundRegistry = options.context?.skillRegistry;
+  const projectRoot = options.context?.gitRoot
+    ?? options.context?.executionCwd
+    ?? process.cwd();
+  const registry = boundRegistry ?? new SkillRegistry(projectRoot);
+  if (!boundRegistry) await registry.discover();
+
+  return {
+    ...options,
+    context: {
+      ...options.context,
+      skillRegistry: registry,
+      skillsPrompt: formatSkillsSystemPrompt(registry.list()),
+    },
+  };
+}
+
 export async function runManagedTask(
   options: KodaXOptions,
   prompt: string,
 ): Promise<KodaXResult> {
+  const catalogOptions = await ensureManagedSkillCatalog(options);
+  const runtimeOptions = await applyRuntimeSkillInvocationPolicy(catalogOptions);
   // Run-scoped config via AsyncLocalStorage (concurrency-safe): each concurrent
   // SDK session carries its own tier / token / prompt-cache / lsp overrides in
   // its own async context, so they never clobber one another through the global
@@ -123,19 +153,23 @@ export async function runManagedTask(
   // the caller actually set enter the store, so the CLI path stays on env.
   // Shared derivation (deriveRunScopedConfig) is the single source of truth so
   // this and the `runKodaX` SA entry never diverge on which fields are scoped.
-  return runWithScopedConfig(
-    deriveRunScopedConfig(options),
-    async () => {
-      const result = await executeRunManagedTask(options, prompt);
-      const reshaped = reshapeToUserConversation(result, options, prompt);
-      // FEATURE_247 (R1): echo the SDK-consumer profile back so the embedder can
-      // confirm which profile actually ran (Partner vs default Coding Agent).
-      // Pure passthrough — omitted entirely for the default path.
-      return options.context?.agentProfile
-        ? { ...reshaped, agentProfile: options.context.agentProfile }
-        : reshaped;
-    },
-  );
+  try {
+    return await runWithScopedConfig(
+      deriveRunScopedConfig(runtimeOptions),
+      async () => {
+        const result = await executeRunManagedTask(runtimeOptions, prompt);
+        const reshaped = reshapeToUserConversation(result, runtimeOptions, prompt);
+        // FEATURE_247 (R1): echo the SDK-consumer profile back so the embedder can
+        // confirm which profile actually ran (Partner vs default Coding Agent).
+        // Pure passthrough — omitted entirely for the default path.
+        return runtimeOptions.context?.agentProfile
+          ? { ...reshaped, agentProfile: runtimeOptions.context.agentProfile }
+          : reshaped;
+      },
+    );
+  } finally {
+    await awaitRuntimeSkillInvocationPolicy(runtimeOptions);
+  }
 }
 
 /**

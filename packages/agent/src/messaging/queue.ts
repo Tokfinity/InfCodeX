@@ -126,6 +126,7 @@ export class MessageQueue {
       id,
       priority: input.priority,
       mode: input.mode,
+      delivery: input.delivery,
       content: input.content,
       agentId: input.agentId,
       inputArtifacts: input.inputArtifacts,

@@ -71,6 +71,14 @@ export {
   type CommandCallbacks,
   type CurrentConfig,
 } from "./interactive/commands.js";
+export {
+  createUserSkillInvocation,
+  resolveUserSkillInvocation,
+} from "./interactive/user-skill-invocation.js";
+export {
+  prepareInvocationExecution,
+  type PreparedInvocation,
+} from "./interactive/invocation-runtime.js";
 export type {
   RuntimeSurfaceMode,
   RuntimeSurfaceStatus,

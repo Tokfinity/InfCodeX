@@ -22,6 +22,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createStreamingManager } from "./StreamingContext.js";
+import { runQueuedPromptSequence } from "../utils/queued-prompt-sequence.js";
 
 function mainThreadUserContents(): string[] {
   return getMessageQueue()
@@ -47,6 +48,44 @@ describe("StreamingContext queue-as-source-of-truth (FEATURE_159)", () => {
     const mgr = createStreamingManager();
     mgr.addPendingInput("first follow-up");
     expect(mainThreadUserContents()).toEqual(["first follow-up"]);
+  });
+
+  it("marks explicit Skill follow-ups for host-only delivery", () => {
+    const mgr = createStreamingManager();
+    mgr.addPendingInput("please use /hidden-skill args", { delivery: "host" });
+
+    expect(getMessageQueue().peek({ maxPriority: "user" })).toEqual([
+      expect.objectContaining({
+        content: "please use /hidden-skill args",
+        delivery: "host",
+      }),
+    ]);
+    expect(mgr.peekPendingInputDelivery()).toBe("host");
+    expect(mgr.shiftPendingInput()).toBe("please use /hidden-skill args");
+    expect(mgr.peekPendingInputDelivery()).toBeUndefined();
+  });
+
+  it("preserves host-owned Skill boundaries when draining the real queue", async () => {
+    const mgr = createStreamingManager();
+    mgr.addPendingInput("/skill-a args", { delivery: "host" });
+    mgr.addPendingInput("ordinary follow-up");
+    const rounds: string[] = [];
+
+    await runQueuedPromptSequence({
+      initialPrompt: "active round",
+      runRound: async (prompt) => {
+        rounds.push(prompt);
+        return prompt;
+      },
+      shiftPendingPrompt: mgr.shiftPendingInput,
+      peekPendingPromptDelivery: mgr.peekPendingInputDelivery,
+    });
+
+    expect(rounds).toEqual([
+      "active round",
+      "/skill-a args",
+      "ordinary follow-up",
+    ]);
   });
 
   it("routes pending input to the current session root without exposing another session", () => {

@@ -1066,6 +1066,10 @@ export interface KodaXAgentProfile {
 
 export type KodaXSkillProjectionConfidence = 'high' | 'medium' | 'low';
 
+export interface KodaXSkillInvocationRuntimePolicy {
+  readonly enforceAtRuntime?: boolean;
+}
+
 export interface KodaXSkillInvocationContext {
   name: string;
   path: string;
@@ -1077,6 +1081,8 @@ export interface KodaXSkillInvocationContext {
   argumentHint?: string;
   model?: string;
   hookEvents?: string[];
+  /** Marker requesting trusted policy rehydration inside daemon/worker transports. */
+  runtimePolicy?: KodaXSkillInvocationRuntimePolicy;
   expandedContent: string;
 }
 

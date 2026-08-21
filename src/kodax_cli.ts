@@ -187,6 +187,8 @@ import {
   KODAX_DIR,
   ensureExampleConfigFiles,
   resolveInteractiveSurfacePreference,
+  resolveUserSkillInvocation,
+  prepareInvocationExecution,
   runInteractiveMode,
   runInkInteractiveMode,
   runSessionPicker,
@@ -201,6 +203,7 @@ import {
   type ReplRuntimeAutoModeSettings,
   type ReplRuntimePermissionGrantSuggestion,
   type ReplRuntimePermissionPrompt,
+  type PreparedInvocation,
   type SessionPickerItem,
   type SessionDedupeReport,
 } from '@kodax-ai/repl';
@@ -678,11 +681,25 @@ export function createInteractiveRuntimeRunner(
       runtime.identity.mode === 'daemon' ||
       runtime.identity.isolation === 'worker';
     const workerHosted = runtime.identity.isolation === 'worker';
-    const runtimeOptions = toRuntimeOwnedInteractiveOptions(input.options, {
+    const invocationPolicy = input.options.context?.skillInvocation?.runtimePolicy;
+    const policyOptions: KodaXOptions = transportIsolated && invocationPolicy
+      ? {
+          ...input.options,
+          context: {
+            ...input.options.context,
+            skillInvocation: {
+              ...input.options.context?.skillInvocation,
+              runtimePolicy: { ...invocationPolicy, enforceAtRuntime: true },
+            },
+          },
+        }
+      : input.options;
+    const runtimeOptions = toRuntimeOwnedInteractiveOptions(policyOptions, {
       // Only Worker isolation strips callbacks the outer CLI has already
       // rejected. Daemon mode keeps host bindings for loud validation below.
       omitLegacyBeforeToolExecute:
-        input.legacyPermissionHook === true || workerHosted,
+        input.legacyPermissionHook === true || workerHosted ||
+        (transportIsolated && invocationPolicy !== undefined),
       omitExtensionRuntime: workerHosted,
     });
     const startOptions = transportIsolated
@@ -835,6 +852,23 @@ async function runCliTaskWithRuntime(
   }
 }
 
+export async function prepareCliSkillInvocation(
+  userPrompt: string,
+  options: KodaXOptions,
+  emit: (message: string) => void = () => {},
+): Promise<PreparedInvocation | undefined> {
+  const invocation = await resolveUserSkillInvocation(userPrompt, {
+    workingDirectory: options.context?.executionCwd ?? process.cwd(),
+    projectRoot: options.context?.gitRoot ?? (await getGitRoot()) ?? process.cwd(),
+    environment: {},
+    executeDynamicContext: options.skillDynamicContext?.execute,
+    disableDynamicContext: options.skillDynamicContext?.disable,
+  });
+  return invocation
+    ? prepareInvocationExecution(options, invocation, userPrompt, emit)
+    : undefined;
+}
+
 async function resolveCliTaskSessionId(options: KodaXOptions): Promise<string> {
   if (options.session?.id) return options.session.id;
   if (
@@ -897,6 +931,7 @@ export function toDaemonRuntimeRunOptions(
     planModeBlockCheck: _planModeBlockCheck,
     goalRuntime: _goalRuntime,
     lspService: _lspService,
+    skillRegistry: _skillRegistry,
     ...wireContext
   } = context ?? {};
   const candidate: RuntimeKodaXOptions = {
@@ -5624,18 +5659,38 @@ complete -c kodax -l version -d 'Show version'`);
 
     // Run a single managed task through the selected Runtime and exit.
     const kodaXOptions = createKodaXOptions(options, options.print ?? false);
-    const result = await runCliTaskWithRuntime(
-      await getCliRuntime(),
-      {
-        ...kodaXOptions,
-        context: {
-          ...kodaXOptions.context,
-          taskSurface: 'cli',
-        },
+    const cliOptions: KodaXOptions = {
+      ...kodaXOptions,
+      context: {
+        ...kodaXOptions.context,
+        taskSurface: 'cli',
       },
+    };
+    const prepared = await prepareCliSkillInvocation(
       userPrompt,
+      cliOptions,
+      (message) => console.error(chalk.dim(message)),
     );
-    emitJsonRunResultIfNeeded(options.outputMode, result);
+    if (prepared?.mode === 'manual' || (prepared && (!prepared.prompt || !prepared.options))) {
+      if (prepared.manualOutput) console.error(prepared.manualOutput);
+      await prepared.finalize();
+      return;
+    }
+
+    try {
+      const result = await runCliTaskWithRuntime(
+        await getCliRuntime(),
+        prepared?.mode === 'fork'
+          ? { ...prepared.options!, session: undefined }
+          : prepared?.options ?? cliOptions,
+        prepared?.prompt ?? userPrompt,
+      );
+      emitJsonRunResultIfNeeded(options.outputMode, result);
+      await prepared?.finalize();
+    } catch (error) {
+      await prepared?.finalize(error instanceof Error ? error : new Error(String(error)));
+      throw error;
+    }
   } finally {
     if (shouldHardExitAfterInteractiveCleanup) {
       const runtime = cliRuntime;

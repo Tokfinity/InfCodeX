@@ -20,6 +20,35 @@ import { discoverSkills } from './discovery.js';
 import { loadFullSkill } from './skill-loader.js';
 import { resolveSkillContent } from './skill-resolver.js';
 
+/** Format the model-visible Skill catalog from an arbitrary trusted registry. */
+export function formatSkillsSystemPrompt(
+  skills: readonly SkillMetadata[],
+): string {
+  const visibleSkills = skills.filter((skill) => !skill.disableModelInvocation);
+  if (visibleSkills.length === 0) return '';
+
+  const lines = [
+    '## Available Skills',
+    '',
+    'When users ask you to perform tasks, check if any of the available skills below match the request. Skills provide specialized capabilities and step-by-step instructions for specific workflows.',
+    '',
+    'If the current task context already contains an "Active skill invocation" or a host-expanded Skill block for the referenced name, that explicit user invocation is already complete. Follow the expanded instructions and do NOT call the `skill` tool for that Skill again.',
+    '',
+    'When users reference a "slash command" or "/<something>" (e.g. "/feature-list-tracker", "/skill:foo") and the host has not already expanded it, they are referring to a skill. Invoke it via the `skill` tool with the skill name.',
+    '',
+    "**BLOCKING REQUIREMENT**: When a model-visible Skill matches the user's request and the host has not already expanded it, you MUST invoke it via the `skill` tool BEFORE generating any other response about the task. Loading the Skill is not optional and not something to defer — it is the FIRST action you take.",
+    '',
+    'NEVER mention a model-discovered Skill without actually calling the `skill` tool. This rule does not apply to a host-expanded active user invocation, which must not be called again. Do not guess at Skill names — only use Skills listed below. Do NOT call `read` on a `SKILL.md` path to load a Skill — that is the legacy path and bypasses the resolver.',
+    '',
+  ];
+  for (const skill of visibleSkills) {
+    const hint = skill.argumentHint ? ` ${skill.argumentHint}` : '';
+    lines.push(`- ${skill.name}:${hint} ${skill.description}`);
+  }
+  lines.push('');
+  return lines.join('\n');
+}
+
 /**
  * Skill Registry implementation
  */
@@ -97,21 +126,13 @@ export class SkillRegistry implements ISkillRegistry {
   }
 
   /**
-   * Invoke a skill with arguments
+   * Explicitly invoke a skill with arguments. Model tool admission is enforced
+   * by the coding-layer `skill` tool before it reaches this SDK primitive.
    */
   async invoke(name: string, args: string, context: SkillContext): Promise<SkillResult> {
     try {
       // Load full skill
       const skill = await this.loadFull(name);
-
-      // Check if model invocation is disabled
-      if (skill.disableModelInvocation) {
-        return {
-          success: false,
-          content: '',
-          error: `Skill "${name}" has model invocation disabled`,
-        };
-      }
 
       // Resolve variables in content
       const resolvedContent = await resolveSkillContent(
@@ -156,7 +177,7 @@ export class SkillRegistry implements ISkillRegistry {
    * List user-invocable skills (for / menu)
    */
   listUserInvocable(): SkillMetadata[] {
-    return this.list().filter((s) => s.userInvocable);
+    return this.list();
   }
 
   /**
@@ -175,47 +196,7 @@ export class SkillRegistry implements ISkillRegistry {
    * Filters out skills with disableModelInvocation=true (Issue 056).
    */
   getSystemPromptSnippet(): string {
-    // Filter out skills that disable model invocation
-    const visibleSkills = this.list().filter(s => !s.disableModelInvocation);
-
-    if (visibleSkills.length === 0) {
-      return '';
-    }
-
-    // 2026-05-20 — claudecode-parity invocation path. Skills are invoked
-    // via a dedicated `skill` tool (see packages/coding/src/tools/skill.ts)
-    // that returns the expanded skill content as tool_result, NOT by
-    // reading `SKILL.md` via the generic `read` tool. Mirrors
-    // c:/Works/claudecode/src/tools/SkillTool/prompt.ts:173-195.
-    //
-    // Why this matters: the previous "use the read tool to load the
-    // SKILL.md" wording forced the model to interpret raw markdown, which
-    // routed through generic file-reading and let the model escalate to
-    // shell-out for skills like `agent-browser` (whose markdown happens
-    // to describe a CLI). With a dedicated `skill` tool, the registry
-    // does the loading + variable resolution; the model sees structured
-    // skill output and can act on it directly.
-    const lines = [
-      '## Available Skills',
-      '',
-      'When users ask you to perform tasks, check if any of the available skills below match the request. Skills provide specialized capabilities and step-by-step instructions for specific workflows.',
-      '',
-      'When users reference a "slash command" or "/<something>" (e.g. "/feature-list-tracker", "/skill:foo"), they are referring to a skill. Invoke it via the `skill` tool with the skill name.',
-      '',
-      "**BLOCKING REQUIREMENT**: When a skill matches the user's request, you MUST invoke it via the `skill` tool BEFORE generating any other response about the task. Loading the skill is not optional and not something to defer — it is the FIRST action you take.",
-      '',
-      'NEVER mention a skill without actually calling the `skill` tool. Do not guess at skill names — only use skills listed below. Do NOT call `read` on a `SKILL.md` path to load a skill — that is the legacy path and bypasses the resolver.',
-      '',
-    ];
-
-    for (const skill of visibleSkills) {
-      const hint = skill.argumentHint ? ` ${skill.argumentHint}` : '';
-      lines.push(`- ${skill.name}:${hint} ${skill.description}`);
-    }
-
-    lines.push('');
-
-    return lines.join('\n');
+    return formatSkillsSystemPrompt(this.list());
   }
 
   /**

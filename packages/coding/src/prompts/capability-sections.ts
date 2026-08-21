@@ -58,6 +58,7 @@ import { listConstructedAgents, type KodaXAgentScope } from '../construction/age
 import { resolveExecutionCwd } from '../runtime-paths.js';
 import { getSessionScratchDir } from '../session-scratch.js';
 import type { KodaXOptions } from '../types.js';
+import { formatFullSkillSection } from '../skill-invocation-format.js';
 
 import { buildMemoryRulesSection } from './memory-rules.js';
 import { createPromptSection, type KodaXPromptSection } from './sections.js';
@@ -316,6 +317,16 @@ export async function buildCapabilityContextSections(
         'skills-addendum',
         options.context.skillsPrompt,
         'Append skill-specific guidance after project rules as a bounded dynamic addendum.',
+      ),
+    );
+  }
+
+  if (options.context?.skillInvocation) {
+    sections.push(
+      createPromptSection(
+        'active-skill-invocation',
+        formatFullSkillSection(options.context.skillInvocation),
+        'Inject the full content of a trusted explicit user Skill exactly once.',
       ),
     );
   }

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { existsSync } from 'node:fs';
@@ -78,7 +78,7 @@ vi.mock('./repo-intelligence/runtime.js', async () => {
   };
 });
 
-import { runManagedTask } from './task-engine.js';
+import { ensureManagedSkillCatalog, runManagedTask } from './task-engine.js';
 
 const tempDirs: string[] = [];
 
@@ -358,6 +358,92 @@ async function waitForFileContentContaining(
 
 
 describe('runManagedTask', () => {
+  it('binds only model-visible Skills for a plain AMA managed run', async () => {
+    const root = await createTempDir('kodax-managed-skill-catalog-');
+    for (const [name, disabled] of [
+      ['natural-review', false],
+      ['explicit-only', true],
+    ] as const) {
+      const skillDir = path.join(root, '.kodax', 'skills', name);
+      await mkdir(skillDir, { recursive: true });
+      await writeFile(path.join(skillDir, 'SKILL.md'), [
+        '---',
+        `name: ${name}`,
+        `description: ${name} description`,
+        ...(disabled ? ['disable-model-invocation: true'] : []),
+        '---',
+        '',
+        'Test.',
+      ].join('\n'), 'utf8');
+    }
+
+    const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(root);
+    const options = await ensureManagedSkillCatalog({
+      provider: 'anthropic',
+      agentMode: 'ama',
+    }).finally(() => cwdSpy.mockRestore());
+
+    expect(options.agentMode).toBe('ama');
+    expect(options.context?.skillsPrompt).toContain('natural-review');
+    expect(options.context?.skillsPrompt).not.toContain('explicit-only');
+    expect(options.context?.skillRegistry?.has('natural-review')).toBe(true);
+    expect(options.context?.skillRegistry?.has('explicit-only')).toBe(true);
+  });
+
+  it('preserves a host-provided managed Skill catalog', async () => {
+    const options = {
+      provider: 'anthropic',
+      agentMode: 'ama' as const,
+      context: { skillsPrompt: '[Pinned Skill Catalog]' },
+    };
+
+    await expect(ensureManagedSkillCatalog(options)).resolves.toBe(options);
+  });
+
+  it('waits for runtime-owned PostToolUse hooks before returning', async () => {
+    const root = await createTempDir('kodax-managed-skill-hook-');
+    const skillDir = path.join(root, '.kodax', 'skills', 'delayed-skill');
+    const marker = path.join(root, 'post-hook.txt');
+    const encodedMarker = Buffer.from(marker, 'utf8').toString('base64');
+    const hookCommand = `"${process.execPath}" -e "setTimeout(()=>require('node:fs').writeFileSync(Buffer.from('${encodedMarker}','base64').toString(),'done'),80)"`;
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(path.join(skillDir, 'SKILL.md'), [
+      '---',
+      'name: delayed-skill',
+      'description: delayed hook fixture',
+      'hooks:',
+      '  PostToolUse:',
+      '    - matcher: read',
+      `      command: ${JSON.stringify(hookCommand)}`,
+      '---',
+      '',
+      'Test.',
+    ].join('\n'), 'utf8');
+    mockRunDirectKodaX.mockImplementationOnce(async (options) => {
+      options.events?.onToolResult?.({ id: 'read-1', name: 'read', content: 'ok' });
+      return buildAssistantResult('done');
+    });
+
+    await runManagedTask({
+      provider: 'anthropic',
+      agentMode: 'sa',
+      events: { beforeToolExecute: async () => true },
+      context: {
+        gitRoot: root,
+        executionCwd: root,
+        skillInvocation: {
+          name: 'delayed-skill',
+          path: path.join(skillDir, 'SKILL.md'),
+          expandedContent: '<skill name="delayed-skill">test</skill>',
+          runtimePolicy: { enforceAtRuntime: true },
+        },
+      },
+    }, 'run delayed skill');
+
+    await expect(readFile(marker, 'utf8')).resolves.toBe('done');
+    mockRunDirectKodaX.mockClear();
+  });
+
   it('keeps SA fully outside AMA and applies direct-path shaping', async () => {
     const onManagedTaskStatus = vi.fn();
     mockRunDirectKodaX.mockResolvedValue(

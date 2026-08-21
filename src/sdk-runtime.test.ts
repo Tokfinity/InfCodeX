@@ -3658,6 +3658,58 @@ describe("createKodaXRuntime", () => {
     await runtime.close();
   });
 
+  it("keeps explicit-only Skills in the user-invocable runtime catalog", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const skillDir = path.join(tempRoot, ".kodax", "skills", "explicit-runtime-skill");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      [
+        "---",
+        "name: explicit-runtime-skill",
+        "description: Explicit-only runtime Skill",
+        "disable-model-invocation: true",
+        "user-invocable: false",
+        "---",
+        "",
+        "Run only after an explicit slash invocation.",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const runtime = await createKodaXRuntime({
+      mode: "embedded",
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, ".kodax", "sessions"),
+      defaultProvider: "mock-provider",
+    });
+
+    try {
+      const skills = await runtime.catalog.skills({
+        projectRoot: tempRoot,
+        userInvocableOnly: true,
+      });
+      const summary = skills.find((skill) => skill.name === "explicit-runtime-skill");
+      const description = await runtime.catalog.describeSkill({
+        projectRoot: tempRoot,
+        name: "explicit-runtime-skill",
+      });
+
+      expect(summary).toMatchObject({
+        name: "explicit-runtime-skill",
+        userInvocable: true,
+        disableModelInvocation: true,
+      });
+      expect(description).toMatchObject({
+        name: "explicit-runtime-skill",
+        userInvocable: true,
+        disableModelInvocation: true,
+      });
+    } finally {
+      await runtime.close();
+    }
+  });
+
   it("exposes project prompt commands through the runtime catalog", async () => {
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
     const commandDir = path.join(tempRoot, ".kodax", "commands");

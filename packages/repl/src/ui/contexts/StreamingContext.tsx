@@ -14,7 +14,11 @@ import React, {
   useEffect,
   type ReactNode,
 } from "react";
-import { getMessageQueue, type QueuedMessage } from "@kodax-ai/agent";
+import {
+  getMessageQueue,
+  type MessageDelivery,
+  type QueuedMessage,
+} from "@kodax-ai/agent";
 import { StreamingState } from "../types.js";
 import { MAX_PENDING_INPUTS } from "../utils/pending-inputs.js";
 
@@ -228,8 +232,9 @@ export interface StreamingActions {
 
   /** 缁撴潫鍘嬬缉涓婁笅鏂?*/
   stopCompacting: () => void;
-  addPendingInput: (input: string) => void;
+  addPendingInput: (input: string, options?: PendingInputOptions) => void;
   removeLastPendingInput: () => void;
+  peekPendingInputDelivery: () => MessageDelivery | undefined;
   shiftPendingInput: () => string | undefined;
   clearPendingInputs: () => void;
   consumePendingInputs: () => string[];
@@ -350,8 +355,9 @@ export interface StreamingManager {
 
   /** Stop compacting context - 缁撴潫鍘嬬缉涓婁笅鏂?*/
   stopCompacting: () => void;
-  addPendingInput: (input: string) => void;
+  addPendingInput: (input: string, options?: PendingInputOptions) => void;
   removeLastPendingInput: () => void;
+  peekPendingInputDelivery: () => MessageDelivery | undefined;
   shiftPendingInput: () => string | undefined;
   clearPendingInputs: () => void;
   consumePendingInputs: () => string[];
@@ -375,6 +381,11 @@ export interface StreamingManager {
 export interface StreamingManagerOptions {
   /** Resolve the queue routing key at operation time so /new and /load work. */
   readonly getPendingInputAgentId?: () => string | undefined;
+}
+
+export interface PendingInputOptions {
+  /** `host` keeps explicit command invocations out of runtime model drains. */
+  readonly delivery?: MessageDelivery;
 }
 
 export function createStreamingManager(
@@ -843,7 +854,7 @@ export function createStreamingManager(
     // MAX_PENDING_INPUTS gating reads the live snapshot (queue is
     // canonical) rather than `state.pendingInputs.length`, so a stale
     // React render in the same tick can't allow over-quota enqueue.
-    addPendingInput: (input: string) => {
+    addPendingInput: (input: string, inputOptions?: PendingInputOptions) => {
       const trimmed = input.trim();
       if (!trimmed) return;
       if (getPendingPrompts(getPendingInputAgentId()).length >= MAX_PENDING_INPUTS) return;
@@ -853,6 +864,7 @@ export function createStreamingManager(
         agentId: getPendingInputAgentId(),
         priority: "user",
         mode: "prompt",
+        delivery: inputOptions?.delivery,
         content: trimmed,
       });
     },
@@ -869,6 +881,10 @@ export function createStreamingManager(
         mode: "prompt",
         id: last.id,
       });
+    },
+
+    peekPendingInputDelivery: () => {
+      return getPendingPrompts(getPendingInputAgentId())[0]?.delivery;
     },
 
     shiftPendingInput: () => {
@@ -1049,8 +1065,8 @@ export function StreamingProvider({
     manager.stopCompacting();
   }, []);
 
-  const addPendingInput = useCallback((input: string) => {
-    manager.addPendingInput(input);
+  const addPendingInput = useCallback((input: string, inputOptions?: PendingInputOptions) => {
+    manager.addPendingInput(input, inputOptions);
   }, []);
 
   const removeLastPendingInput = useCallback(() => {
@@ -1059,6 +1075,10 @@ export function StreamingProvider({
 
   const shiftPendingInput = useCallback(() => {
     return manager.shiftPendingInput();
+  }, []);
+
+  const peekPendingInputDelivery = useCallback(() => {
+    return manager.peekPendingInputDelivery();
   }, []);
 
   const clearPendingInputs = useCallback(() => {
@@ -1096,6 +1116,7 @@ export function StreamingProvider({
     stopCompacting,
     addPendingInput,
     removeLastPendingInput,
+    peekPendingInputDelivery,
     shiftPendingInput,
     clearPendingInputs,
     consumePendingInputs,

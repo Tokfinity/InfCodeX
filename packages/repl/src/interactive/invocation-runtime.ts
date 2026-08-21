@@ -174,22 +174,6 @@ function hookMatches(hook: CommandHook, target: string): boolean {
   return matchesPattern(hook.matcher, target);
 }
 
-function formatManualOutput(request: CommandInvocationRequest): string {
-  const label = request.source === 'skill'
-    ? 'skill'
-    : request.source === 'extension'
-      ? 'extension command'
-      : 'command';
-  return [
-    `Note: ${request.displayName} has model invocation disabled.`,
-    `The ${label} content is shown below for manual use:`,
-    '',
-    `--- ${request.displayName} ---`,
-    request.prompt,
-    `--- end ${request.displayName} ---`,
-  ].join('\n');
-}
-
 function resolveModelOverride(provider: string, model?: string): string | undefined {
   if (!model) {
     return undefined;
@@ -219,13 +203,27 @@ function resolveModelOverride(provider: string, model?: string): string | undefi
   }
 }
 
+function buildModelUserInput(
+  rawUserInput: string,
+  skillInvocation: CommandInvocationRequest['skillInvocation'],
+): string {
+  if (!skillInvocation) return rawUserInput;
+  const escapedName = skillInvocation.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const withoutSlashToken = rawUserInput.replace(
+    new RegExp(`/(?:skill:)?${escapedName}(?![\\w/-])`, 'i'),
+    `the active Skill "${skillInvocation.name}"`,
+  ).trim();
+  return withoutSlashToken || `Execute the active Skill "${skillInvocation.name}".`;
+}
+
 async function executeHookCommand(
   event: string,
   hook: CommandHook,
   payload: Record<string, unknown>,
   emit: RuntimeEmitter,
   baseEvents: KodaXEvents,
-  allowedToolPolicy: ParsedAllowedTools
+  allowedToolPolicy: ParsedAllowedTools,
+  cwd: string,
 ): Promise<HookResponse> {
   const displayName = typeof payload.displayName === 'string' ? payload.displayName : 'frontmatter invocation';
   const hookInput = {
@@ -243,18 +241,19 @@ async function executeHookCommand(
     };
   }
 
-  if (baseEvents.beforeToolExecute) {
-    const allowed = await baseEvents.beforeToolExecute('bash', hookInput);
-    if (!allowed) {
-      return {
-        allow: false,
-        message: `Hook ${event} for ${displayName} was blocked by the current permission policy.`,
-      };
-    }
+  const allowed = await baseEvents.beforeToolExecute?.('bash', hookInput);
+  if (allowed !== true) {
+    return {
+      allow: false,
+      message: typeof allowed === 'string'
+        ? allowed
+        : `Hook ${event} for ${displayName} was blocked by the current permission policy.`,
+    };
   }
 
   try {
     const { stdout, stderr } = await execAsync(hook.command, {
+      cwd,
       env: {
         ...process.env,
         KODAX_HOOK_EVENT: event,
@@ -313,7 +312,8 @@ async function runHooks(
   payload: Record<string, unknown>,
   emit: RuntimeEmitter,
   baseEvents: KodaXEvents,
-  allowedToolPolicy: ParsedAllowedTools
+  allowedToolPolicy: ParsedAllowedTools,
+  cwd: string,
 ): Promise<HookResponse> {
   const list = hooks?.[event];
   if (!list || list.length === 0) {
@@ -327,7 +327,15 @@ async function runHooks(
       continue;
     }
 
-    const response = await executeHookCommand(event, hook, payload, emit, baseEvents, allowedToolPolicy);
+    const response = await executeHookCommand(
+      event,
+      hook,
+      payload,
+      emit,
+      baseEvents,
+      allowedToolPolicy,
+      cwd,
+    );
     if (response.message) {
       await emit(`[Hook ${event}] ${response.message}`);
     }
@@ -351,16 +359,13 @@ export async function prepareInvocationExecution(
   rawUserInput: string,
   emit: (text: string) => void
 ): Promise<PreparedInvocation> {
-  if (request.disableModelInvocation) {
-    return {
-      mode: 'manual',
-      manualOutput: formatManualOutput(request),
-      finalize: async () => {},
-    };
-  }
-
   const baseEvents = baseOptions.events ?? {};
   const allowedToolPolicy = parseAllowedTools(request.allowedTools);
+  const runtimeOwnsSkillToolPolicy = request.source === 'skill' && request.skillInvocation !== undefined;
+  const activeSkillInvocation = runtimeOwnsSkillToolPolicy ? request.skillInvocation : undefined;
+  const hookCwd = baseOptions.context?.executionCwd
+    ?? baseOptions.context?.gitRoot
+    ?? process.cwd();
   const modelOverride = resolveModelOverride(baseOptions.provider, request.model);
   let isDispatchingNotification = false;
 
@@ -387,7 +392,8 @@ export async function prepareInvocationExecution(
           emit(notificationText);
         },
         baseEvents,
-        allowedToolPolicy
+        allowedToolPolicy,
+        hookCwd,
       );
     } finally {
       isDispatchingNotification = false;
@@ -413,7 +419,8 @@ export async function prepareInvocationExecution(
     { displayName: request.displayName, source: request.source, path: request.path },
     emitWithNotifications,
     baseEvents,
-    allowedToolPolicy
+    allowedToolPolicy,
+    hookCwd,
   );
   if (sessionStart.allow === false) {
     return {
@@ -430,7 +437,8 @@ export async function prepareInvocationExecution(
     { displayName: request.displayName, source: request.source, prompt: rawUserInput, path: request.path },
     emitWithNotifications,
     baseEvents,
-    allowedToolPolicy
+    allowedToolPolicy,
+    hookCwd,
   );
 
   if (userPromptSubmit.allow === false) {
@@ -447,10 +455,11 @@ export async function prepareInvocationExecution(
     userPromptSubmit.additionalContext,
   ].filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
 
+  const modelUserInput = buildModelUserInput(rawUserInput, activeSkillInvocation);
   const promptParts = [
     contextBlocks.length > 0 ? contextBlocks.join('\n\n') : undefined,
-    request.prompt,
-    `User request: ${rawUserInput}`,
+    activeSkillInvocation ? undefined : request.prompt,
+    `User request: ${modelUserInput}`,
   ].filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
 
   const wrappedEvents: KodaXEvents = {
@@ -468,7 +477,8 @@ export async function prepareInvocationExecution(
         { tool, input, displayName: request.displayName, source: request.source, path: request.path },
         emitWithNotifications,
         baseEvents,
-        allowedToolPolicy
+        allowedToolPolicy,
+        hookCwd,
       );
       if (preToolUse.allow === false) {
         await emitWithNotifications(`[Blocked] PreToolUse hook blocked '${tool}' for ${request.displayName}`);
@@ -489,7 +499,8 @@ export async function prepareInvocationExecution(
         { ...result, displayName: request.displayName, source: request.source, path: request.path },
         emitWithNotifications,
         baseEvents,
-        allowedToolPolicy
+        allowedToolPolicy,
+        hookCwd,
       );
     },
   };
@@ -513,7 +524,8 @@ export async function prepareInvocationExecution(
       },
       emitWithNotifications,
       baseEvents,
-      allowedToolPolicy
+      allowedToolPolicy,
+      hookCwd,
     );
   };
 
@@ -526,12 +538,17 @@ export async function prepareInvocationExecution(
       context: {
         ...baseOptions.context,
         ...(request.workflowIntent ? { workflowIntent: request.workflowIntent } : {}),
-        rawUserInput,
+        rawUserInput: modelUserInput,
         skillInvocation: request.source === 'skill'
-          ? request.skillInvocation
+          ? request.skillInvocation && {
+              ...request.skillInvocation,
+              // Transport owners rehydrate policy from their trusted Skill
+              // registry; hook command strings never cross the wire.
+              runtimePolicy: { enforceAtRuntime: true },
+            }
           : baseOptions.context?.skillInvocation,
       },
-      events: wrappedEvents,
+      events: runtimeOwnsSkillToolPolicy ? baseEvents : wrappedEvents,
     },
     finalize,
   };

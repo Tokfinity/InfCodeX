@@ -101,6 +101,80 @@ describe('Actor-aware idle yield', () => {
     }]);
   });
 
+  it('does not let a later Runtime prompt overtake a host-owned prompt', async () => {
+    const messageQueue = new MessageQueue();
+    messageQueue.enqueue({
+      priority: 'user',
+      mode: 'prompt',
+      delivery: 'host',
+      agentId: '/root',
+      content: '/hidden-skill args',
+    });
+    messageQueue.enqueue({
+      priority: 'user',
+      mode: 'prompt',
+      agentId: '/root',
+      content: 'later Runtime prompt',
+    });
+    messageQueue.enqueue({
+      priority: 'background',
+      mode: 'task-notification',
+      agentId: '/root',
+      content: '<agent-completed path="/root/review">done</agent-completed>',
+    });
+
+    await expect(waitForWakeEvent({ messageQueue, agentId: '/root' }))
+      .resolves.toEqual({ kind: 'host-input-arrived' });
+    expect(messageQueue.peek({
+      agentId: '/root',
+      maxPriority: 'background',
+    }).map((message) => message.content)).toEqual([
+      '/hidden-skill args',
+      'later Runtime prompt',
+      '<agent-completed path="/root/review">done</agent-completed>',
+    ]);
+  });
+
+  it('returns an idle run to the host when an explicit Skill is queued', async () => {
+    const messageQueue = new MessageQueue();
+    const agent = createAgent({ name: 'worker', instructions: 'sys' });
+    let calls = 0;
+
+    const result = await runWithIdleYield({
+      initialAgent: agent,
+      initialInput: [{ role: 'user', content: 'start' }],
+      runOnce: async () => {
+        calls += 1;
+        messageQueue.enqueue({
+          priority: 'user',
+          mode: 'prompt',
+          delivery: 'host',
+          agentId: '/root',
+          content: '/hidden-skill args',
+        });
+        return { messages: [{ role: 'assistant', content: 'waiting' }] };
+      },
+      computeSnapshot: () => ({
+        lastAssistantToolCallCount: 0,
+        pendingChildTaskCount: 1,
+        hasEmittedHandoff: false,
+        hasEmittedTerminalVerdict: false,
+        hasPendingBackgroundMessages: false,
+      }),
+      messageQueue,
+      agentId: '/root',
+      resumeAgent: () => agent,
+    });
+
+    expect(result.messages.at(-1)?.content).toBe('waiting');
+    expect(calls).toBe(1);
+    expect(messageQueue.peek({
+      agentId: '/root',
+      maxPriority: 'user',
+      mode: 'prompt',
+    })).toHaveLength(1);
+  });
+
   it('stops waiting promptly when the session aborts', async () => {
     const abort = new AbortController();
     const messageQueue = new MessageQueue();

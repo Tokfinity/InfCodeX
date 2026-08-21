@@ -265,6 +265,13 @@ export {
 
 export { normalizeKodaXAgentMode } from './types.js';
 export {
+  parseBareInlineSlashReferences,
+  parseInlineSkillReferences,
+  uniqueBareInlineSlashNames,
+  uniqueInlineSkillNames,
+  type InlineSkillReference,
+} from './skill-references.js';
+export {
   normalizeShellExecutionContract,
   shellExecutionContractFingerprint,
 } from './shell-execution/contract.js';

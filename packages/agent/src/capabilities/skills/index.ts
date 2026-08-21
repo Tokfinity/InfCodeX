@@ -63,6 +63,7 @@ export {
 
 // Registry
 export {
+  formatSkillsSystemPrompt,
   SkillRegistry,
   getSkillRegistry,
   initializeSkillRegistry,

@@ -238,6 +238,10 @@ describe('interactive daemon runtime bridge', () => {
           shell: { kind: 'pwsh', profile: 'none' },
           environment: { inherit: 'filtered' },
         },
+        skillRegistry: {
+          has: () => true,
+          loadFull: async () => ({ name: 'host-only' }),
+        },
       },
       skillDynamicContext: {
         disable: true,
@@ -275,6 +279,7 @@ describe('interactive daemon runtime bridge', () => {
     expect(encoded).not.toContain('attacker-controlled');
     expect(wire.context).not.toHaveProperty('configHome');
     expect(wire.context).not.toHaveProperty('memoryIdentity');
+    expect(wire.context).not.toHaveProperty('skillRegistry');
   });
 
   it('rejects host-only bindings that the daemon cannot reproduce', () => {
@@ -670,6 +675,69 @@ describe('interactive daemon runtime bridge', () => {
     expect(runtime.runs.start).not.toHaveBeenCalled();
   });
 
+  it('serializes explicit Skill policy instead of sending callbacks to a daemon', async () => {
+    let capturedOptions: unknown;
+    const runtime = {
+      identity: {
+        runtimeId: 'runtime-daemon-skill-policy',
+        mode: 'daemon',
+        profile: 'default',
+        startedAt: '2026-07-20T00:00:00.000Z',
+        version: 'test',
+      },
+      sessions: {
+        load: vi.fn(async () => ({ id: 'session-1' })),
+        updateSettings: vi.fn(async () => ({ permissionMode: 'plan' })),
+      },
+      runs: {
+        start: vi.fn(async (input: RuntimeStartRunInput) => {
+          capturedOptions = input.options;
+          return {
+            runId: 'run-1',
+            sessionId: 'session-1',
+            result: Promise.resolve({
+              runId: 'run-1',
+              sessionId: 'session-1',
+              phase: 'completed' as const,
+              result: successfulResult(),
+            }),
+          };
+        }),
+      },
+      events: { subscribe: vi.fn(() => ({ close: vi.fn() })) },
+      permissions: { respond: vi.fn(async () => true) },
+    } as unknown as KodaXRuntime;
+
+    await createInteractiveRuntimeRunner(runtime)({
+      options: {
+        provider: 'mock-provider',
+        events: { beforeToolExecute: async () => true },
+        context: {
+          skillInvocation: {
+            name: 'transport-skill',
+            path: 'C:/skills/transport-skill/SKILL.md',
+            expandedContent: '<skill name="transport-skill">test</skill>',
+            runtimePolicy: {},
+          },
+        },
+      },
+      prompt: 'inspect',
+      sessionId: 'session-1',
+    });
+
+    expect(capturedOptions).toMatchObject({
+      context: {
+        skillInvocation: {
+          runtimePolicy: {
+            enforceAtRuntime: true,
+          },
+        },
+      },
+    });
+    expect(JSON.stringify(capturedOptions)).not.toContain('beforeToolExecute');
+    expect(JSON.stringify(capturedOptions)).not.toContain('echo pre');
+  });
+
   it('transport-sanitizes run options for a Worker-hosted embedded runtime', async () => {
     let capturedOptions: unknown;
     let eventListener: ((event: RuntimeEvent) => void) | undefined;
@@ -726,6 +794,12 @@ describe('interactive daemon runtime bridge', () => {
         },
         context: {
           executionCwd: 'C:/workspace',
+          skillInvocation: {
+            name: 'transport-skill',
+            path: 'C:/skills/transport-skill/SKILL.md',
+            expandedContent: '<skill name="transport-skill">test</skill>',
+            runtimePolicy: {},
+          },
           memoryIdentity: {
             configHome: 'C:/host-home',
             tenantId: 'host-tenant',
@@ -742,7 +816,12 @@ describe('interactive daemon runtime bridge', () => {
     expect(capturedOptions).toMatchObject({
       provider: 'mock-provider',
       session: { id: 'session-1' },
-      context: { executionCwd: 'C:/workspace' },
+      context: {
+        executionCwd: 'C:/workspace',
+        skillInvocation: {
+          runtimePolicy: { enforceAtRuntime: true },
+        },
+      },
       events: { workflowCorrelation: { runId: 'workflow-1' } },
     });
     // Host-only bindings are stripped before the Worker transport boundary.

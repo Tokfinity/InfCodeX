@@ -18,12 +18,13 @@ async function writeSkillMd(
   description: string,
   body: string,
   dirName = name,
+  frontmatter = '',
 ): Promise<string> {
   const skillDir = path.join(rootDir, sourceDir, dirName);
   await mkdir(skillDir, { recursive: true });
   await writeFile(
     path.join(skillDir, 'SKILL.md'),
-    `---\nname: ${name}\ndescription: ${description}\n---\n\n${body}\n`,
+    `---\nname: ${name}\ndescription: ${description}\n${frontmatter}---\n\n${body}\n`,
     'utf8',
   );
   return skillDir;
@@ -161,6 +162,34 @@ describe('toolSkill (claudecode-parity skill invocation)', () => {
     expect(result).toContain('Body header');
     expect(result).toContain('Do X then Y.');
     expect(result).not.toContain('[Tool Error]');
+  });
+
+  it('keeps model tool invocation disabled for an explicit-only skill', async () => {
+    await writeSkillMd(
+      tempDir,
+      'project',
+      'kodax-test-explicit-only',
+      'Explicit-only skill',
+      'MODEL-MUST-NOT-LOAD-THIS',
+      'kodax-test-explicit-only',
+      'disable-model-invocation: true\n',
+    );
+    const { getSkillRegistry } = await import('@kodax-ai/agent');
+    await getSkillRegistry(tempDir, {
+      projectPaths: [path.join(tempDir, 'project')],
+      userPaths: [],
+      pluginPaths: [],
+      builtinPath: path.join(tempDir, 'builtin'),
+    }).discover();
+
+    const result = await toolSkill({ skill: 'kodax-test-explicit-only' }, {
+      backups: new Map(),
+      executionCwd: tempDir,
+    });
+
+    expect(result).toContain('[Tool Error]');
+    expect(result).toContain('model invocation disabled');
+    expect(result).not.toContain('MODEL-MUST-NOT-LOAD-THIS');
   });
 
   it('routes a skill !`cmd` dynamic-context token through the host hook, not execSync (FEATURE_222)', async () => {

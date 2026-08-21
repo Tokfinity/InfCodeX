@@ -112,6 +112,7 @@ import {
   CommandCallbacks,
   CurrentConfig,
 } from './commands.js';
+import { resolveUserSkillInvocation } from './user-skill-invocation.js';
 import type {
   CommandWorkflowInvocationRequest,
   RuntimeSurfaceStatus,
@@ -1807,13 +1808,24 @@ Keyboard Shortcuts:
           await handleCommandResult(commandResult, trimmed);
           continue;
         }
-
         // Process special syntax and update lastUserMessage - 处理特殊语法并更新 lastUserMessage
         const processed = await processSpecialSyntax(
           trimmed,
           currentOptions.context?.executionCwd,
         );
         if (trimmed.startsWith('!') && isShellCommandHandled(processed)) {
+          continue;
+        }
+        const inlineSkillInvocation = await resolveUserSkillInvocation(trimmed, {
+          workingDirectory: currentOptions.context?.executionCwd ?? process.cwd(),
+          projectRoot: context.gitRoot ?? undefined,
+          sessionId: context.sessionId,
+          environment: {},
+          executeDynamicContext: context.skillDynamicContext?.execute,
+          disableDynamicContext: context.skillDynamicContext?.disable,
+        });
+        if (inlineSkillInvocation) {
+          await handleCommandResult({ invocation: inlineSkillInvocation }, trimmed);
           continue;
         }
         // FEATURE_246 A5 (ADR-047): natural language is never intercepted into a
@@ -1979,7 +1991,6 @@ Keyboard Shortcuts:
       await handleCommandResult(commandResult, trimmed);
       continue;
     }
-
     // Process special syntax - 处理特殊语法
     const processed = await processSpecialSyntax(
       trimmed,
@@ -1994,6 +2005,18 @@ Keyboard Shortcuts:
       if (isShellCommandHandled(processed)) {
         continue;
       }
+    }
+    const inlineSkillInvocation = await resolveUserSkillInvocation(trimmed, {
+      workingDirectory: currentOptions.context?.executionCwd ?? process.cwd(),
+      projectRoot: context.gitRoot ?? undefined,
+      sessionId: context.sessionId,
+      environment: {},
+      executeDynamicContext: context.skillDynamicContext?.execute,
+      disableDynamicContext: context.skillDynamicContext?.disable,
+    });
+    if (inlineSkillInvocation) {
+      await handleCommandResult({ invocation: inlineSkillInvocation }, trimmed);
+      continue;
     }
 
     // Add user message to context - 添加用户消息到上下文

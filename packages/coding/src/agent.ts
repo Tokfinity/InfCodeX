@@ -21,15 +21,20 @@ import { createDefaultCodingAgent } from './coding-preset.js';
 import { createAgentHomeShellBoundaryGuardrail } from './guardrails/auto-mode/guardrail.js';
 import { applyFollowupEscalationToOptions } from './reasoning.js';
 import { deriveRunScopedConfig } from './run-scoped-config.js';
+import {
+  applyRuntimeSkillInvocationPolicy,
+  awaitRuntimeSkillInvocationPolicy,
+} from './skill-invocation-policy.js';
 import { normalizeKodaXAgentMode, type KodaXOptions, type KodaXResult } from './types.js';
 
 export async function runKodaX(
   options: KodaXOptions,
   prompt: string,
 ): Promise<KodaXResult> {
-  const normalizedOptions: KodaXOptions = options.agentMode === undefined
-    ? options
-    : { ...options, agentMode: normalizeKodaXAgentMode(options.agentMode) };
+  const policyOptions = await applyRuntimeSkillInvocationPolicy(options);
+  const normalizedOptions: KodaXOptions = policyOptions.agentMode === undefined
+    ? policyOptions
+    : { ...policyOptions, agentMode: normalizeKodaXAgentMode(policyOptions.agentMode) };
   // FEATURE_103 (v0.7.29): apply L5 user-followup escalation at the SA
   // entry. When the user's prompt contains a doubt or deepen marker
   // (and, for doubt, there is a prior assistant turn in the session),
@@ -87,27 +92,31 @@ export async function runKodaX(
   // consumer calls it directly rather than via `runManagedTask`. When reached
   // through `runManagedTask` (SA dispatch) this simply re-establishes the same
   // scope — nesting replaces with an identical config, so it is idempotent.
-  return runWithScopedConfig(deriveRunScopedConfig(runtimeOptions), async () => {
-    const result = await Runner.run<KodaXResult>(createDefaultCodingAgent(), prompt, {
-      presetOptions: runtimeOptions,
-      abortSignal: runtimeOptions.abortSignal,
-      // FEATURE_092 (v0.7.33): forward caller-supplied run-scoped guardrails
-      // (e.g. AutoModeToolGuardrail injected by the REPL bootstrap when
-      // permissionMode === 'auto'). Runner merges with `agent.guardrails`.
-      guardrails,
-      permissionIntent: runtimeOptions.context?.permissionIntent,
+  try {
+    return await runWithScopedConfig(deriveRunScopedConfig(runtimeOptions), async () => {
+      const result = await Runner.run<KodaXResult>(createDefaultCodingAgent(), prompt, {
+        presetOptions: runtimeOptions,
+        abortSignal: runtimeOptions.abortSignal,
+        // FEATURE_092 (v0.7.33): forward caller-supplied run-scoped guardrails
+        // (e.g. AutoModeToolGuardrail injected by the REPL bootstrap when
+        // permissionMode === 'auto'). Runner merges with `agent.guardrails`.
+        guardrails,
+        permissionIntent: runtimeOptions.context?.permissionIntent,
+      });
+      // Substrate executor always lifts full `KodaXResult` onto `data` —
+      // missing means the Agent declaration is mis-wired (fail loud, never
+      // return a truncated `RunResult` typed as `KodaXResult`).
+      if (!result.data) {
+        throw new Error(
+          'runKodaX: substrate executor did not lift KodaXResult onto RunResult.data — '
+          + 'verify createDefaultCodingAgent().substrateExecutor in coding-preset.ts',
+        );
+      }
+      return result.data;
     });
-    // Substrate executor always lifts full `KodaXResult` onto `data` —
-    // missing means the Agent declaration is mis-wired (fail loud, never
-    // return a truncated `RunResult` typed as `KodaXResult`).
-    if (!result.data) {
-      throw new Error(
-        'runKodaX: substrate executor did not lift KodaXResult onto RunResult.data — '
-        + 'verify createDefaultCodingAgent().substrateExecutor in coding-preset.ts',
-      );
-    }
-    return result.data;
-  });
+  } finally {
+    await awaitRuntimeSkillInvocationPolicy(policyOptions);
+  }
 }
 
 export { buildAutoRepoIntelligenceContext } from './agent-runtime/middleware/repo-intelligence.js';

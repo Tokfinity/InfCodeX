@@ -831,6 +831,34 @@ host-triggered imperative compaction.
 
 Skills live under `packages/agent/src/capabilities/skills`.
 
+Invocation has two distinct trust paths:
+
+- model invocation sees only metadata whose `disableModelInvocation` is false
+  and the model `skill` tool rejects disabled entries;
+- explicit user or SDK invocation can load every enabled Skill. REPL head
+  commands (`/<name>`, `/skill:<name>`) and in-query slash tokens use the text
+  after the token as `$ARGUMENTS`, then inject the expanded Skill for that turn.
+
+Busy Ink follow-ups that resolve to a known Skill remain raw, user-authored
+queue entries with `delivery: host`. AMA mid-turn drain, SA interrupt drain,
+and idle-yield resume never splice those entries directly into model context;
+the next host round performs the same resolve, expand, policy, hook, and
+finalize pipeline as an immediate invocation. Built-in and extension slash
+commands keep their existing mid-task guard. Both SA and AMA inject the active
+Skill's full expanded content exactly once, including SA workflow children
+that use a specialist `systemPromptOverride`.
+
+Tool policy is runtime-owned. Isolated transports carry only an enforcement
+marker and rehydrate `allowed-tools` plus Pre/Post hooks from the runtime's
+trusted registry; a bound registry is authoritative and absence fails closed.
+Host registry objects and hook command strings never cross the JSON boundary.
+Hook shell commands still require the runtime permission broker, and runtime
+completion waits for all admitted `PostToolUse` hooks to settle.
+
+`user-invocable` remains parse-compatible with existing `SKILL.md` files, but
+enabled Skills always report as user-invocable and the field is not used as an
+execution gate.
+
 Core modules:
 
 - discovery and plugin paths,

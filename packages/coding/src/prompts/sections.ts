@@ -240,6 +240,15 @@ export const PROMPT_SECTION_REGISTRY: Record<string, KodaXPromptSectionDefinitio
     order: 100,
     stability: 'dynamic',
   },
+  'active-skill-invocation': {
+    id: 'active-skill-invocation',
+    title: 'Active Skill Invocation',
+    owner: 'skills',
+    feature: 'FEATURE_222',
+    slot: 'skill-addendum',
+    order: 200,
+    stability: 'dynamic',
+  },
   'tool-construction': {
     id: 'tool-construction',
     title: 'Tool Construction Mode',

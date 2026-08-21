@@ -19,6 +19,14 @@ import type { KodaXTaskResultMetadata } from '@kodax-ai/llm';
 export type MessagePriority = 'user' | 'background';
 
 /**
+ * Delivery owner for user prompts. Ordinary messages are runtime-deliverable.
+ * `host` is reserved for prompts that must re-enter a trusted host command
+ * pipeline (for example an explicit user Skill invocation) before any model
+ * can observe them.
+ */
+export type MessageDelivery = 'runtime' | 'host';
+
+/**
  * Delivery semantics, independent of priority:
  * - `prompt`: user-authored input; delivered as a real user turn.
  * - `agent-message`: Runtime-authenticated Agent communication.
@@ -47,6 +55,8 @@ export interface QueuedMessage {
    */
   readonly agentId?: string;
   readonly mode: MessageMode;
+  /** Omitted means `runtime`; `host` messages must not be spliced into a model turn. */
+  readonly delivery?: MessageDelivery;
   readonly content: string;
   readonly inputArtifacts?: readonly QueuedInputArtifact[];
   readonly taskResult?: KodaXTaskResultMetadata;
@@ -131,6 +141,8 @@ export type QueueEventListener = (event: QueueEvent) => void;
 export interface EnqueueInput {
   readonly priority: MessagePriority;
   readonly mode: MessageMode;
+  /** Omitted means `runtime`; use `host` for command-pipeline-owned prompts. */
+  readonly delivery?: MessageDelivery;
   readonly content: string;
   readonly agentId?: string;
   readonly inputArtifacts?: readonly QueuedInputArtifact[];

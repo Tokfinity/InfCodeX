@@ -14,7 +14,8 @@ async function writeSkill(
   rootDir: string,
   sourceDir: string,
   name: string,
-  description: string
+  description: string,
+  frontmatter = ""
 ): Promise<void> {
   const skillDir = join(rootDir, sourceDir, name);
   await mkdir(skillDir, { recursive: true });
@@ -23,6 +24,7 @@ async function writeSkill(
     `---
 name: ${name}
 description: ${description}
+${frontmatter}
 ---
 
 # ${name}
@@ -141,6 +143,8 @@ Updated project skill
     expect(snippet).toContain("invoke it via the `skill` tool");
     expect(snippet).toContain("BLOCKING REQUIREMENT");
     expect(snippet).toContain("MUST invoke it via the `skill` tool");
+    expect(snippet).toContain('Active skill invocation');
+    expect(snippet).toContain('do NOT call the `skill` tool for that Skill again');
 
     // The legacy "Use the read tool" wording is gone — checking
     // negative direction so a future refactor that re-introduces it
@@ -153,5 +157,39 @@ Updated project skill
     expect(snippet).toContain("Browser automation");
     expect(snippet).not.toContain("/SKILL.md");
     expect(snippet).not.toContain("(Location:");
+  });
+
+  it("allows an enabled skill to be explicitly invoked when model invocation is disabled", async () => {
+    const rootDir = await createTempDir("kodax-skill-explicit-invoke-");
+    tempDirs.push(rootDir);
+    await writeSkill(
+      rootDir,
+      "project",
+      "explicit-only",
+      "Explicit-only skill",
+      "disable-model-invocation: true"
+    );
+
+    const registry = new SkillRegistry(rootDir, {
+      projectPaths: [join(rootDir, "project")],
+      userPaths: [],
+      pluginPaths: [],
+      builtinPath: join(rootDir, "builtin"),
+    });
+    await registry.discover();
+
+    expect(registry.listUserInvocable().map((skill) => skill.name)).toContain(
+      "explicit-only"
+    );
+    expect(registry.getSystemPromptSnippet()).not.toContain("explicit-only");
+
+    const result = await registry.invoke("explicit-only", "review src", {
+      workingDirectory: rootDir,
+    });
+
+    expect(result).toEqual({
+      success: true,
+      content: expect.stringContaining("Explicit-only skill"),
+    });
   });
 });

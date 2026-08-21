@@ -22,6 +22,7 @@ import type {
   KodaXTaskVerificationContract,
 } from '../../../types.js';
 import { buildRuntimeExecutionGuide } from './runtime-execution-guide.js';
+export { formatFullSkillSection } from '../../../skill-invocation-format.js';
 
 /**
  * Build a two-line "title + bulleted items" section, trimming and filtering
@@ -75,15 +76,6 @@ export function formatSkillMapSection(
     formatOptionalListSection('Required evidence:', skillMap.requiredEvidence),
     formatOptionalListSection('Ambiguities:', skillMap.ambiguities),
   ].filter((line): line is string => Boolean(line)).join('\n');
-}
-
-export function formatFullSkillSection(skillInvocation: KodaXSkillInvocationContext): string {
-  return [
-    'Full expanded skill (authoritative execution reference):',
-    '```markdown',
-    skillInvocation.expandedContent.trim(),
-    '```',
-  ].join('\n');
 }
 
 export function formatRoleRoundSummarySection(summary: KodaXRoleRoundSummary): string {

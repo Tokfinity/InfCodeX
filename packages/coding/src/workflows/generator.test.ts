@@ -208,6 +208,40 @@ describe('buildWorkflowGenerationSkillContext', () => {
     }
   });
 
+  it('expands explicit-only workflow skills with the trailing user prompt', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'kodax-workflow-explicit-only-'));
+    try {
+      const skillDir = join(tempDir, '.kodax', 'skills', 'workflow-helper');
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(
+        join(skillDir, 'SKILL.md'),
+        [
+          '---',
+          'name: workflow-helper',
+          'description: Explicit workflow helper.',
+          'disable-model-invocation: true',
+          'user-invocable: false',
+          '---',
+          '',
+          'Generate this workflow: $ARGUMENTS',
+        ].join('\n'),
+        'utf8',
+      );
+
+      const skillContext = await buildWorkflowGenerationSkillContext(
+        'Create with /workflow-helper audit the release',
+        { context: { gitRoot: tempDir, executionCwd: tempDir } },
+      );
+
+      expect(skillContext).toContain('<skill name="workflow-helper"');
+      expect(skillContext).toContain('Generate this workflow: audit the release');
+      expect(skillContext).toContain('User provided arguments: audit the release');
+    } finally {
+      resetSkillRegistry();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('fails closed for explicit unknown /skill references', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'kodax-workflow-missing-skill-'));
     try {

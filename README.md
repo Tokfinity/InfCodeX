@@ -1634,28 +1634,26 @@ described under FEATURE_272 above.
 
 ### `@kodax-ai/kodax/skills` — Skills System
 
-Zero external dependencies. Markdown-based skill files with natural-language triggers and variable resolution.
+Markdown-based skill files with natural-language triggers, explicit slash invocation, and variable resolution.
 
 ```typescript
 import {
   SkillRegistry,
-  discoverSkills,
-  executeSkill,
   type SkillContext,
 } from '@kodax-ai/kodax/skills';
 
-const skills = await discoverSkills(['/path/to/skills']);
-const registry = new SkillRegistry();
-await registry.registerSkills(skills);
-
-const result = await executeSkill({
-  skillId: 'code-review',
-  arguments: { target: 'src/' },
-  workingDirectory: process.cwd(),
+const registry = new SkillRegistry(process.cwd(), {
+  projectPaths: ['/path/to/skills'],
 });
+await registry.discover();
+
+const context: SkillContext = { workingDirectory: process.cwd() };
+const result = await registry.invoke('code-review', 'src/', context);
 ```
 
-**Key Features**: zero deps · markdown-based skill files · natural-language triggering · variable resolution · built-in skills included.
+Every enabled Skill is explicitly user-invocable with `/<name>` or `/skill:<name>`, including when the token appears in the middle of a query; the remaining text is passed as Skill arguments. `disable-model-invocation: true` only removes the Skill from the model-visible catalog and blocks the model's `skill` tool path. It does not block explicit user or SDK `SkillRegistry.invoke()` calls. The legacy `user-invocable` field is retained for parsing compatibility but is not an execution permission.
+
+**Key Features**: markdown-based skill files · natural-language triggering for model-visible Skills · explicit slash invocation for every enabled Skill · variable resolution · built-in skills included.
 
 ### `@kodax-ai/kodax/coding` — Coding Agent
 
@@ -1850,9 +1848,12 @@ kodax "帮我审查代码"           # Triggers code-review skill
 kodax "写测试用例"             # Triggers tdd skill
 kodax "提交代码"               # Triggers git-workflow skill
 
-# Explicit skill command
-kodax /skill:code-review
+# Explicit skill commands (arguments may follow the token)
+kodax /code-review src/
+kodax "please use /skill:code-review src/"
 ```
+
+Set `disable-model-invocation: true` for a Skill that must only be loaded after an explicit slash invocation. This keeps it out of natural-language model discovery without disabling `/<name>` or `/skill:<name>`.
 
 Built-in skills include:
 - **code-review** - Code review and quality analysis

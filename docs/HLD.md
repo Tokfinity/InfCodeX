@@ -654,6 +654,19 @@ before exact sidecar persistence is not reconstructable.
 
 Skills are Markdown-based capabilities discovered from configured paths and
 expanded for the LLM through `packages/agent/src/capabilities/skills`.
+Every enabled Skill remains available through an explicit user `/<name>` or
+`/skill:<name>` token at the head or in the middle of a query. The suffix after
+the token is passed as Skill arguments and the host expands the Skill before
+the model handles the request. `disable-model-invocation` controls only
+model-visible discovery and the model `skill` tool path; it never blocks an
+explicit user or SDK registry invocation. The legacy `user-invocable` field is
+parsed for compatibility but is not an execution permission.
+Queued explicit Skill text is host-owned: runtime mid-turn and idle-resume
+drains cannot expose it to the model before trusted expansion. The expanded
+active Skill is then present exactly once in either the SA or AMA system
+context. Worker/daemon transports rehydrate tool and hook policy from their
+local trusted registry and wait for PostToolUse completion rather than trusting
+serialized client policy.
 The F263 learning owner reuses the governed episode-review inbox and Learning
 Center. It records an immutable decision, writes a project-scoped Skill
 revision plus canonical capability record, and only then permits
