@@ -103,8 +103,8 @@ lease. Shell policy owners and namespace owners remain in the coordinator so
 incompatible Windows ACL transitions and worktree path-alias changes are still
 fenced.
 
-Current source adds a post-v0.7.94 Runtime recovery boundary without changing
-the published v0.7.94 capability versions. Run finalization owns and observes
+The v0.7.94 Runtime recovery boundary does not change
+capability versions. Run finalization owns and observes
 its complete persistence chain. A durable terminal status wins over a failed
 event append; failure to persist either authority produces an explicit
 `unknown` lifecycle error and keeps Session execution fenced. Sandbox and

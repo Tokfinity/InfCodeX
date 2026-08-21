@@ -50,15 +50,12 @@ prepared-Session-tail recovery after a `data_changed` race.
 The v0.7.94 SDK guidance documents concurrent sandboxed text mutations,
 authorized-root git trust (`gitSafeDirectory: authorized-repo-roots`),
 scheduled shutdown failure reporting, omitting the text sandbox when the
-workspace directory does not exist, and `conversationHistory:2`.
-`sandboxRuntime:4` and `crashOutcomeModel:2` are unchanged.
-
-Current source after v0.7.94 also documents fail-closed Run terminal
-settlement, observed sandbox/managed-child cleanup rejection, typed daemon
-disconnect facts, bounded credential-safe `failureKind`, and exact-`runId`
-result recovery. An admitted Run is queried and awaited after reconnect; it is
-never started again. These contracts are unreleased until a later package is
-published and must not be attributed to `@kodax-ai/kodax@0.7.94`.
+workspace directory does not exist, `conversationHistory:2`, independent
+explicit Skill invocation, fail-closed Run terminal settlement, observed
+sandbox/managed-child cleanup rejection, typed daemon disconnect facts,
+bounded credential-safe `failureKind`, and exact-`runId` result recovery. An
+admitted Run is queried and awaited after reconnect; it is never started
+again. `sandboxRuntime:4` and `crashOutcomeModel:2` are unchanged.
 
 The v0.7.93 SDK guidance documents that a durable Windows `failed` shutdown
 outcome ends the orderly exit wait, previous-boot shared ACL markers may be

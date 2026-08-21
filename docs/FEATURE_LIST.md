@@ -559,22 +559,6 @@ The release checklist is [docs/release.md](release.md#v0790-release-preparation)
 
 ---
 
-## Post-v0.7.94 Runtime SDK Recovery Hardening (Unreleased)
-
-The source after `v0.7.94` contains a maintenance-only Runtime/daemon recovery
-slice. It observes Run terminal persistence and process-cleanup rejections,
-keeps the Session fenced when terminal durability is unknown, exposes factual
-typed disconnect metadata and bounded `failureKind`, and requires SDK hosts to
-recover an admitted result through the original `runId` without replaying
-`runs.start()`.
-
-This is not part of the published `@kodax-ai/kodax@0.7.94` contract. The design
-record is [v0.7.95](features/v0.7.95.md#2026-08-21-runtime-sdk-recovery-hardening)
-and the acceptance guide is
-[Runtime daemon recovery](test-guides/ISSUE_RUNTIME_DAEMON_RECOVERY_v0.7.95_REGRESSION_GUIDE.md).
-
----
-
 ## v0.7.94 Release Record
 
 `v0.7.94` is a non-Feature maintenance release. It closes post-v0.7.93
@@ -596,13 +580,27 @@ Scheduled daemon shutdown reports failed cleanup instead of a safe stop.
 Runtime advertises `conversationHistory:2` for topology-transparent managed
 context and direct clone provenance.
 
+Explicit Skill invocation (`/<name>`, `/skill:<name>`) is independent of
+model discovery. `disable-model-invocation` only blocks the model `skill`
+tool; structured `skillInvocation` provenance follows Workflow and child
+execution, and a model-authored slash token cannot bypass that fence.
+
+Run terminal settlement observes every finalization rejection. Durable
+terminal status remains authoritative if only event publication fails. Total
+terminal persistence failure reports `unknown` /
+`run_settlement_not_persisted` and keeps the Session fenced. Daemon
+disconnects expose typed connection facts. After admission, hosts recover
+through `runs.get(runId)` / `runs.await(runId)` and never replay
+`runs.start()`.
+
 Issue 256 remains Open: this slice does not prove descendant closure after an
 intermediate parent exits. FEATURE_287 remains planned for a later 0.8.x slot
 and is not shipped here.
 
 The design and acceptance contract are
-[v0.7.94](features/v0.7.94.md) and
-[Issue 300 v0.7.94](test-guides/ISSUE_300_v0.7.94_REGRESSION_GUIDE.md).
+[v0.7.94](features/v0.7.94.md),
+[Issue 300 v0.7.94](test-guides/ISSUE_300_v0.7.94_REGRESSION_GUIDE.md), and
+[Runtime daemon recovery](test-guides/ISSUE_RUNTIME_DAEMON_RECOVERY_v0.7.94_REGRESSION_GUIDE.md).
 
 The release checklist is
 [docs/release.md](release.md#v0794-release-preparation).

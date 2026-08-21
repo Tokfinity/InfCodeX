@@ -1,6 +1,6 @@
-# Runtime daemon recovery regression guide — v0.7.95
+# Runtime daemon recovery regression guide — v0.7.94
 
-> Status: source candidate; not part of published v0.7.94
+> Status: v0.7.94 maintenance contract
 >
 > Scope: KodaX SDK and daemon only. Product-specific host UI documentation is
 > outside this guide.

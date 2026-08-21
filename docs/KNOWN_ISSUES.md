@@ -7,23 +7,6 @@ _Last Updated: 2026-08-21_
 > **Archive Notice**: Historical issue records are maintained in `docs/ISSUES_ARCHIVED.md`.
 > This file tracks the active issue backlog plus recently resolved issue records that have not yet been archived.
 
-## Post-v0.7.94 Runtime SDK Recovery Correction
-
-Current unreleased source observes Run-finalization, sandbox-termination, and
-managed-child cleanup rejections so a local failure cannot escape as an
-unhandled daemon-process rejection. Total terminal persistence failure reports
-`unknown` / `run_settlement_not_persisted` and retains the Session fence.
-Transport disconnects expose factual code, `connectionId`, and `reconnectable`
-metadata; they do not by themselves prove `daemon_crashed`. Credential-scoped
-failures retain only a bounded `failureKind`.
-
-SDK hosts must retain an admitted `runId`. After reconnect they query and await
-that exact Run with `runs.get()` / `runs.await()` and never replay
-`runs.start()`. See
-[ISSUE_RUNTIME_DAEMON_RECOVERY_v0.7.95_REGRESSION_GUIDE.md](test-guides/ISSUE_RUNTIME_DAEMON_RECOVERY_v0.7.95_REGRESSION_GUIDE.md).
-
----
-
 ## v0.7.94 Release Corrections
 
 The v0.7.94 maintenance release closes Issue 300 and the post-v0.7.93
@@ -33,9 +16,18 @@ repo roots only, never emits `safe.directory=*`, and requires linked-worktree
 lease through the same ASRT workspace policy; hard-linked targets are
 rejected. Scheduled daemon shutdown reports failed cleanup. A missing
 workspace directory omits the concurrent text sandbox at Run start.
-Runtime advertises `conversationHistory:2`. Capability versions
-`sandboxRuntime:4` / `crashOutcomeModel:2` and Issue 256 remain unchanged. See
-[ISSUE_300_v0.7.94_REGRESSION_GUIDE.md](test-guides/ISSUE_300_v0.7.94_REGRESSION_GUIDE.md).
+Runtime advertises `conversationHistory:2`. Explicit Skill invocation remains
+available for every enabled Skill; `disable-model-invocation` only blocks the
+model tool path. Run finalization, sandbox termination, and managed-child
+cleanup rejections are observed so a local failure cannot escape as an
+unhandled daemon-process rejection. Total terminal persistence failure
+reports `unknown` / `run_settlement_not_persisted` and retains the Session
+fence. After reconnect, hosts query and await the admitted `runId` and never
+replay `runs.start()`. Capability versions `sandboxRuntime:4` /
+`crashOutcomeModel:2` and Issue 256 remain unchanged. See
+[ISSUE_300_v0.7.94_REGRESSION_GUIDE.md](test-guides/ISSUE_300_v0.7.94_REGRESSION_GUIDE.md)
+and
+[ISSUE_RUNTIME_DAEMON_RECOVERY_v0.7.94_REGRESSION_GUIDE.md](test-guides/ISSUE_RUNTIME_DAEMON_RECOVERY_v0.7.94_REGRESSION_GUIDE.md).
 
 ---
 

@@ -115,12 +115,13 @@ describe('FEATURE_218 manual registry', () => {
     expect(sdk).toContain('gitSafeDirectory: authorized-repo-roots');
     expect(sdk).toContain('missing workspace directory');
     expect(sdk).toContain('conversationHistory:2');
+    expect(sdk).toContain('disable-model-invocation');
     expect(sandbox).toContain('gitSafeDirectory: authorized-repo-roots');
     expect(sandbox).toContain('never emits `safe.directory=*`');
     expect(sandbox).toContain('compatible live Bash lease');
   });
 
-  it('documents the post-v0.7.94 Runtime settlement and reconnect contracts', () => {
+  it('documents the v0.7.94 Runtime settlement and reconnect contracts', () => {
     const sdk = resolveKodaXManual({ topic: 'sdk' }).content;
     const troubleshooting = resolveKodaXManual({ topic: 'troubleshooting' }).content;
 

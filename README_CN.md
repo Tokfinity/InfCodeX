@@ -271,18 +271,16 @@ snapshot 与 commit 走同一套 ASRT workspace 策略。硬链接工作区目�
 Windows 沙箱 git 只信任已授权的仓库根，不再发出 `safe.directory=*`（Issue 300）。
 计划中的 daemon shutdown 在 cleanup 失败时报告失败，而不是声称安全停止。
 工作区目录尚不存在时，Run 启动会省略并发文本沙箱，而不是中止 option 构造。
-Runtime 广告 `conversationHistory:2`。`sandboxRuntime:4` 与
-`crashOutcomeModel:2` 不变。Issue 256 仍保持 Open。
-详见 [v0.7.94 发布清单](docs/release.md#v0794-release-preparation) 与
-[SDK Embedder Guide](public_docs/sdk/embedder-guide.md)。
-
-**未发布的 Runtime SDK 恢复加固**：所有 Run 终态收敛以及 sandbox / managed-child
+Runtime 广告 `conversationHistory:2`。显式 Skill 调用（`/<name>`、
+`/skill:<name>`）对每个已启用 Skill 始终可用；`disable-model-invocation`
+只关闭模型工具路径。所有 Run 终态收敛以及 sandbox / managed-child
 终止 Promise 都会显式观察 rejection。若两种终态记录都无法持久化，Run 以
 `unknown` + `run_settlement_not_persisted` 收敛，并继续关闭 Session 执行门禁。
-daemon 断线公开 typed code、`connectionId` 和 `reconnectable` 事实；provider
-在 run-scoped credential 下失败时只公开有界 `failureKind`。宿主一旦取得
+daemon 断线公开 typed code、`connectionId` 和 `reconnectable` 事实。宿主一旦取得
 `runId`，重连后必须在 replacement Runtime 上调用 `runs.get(runId)` 与
-`runs.await(runId)`，绝不能为同一已接纳 Run 再次调用 `runs.start()`。详见
+`runs.await(runId)`，绝不能为同一已接纳 Run 再次调用 `runs.start()`。
+`sandboxRuntime:4` 与 `crashOutcomeModel:2` 不变。Issue 256 仍保持 Open。
+详见 [v0.7.94 发布清单](docs/release.md#v0794-release-preparation) 与
 [SDK Embedder Guide](public_docs/sdk/embedder-guide.md#query-authoritative-session-and-run-lifecycle)。
 
 **v0.7.93 发布**：Windows 退出结算在精确 owner 已写入 durable `failed`

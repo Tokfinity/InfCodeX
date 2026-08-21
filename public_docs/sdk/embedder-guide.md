@@ -9,9 +9,11 @@ This guide reflects the `v0.7.94` SDK contract. npm publication remains a
 manual maintainer step. The release keeps `sandboxRuntime:4` and
 `crashOutcomeModel:2`, and adds concurrent sandboxed text mutations,
 authorized-root git trust (`gitSafeDirectory: authorized-repo-roots`),
-scheduled shutdown failure reporting, missing-workspace Run start, and
-`conversationHistory:2` on top
-of v0.7.93 failed-exit fast settlement, previous-boot ACL recovery, and
+scheduled shutdown failure reporting, missing-workspace Run start,
+`conversationHistory:2`, independent explicit Skill invocation, observed
+Run-finalization and process-cleanup rejections, typed disconnect facts,
+bounded safe failure categories, and exact-`runId` recovery after reconnect
+on top of v0.7.93 failed-exit fast settlement, previous-boot ACL recovery, and
 isolated Anthropic/OpenAI abort classification, plus the v0.7.92
 filesystem-effect operation-token coordinator, recorded-release owners,
 managed Session-before-completion ordering, and canonical-first resume
@@ -19,12 +21,6 @@ reconstruction. v0.7.91 still supplies bounded owner-scoped interactions,
 stale prepared-Session recovery, crash-resumable Runtime exit settlement,
 effective live output segments, and standalone lazy provider dependency
 bundling.
-
-The current source tree also contains unreleased post-v0.7.94 recovery
-hardening. It observes Run-finalization and process-cleanup rejections,
-distinguishes transport facts from durable Run outcomes, exposes bounded safe
-failure categories, and defines exact-`runId` recovery after reconnect. Do not
-attribute these additions to the published `@kodax-ai/kodax@0.7.94` package.
 
 This guide documents the SDK surfaces a host integrator needs that
 are NOT obvious from inspecting the type definitions alone:

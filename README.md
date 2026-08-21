@@ -732,23 +732,20 @@ Hard-linked workspace targets are rejected. Windows sandboxed git trusts
 authorized repo roots only and never emits `safe.directory=*` (Issue 300).
 Scheduled daemon shutdown reports failed cleanup instead of a safe stop.
 A missing workspace directory omits the concurrent text sandbox at Run start.
-Runtime advertises `conversationHistory:2`. Capability versions
+Runtime advertises `conversationHistory:2`. Explicit Skill invocation
+(`/<name>`, `/skill:<name>`) remains available for every enabled Skill;
+`disable-model-invocation` only blocks the model tool path. Every Run
+finalization and sandbox/managed-child termination rejection is observed. If
+neither terminal record can be persisted, the Run resolves `unknown` with
+`run_settlement_not_persisted` and keeps the Session fenced. Daemon connection
+loss exposes a typed code, `connectionId`, and `reconnectable` fact. Once a
+host receives a `runId`, it must retain it and, after reconnecting, call
+`runs.get(runId)` then `runs.await(runId)` on the replacement Runtime. It must
+never replay `runs.start()` for that admitted Run. Capability versions
 `sandboxRuntime:4` and `crashOutcomeModel:2` are unchanged. Issue 256 remains
 open. See the
 [v0.7.94 release checklist](docs/release.md#v0794-release-preparation)
-and [SDK Embedder Guide](public_docs/sdk/embedder-guide.md).
-
-**Unreleased Runtime SDK recovery hardening:** every Run finalization and
-sandbox/managed-child termination rejection is now observed. If neither
-terminal record can be persisted, the Run resolves `unknown` with
-`run_settlement_not_persisted` and keeps the Session fenced. Daemon connection
-loss exposes a typed code, `connectionId`, and `reconnectable` fact; provider
-failures under a run-scoped credential expose only a bounded `failureKind`.
-Once a host receives a `runId`, it must retain it and, after reconnecting, call
-`runs.get(runId)` then
-`runs.await(runId)` on the replacement Runtime. It must never replay
-`runs.start()` for that admitted Run. See the
-[SDK Embedder Guide](public_docs/sdk/embedder-guide.md#query-authoritative-session-and-run-lifecycle).
+and [SDK Embedder Guide](public_docs/sdk/embedder-guide.md#query-authoritative-session-and-run-lifecycle).
 
 **v0.7.93 release:** Runtime exit settlement no longer spends the 170-second
 Windows orderly-exit window after a durable `failed` shutdown outcome, can

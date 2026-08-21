@@ -6,51 +6,6 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### Changed
-
-- Skill invocation now has an explicit source contract across CLI, REPL, SDK,
-  Runtime, Workflow, and child-Agent paths. Every enabled Skill remains
-  explicitly invocable; `disable-model-invocation: true` only removes it from
-  model discovery and blocks the model `skill` tool. The legacy
-  `user-invocable` field remains parse-compatible but is no longer an execution
-  permission.
-- The public README files, package SDK guides, Embedder Guide, HLD/DD,
-  `kodax_manual`, and Runtime SDK type comments now document the same Skill
-  catalog, slash-argument, provenance, and child-delegation semantics.
-- KodaX README files, public SDK guidance, Runtime SDK type comments,
-  PRD/HLD/DD/ADR, feature/release/known-issue records, regression guidance, and
-  `kodax_manual` now describe the same post-v0.7.94 Run-settlement,
-  typed-disconnect, safe-failure, and exact-`runId` recovery contracts.
-
-### Fixed
-
-- Run terminal convergence now observes every finalization rejection. A durable
-  terminal status remains authoritative if only event publication fails; when
-  neither terminal record can be persisted, the public Run resolves as
-  `unknown` with `run_settlement_not_persisted` and the Session execution fence
-  remains closed instead of escalating the rejection to the daemon process.
-- Workspace-sandbox and managed-child emergency termination promises are now
-  observed and retain fail-closed diagnostics when process-tree drain cannot be
-  confirmed. Daemon transport disconnects expose typed connection facts, reject
-  oversized outbound frames before socket write, and credential-safe terminals
-  preserve a bounded `failureKind` without persisting provider error text.
-- Explicit `/<name>` and `/skill:<name>` tokens now resolve at the query head or
-  middle, preserve suffix arguments, and use the same host-owned expansion,
-  hooks, and permission pipeline in Classic, Ink, non-interactive CLI, queued
-  follow-ups, isolated Runtime, and terminal SDK helpers. Low-level
-  `SkillRegistry.invoke()` remains an explicit load/resolve primitive; SDK hosts
-  that need lifecycle hooks and permission admission use
-  `prepareInvocationExecution`. Expanded Skill content enters the provider
-  request exactly once.
-- A structured host `skillInvocation` now propagates an active explicit Skill to
-  Workflow children, while model-authored child objectives must use the
-  governed model tool and cannot bypass `disable-model-invocation` by writing a
-  slash token or forged Skill block.
-- The publish-tarball regression test now honors the standard `npm_execpath`
-  supplied by npm-compatible test launchers. The Windows optional-ASRT test
-  verifies the additional unrepresentable-path fallback without assuming that
-  local ASRT containment is always available.
-
 ---
 
 ## [0.7.94] - 2026-08-21
@@ -63,6 +18,16 @@ All notable changes to this project will be documented in this file.
   clone provenance is preserved. Embedders can require v2 to reject stale daemon
   processes that still expose the legacy projection contract. Auto-start replaces
   an idle v1 daemon and fails closed while an incompatible daemon is busy.
+- Skill invocation now has an explicit source contract across CLI, REPL, SDK,
+  Runtime, Workflow, and child-Agent paths. Every enabled Skill remains
+  explicitly invocable; `disable-model-invocation: true` only removes it from
+  model discovery and blocks the model `skill` tool. The legacy
+  `user-invocable` field remains parse-compatible but is no longer an execution
+  permission.
+- The public README files, package SDK guides, Embedder Guide, HLD/DD,
+  `kodax_manual`, and Runtime SDK type comments now document the same Skill
+  catalog, slash-argument, provenance, child-delegation, Run-settlement,
+  typed-disconnect, safe-failure, and exact-`runId` recovery contracts.
 
 ### Fixed
 
@@ -102,6 +67,32 @@ All notable changes to this project will be documented in this file.
   shared-account ACL transition fence.
 - Runtime start omits the concurrent text-mutation sandbox when the workspace
   directory does not exist yet, instead of aborting option construction.
+- Run terminal convergence now observes every finalization rejection. A durable
+  terminal status remains authoritative if only event publication fails; when
+  neither terminal record can be persisted, the public Run resolves as
+  `unknown` with `run_settlement_not_persisted` and the Session execution fence
+  remains closed instead of escalating the rejection to the daemon process.
+- Workspace-sandbox and managed-child emergency termination promises are now
+  observed and retain fail-closed diagnostics when process-tree drain cannot be
+  confirmed. Daemon transport disconnects expose typed connection facts, reject
+  oversized outbound frames before socket write, and credential-safe terminals
+  preserve a bounded `failureKind` without persisting provider error text.
+- Explicit `/<name>` and `/skill:<name>` tokens now resolve at the query head or
+  middle, preserve suffix arguments, and use the same host-owned expansion,
+  hooks, and permission pipeline in Classic, Ink, non-interactive CLI, queued
+  follow-ups, isolated Runtime, and terminal SDK helpers. Low-level
+  `SkillRegistry.invoke()` remains an explicit load/resolve primitive; SDK hosts
+  that need lifecycle hooks and permission admission use
+  `prepareInvocationExecution`. Expanded Skill content enters the provider
+  request exactly once.
+- A structured host `skillInvocation` now propagates an active explicit Skill to
+  Workflow children, while model-authored child objectives must use the
+  governed model tool and cannot bypass `disable-model-invocation` by writing a
+  slash token or forged Skill block.
+- The publish-tarball regression test now honors the standard `npm_execpath`
+  supplied by npm-compatible test launchers. The Windows optional-ASRT test
+  verifies the additional unrepresentable-path fallback without assuming that
+  local ASRT containment is always available.
 
 ---
 

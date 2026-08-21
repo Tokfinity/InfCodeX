@@ -27,7 +27,9 @@ the same ASRT workspace policy, rejects hard-linked sandboxed targets, trusts
 Windows git `safe.directory` for authorized repo roots only (Issue 300), and
 reports scheduled shutdown cleanup failures. A missing workspace directory
 omits the concurrent text sandbox at Run start. Runtime advertises
-`conversationHistory:2`. The v0.7.93 maintenance
+`conversationHistory:2`. Explicit Skill invocation is independent of model
+discovery. Run settlement observes finalization rejections and recovers an
+admitted `runId` without replaying `runs.start()`. The v0.7.93 maintenance
 slice observes a durable Windows `failed` shutdown outcome during orderly
 exit wait, recovers previous-boot shared ACL markers only after a verified
 boot change, and classifies Anthropic/OpenAI abort wrappers by isolated SDK
@@ -66,7 +68,7 @@ contracts; FEATURE_287 remains planned for v0.7.93 and the Worker owner-lease
 portion of Issue 256 remains open after v0.7.89 without a replacement target
 assigned by this release.
 
-Post-v0.7.94 source hardening keeps Run convergence inside
+The v0.7.94 source hardening keeps Run convergence inside
 `src/sdk-runtime.ts`: successful and failed executor callbacks feed one
 observed settlement chain, durable status outranks event-publication failure,
 and total terminal persistence failure records

@@ -2,18 +2,6 @@
 
 > Last updated: 2026-08-21
 >
-> **Unreleased SDK recovery addendum:** terminal convergence is a bounded
-> Runtime transaction. Every finalization rejection is observed. A durable
-> terminal remains authoritative if only event publication fails; if neither
-> terminal record can be persisted, the Run becomes `unknown` with
-> `run_settlement_not_persisted` and the Session execution fence remains
-> closed. Sandbox and managed-child termination rejection is diagnostic state,
-> never a process-global unhandled rejection. Transport close reports only
-> observable connection facts (`RuntimeDaemonDisconnectCode`, `connectionId`,
-> `reconnectable`); it is not itself proof of `daemon_crashed`. After admission,
-> clients retain `runId` and recover through `runs.get()` / `runs.await()` on a
-> replacement Runtime. They never replay `runs.start()` or provider/tool effects.
->
 > **v0.7.94 release addendum:** a direct text mutation may overlap a
 > model-started shell only after Runtime has acquired the same workspace ASRT
 > policy and moved both snapshot and write into that sandbox. The complete
@@ -30,8 +18,21 @@
 > `safe.directory=*` (Issue 300). `gitSafeDirectory: authorized-repo-roots`
 > is a v4 marker, not a version bump. Scheduled daemon shutdown reports failed
 > cleanup. `conversationHistory` advances to v2 as an additive negotiation
-> fact. Capability versions `sandboxRuntime:4` / `crashOutcomeModel:2` and
-> Issue 256 remain unchanged.
+> fact. Explicit Skill invocation remains available for every enabled Skill;
+> `disable-model-invocation` only blocks the model tool path. Terminal
+> convergence is a bounded Runtime transaction: every finalization rejection
+> is observed; a durable terminal remains authoritative if only event
+> publication fails; if neither terminal record can be persisted, the Run
+> becomes `unknown` with `run_settlement_not_persisted` and the Session
+> execution fence remains closed. Sandbox and managed-child termination
+> rejection is diagnostic state, never a process-global unhandled rejection.
+> Transport close reports only observable connection facts
+> (`RuntimeDaemonDisconnectCode`, `connectionId`, `reconnectable`); it is not
+> itself proof of `daemon_crashed`. After admission, clients retain `runId`
+> and recover through `runs.get()` / `runs.await()` on a replacement Runtime.
+> They never replay `runs.start()` or provider/tool effects. Capability
+> versions `sandboxRuntime:4` / `crashOutcomeModel:2` and Issue 256 remain
+> unchanged.
 >
 > **v0.7.93 release addendum:** Runtime exit settlement observes a durable
 > Windows `failed` shutdown outcome during the orderly wait and enters exact

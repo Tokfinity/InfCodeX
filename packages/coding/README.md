@@ -171,7 +171,10 @@ Runtime text tools may overlap a compatible live Bash lease through the same
 ASRT workspace policy. Windows sandboxed git trusts authorized repo roots
 only (`gitSafeDirectory: authorized-repo-roots`). Scheduled daemon shutdown
 reports failed cleanup. A missing workspace directory omits the concurrent
-text sandbox at Run start. Runtime advertises `conversationHistory:2`. See the
+text sandbox at Run start. Runtime advertises `conversationHistory:2`.
+Explicit Skill invocation is independent of model discovery. Run settlement
+observes finalization rejections and recovers an admitted `runId` through
+`runs.get()` / `runs.await()` instead of replaying `runs.start()`. See the
 [SDK Embedder Guide](../../public_docs/sdk/embedder-guide.md)
 for host capability requirements.
 
