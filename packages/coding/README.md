@@ -191,6 +191,19 @@ import { runKodaX, KodaXClient, KODAX_TOOLS } from '@kodax-ai/kodax/coding';
 import { runKodaX } from '@kodax-ai/coding';
 ```
 
+## Skill 调用所有权
+
+`runKodaX`/`startKodaX` 的模型路径只把允许模型调用的 Skill metadata 注入
+system context；内置 `skill` 工具会再次执行 `disableModelInvocation` admission。
+显式用户 slash 解析属于 CLI/REPL 宿主层，SDK 宿主应使用
+`@kodax-ai/kodax/repl` 的 `resolveUserSkillInvocation`/`prepareInvocationExecution`，
+或直接使用 `@kodax-ai/kodax/skills` 的 `SkillRegistry.invoke()`。不要仅把
+`/hidden-skill` 原始文本传给模型并期待它获得显式用户权限。
+
+当显式 Skill 启动 Workflow 或 child Agent 时，coding runtime 只信任宿主传入
+的结构化 `context.skillInvocation`。它会把当前 Skill 内容和资源根传给 child；
+child objective 自己生成的新 slash 引用仍走受限模型工具，不能扩大权限。
+
 ## 单次任务
 
 ```typescript

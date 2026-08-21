@@ -848,6 +848,13 @@ commands keep their existing mid-task guard. Both SA and AMA inject the active
 Skill's full expanded content exactly once, including SA workflow children
 that use a specialist `systemPromptOverride`.
 
+Child delegation trusts only the structured `skillInvocation` supplied by the
+host. That active Skill and its resource roots propagate to read/write children
+even if the objective does not repeat its name. A slash token or `<skill>` block
+present only in a model-authored child objective cannot manufacture user
+provenance; it remains a model-tool request and therefore still observes
+`disableModelInvocation`.
+
 Tool policy is runtime-owned. Isolated transports carry only an enforcement
 marker and rehydrate `allowed-tools` plus Pre/Post hooks from the runtime's
 trusted registry; a bound registry is authoritative and absence fails closed.

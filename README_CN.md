@@ -956,7 +956,7 @@ KodaX 有两层结构，SDK 用户需要分开理解：
 
 **经验法则**：需要 Runner / Agent / fan-out 时从 `/agent` 引入；只需要 skills 或 mcp API 时从 `/skills` 或 `/mcp` 引入，bundle 更小。窄子集是完整包的真子集 —— **不会**有额外符号。
 
-Skill 的两条触发路径彼此独立：未设置 `disable-model-invocation: true` 的 Skill 会把名称和描述注入模型上下文，因而可被自然语言自动发现；所有已启用 Skill 都始终支持用户显式输入 `/<name>` 或 `/skill:<name>`（可位于 query 头部或中间，后续文本作为参数）。`disable-model-invocation: true` 只关闭模型发现与模型 `skill` 工具调用，不会禁止显式 `/skill` 或 SDK `SkillRegistry.invoke()`。旧的 `user-invocable` 字段仅保留解析兼容性，不再充当执行权限。
+Skill 的两条触发路径彼此独立：未设置 `disable-model-invocation: true` 的 Skill 会把名称和描述注入模型上下文，因而可被自然语言自动发现；所有已启用 Skill 都始终支持用户显式输入 `/<name>` 或 `/skill:<name>`（可位于 query 头部或中间，后续文本作为参数）。`disable-model-invocation: true` 只关闭模型发现与模型 `skill` 工具调用，不会禁止显式 `/skill` 或 SDK `SkillRegistry.invoke()`。旧的 `user-invocable` 字段仅保留解析兼容性，不再充当执行权限。宿主会把显式调用展开一次并以结构化 `skillInvocation` 传入 SA/AMA、Workflow 与子 Agent；模型自己在 child objective 中写出的 slash token 仍是新的模型调用，必须经过受限 `skill` 工具，不能借委派绕过该标记。
 
 **Workflow process surface（FEATURE_229，v0.7.50）**：动态工作流不再只是 REPL 私有文本，而是 Agent 层可复用的 process/event/snapshot 契约。SDK 宿主可以订阅 `WorkflowProcessEvent`、轮询 `WorkflowProcessSnapshot`，并通过 `createWorkflowRunManager` / `createWorkflowLifecycleController` 做 stop/pause/resume、读取 final result/artifact、删除/清理 terminal runs、管理 workflow identity/preflight。`/coding` 负责 coding workflow backend 与 run graph，`/repl` 只是消费同一份 snapshot 渲染 UI；SDK 不需要解析 slash-command 输出或 Ink view-model。`KodaXEvents` 回调新增可选 meta 尾参（`KodaXToolEventMeta` / `KodaXActivityEventMeta` / `KodaXWorkflowEventMeta`），宿主据此把每个子 Agent 的 tool/thinking/progress 事件归因到对应 workflow run 与 child id，无需第二套事件协议；生成/保存的工作流脚本在运行前过 `validateRestrictedWorkflowSource`（编译 + 源策略检查）与 generator 的 repair/smoke 循环。分层取舍见 [docs/ADR.md ADR-040](docs/ADR.md)。
 

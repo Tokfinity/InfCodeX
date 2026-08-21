@@ -661,6 +661,11 @@ the model handles the request. `disable-model-invocation` controls only
 model-visible discovery and the model `skill` tool path; it never blocks an
 explicit user or SDK registry invocation. The legacy `user-invocable` field is
 parsed for compatibility but is not an execution permission.
+Structured `skillInvocation` is the provenance boundary for delegation. An
+active explicit user Skill is inherited by Workflow and child execution even
+when the generated child objective does not repeat the slash token. Text that
+the model writes into a child objective is not provenance: a new reference
+there remains a model invocation and must pass the model-tool gate.
 Queued explicit Skill text is host-owned: runtime mid-turn and idle-resume
 drains cannot expose it to the model before trusted expansion. The expanded
 active Skill is then present exactly once in either the SA or AMA system

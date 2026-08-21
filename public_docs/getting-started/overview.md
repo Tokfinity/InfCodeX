@@ -39,7 +39,8 @@ multi-instance auto-coordination with content-hash safety net.
 
 ### 🧩 Skills + self-construction
 
-Markdown skills, NL triggers
+Markdown Skills, model-visible NL discovery, explicit slash invocation for
+every enabled Skill
 
 5-stage self-modification staircase (scaffold → validate → stage → test →
 activate) gated by an 8-invariant admission contract.

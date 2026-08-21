@@ -113,7 +113,7 @@ you.
     </td>
     <td align="center" valign="top">
       <h3>🧩 Skills + self-construction</h3>
-      <sub>Markdown skills, NL triggers</sub>
+      <sub>Markdown Skills, model-visible NL discovery, explicit slash invocation</sub>
       <br><br>
       5-stage self-modification staircase (scaffold → validate → stage → test → activate) gated by an 8-invariant admission contract.
     </td>
@@ -1648,10 +1648,17 @@ const registry = new SkillRegistry(process.cwd(), {
 await registry.discover();
 
 const context: SkillContext = { workingDirectory: process.cwd() };
+const modelCatalog = registry.getSystemPromptSnippet(); // Excludes model-disabled Skills.
 const result = await registry.invoke('code-review', 'src/', context);
 ```
 
 Every enabled Skill is explicitly user-invocable with `/<name>` or `/skill:<name>`, including when the token appears in the middle of a query; the remaining text is passed as Skill arguments. `disable-model-invocation: true` only removes the Skill from the model-visible catalog and blocks the model's `skill` tool path. It does not block explicit user or SDK `SkillRegistry.invoke()` calls. The legacy `user-invocable` field is retained for parsing compatibility but is not an execution permission.
+
+Explicit invocation is expanded by the host and injected once as structured
+`skillInvocation` context. Workflow and child Agents inherit that active Skill.
+A slash reference authored only inside a model-generated child objective is a
+new model invocation, so it must pass through the governed `skill` tool and
+cannot elevate a `disable-model-invocation` Skill.
 
 **Key Features**: markdown-based skill files · natural-language triggering for model-visible Skills · explicit slash invocation for every enabled Skill · variable resolution · built-in skills included.
 
@@ -1840,16 +1847,18 @@ KodaX ships 50+ built-in tools, grouped below. They are registered as a single f
 
 ## Skills System
 
-KodaX includes a built-in Skills system that can be triggered by natural language:
+KodaX includes a built-in Skills system. Model-visible Skills can be triggered
+by natural language; every enabled Skill can be invoked explicitly:
 
 ```bash
 # Natural language triggering (no explicit /skill needed)
 kodax "帮我审查代码"           # Triggers code-review skill
-kodax "写测试用例"             # Triggers tdd skill
-kodax "提交代码"               # Triggers git-workflow skill
+kodax "创建一个新的 KodaX Skill" # Triggers skill-creator
 
 # Explicit skill commands (arguments may follow the token)
 kodax /code-review src/
+kodax /tdd packages/repl/src/
+kodax /git-workflow commit
 kodax "please use /skill:code-review src/"
 ```
 

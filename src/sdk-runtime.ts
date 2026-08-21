@@ -1010,6 +1010,7 @@ export interface RuntimeCommandInfo {
 
 export interface RuntimeSkillListFilter {
   readonly projectRoot?: string;
+  /** @deprecated Every enabled Skill is explicitly user-invocable. */
   readonly userInvocableOnly?: boolean;
 }
 
@@ -1027,10 +1028,12 @@ export interface RuntimeSkillFileSummary {
 export interface RuntimeSkillSummary {
   readonly name: string;
   readonly description: string;
+  /** Always true for enabled Skills; retained for wire compatibility. */
   readonly userInvocable: boolean;
   readonly argumentHint?: string;
   readonly path: string;
   readonly source: SkillMetadata["source"];
+  /** True when the Skill is hidden from model discovery and the model tool. */
   readonly disableModelInvocation: boolean;
 }
 

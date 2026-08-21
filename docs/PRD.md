@@ -489,6 +489,18 @@ capabilities. They are source-code subtrees under `packages/agent`, not separate
 workspace packages. Public SDK access is through `@kodax-ai/kodax/skills` and
 `@kodax-ai/kodax/mcp`.
 
+Skill invocation has two independent product paths. Model-visible Skills expose
+only their name and description for natural-language discovery and remain
+subject to model-tool admission. Every enabled Skill is also explicitly
+invocable by the user or SDK, including `/<name>` and `/skill:<name>` tokens at
+the query head or in the middle with trailing arguments. Consequently,
+`disable-model-invocation` disables model discovery and model tool invocation
+only; it must never disable an explicit user or `SkillRegistry.invoke()` call.
+An explicit Skill crosses Workflow and child-Agent boundaries only through the
+host-owned structured `skillInvocation` provenance record, and its complete
+expanded content appears exactly once in the provider request. Slash text
+authored only by a model inside a child objective is not user authority.
+
 Background Skill learning is Memory-first and remains outside foreground Run
 latency. A single correction, failure, or verifier result is evidence rather
 than mutation authority. Only repeated independently verified evidence, or an

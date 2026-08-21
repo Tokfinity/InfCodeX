@@ -237,6 +237,48 @@ audit trail, or policy gate.
 v0.7.42 (FEATURE_186 Phase 3) added a host hook on `SkillContext`
 that intercepts every `!`cmd`` execution.
 
+### Invocation ownership: explicit user vs model
+
+Skill discovery and explicit invocation are intentionally separate:
+
+- Model invocation sees only the name/description catalog for Skills whose
+  `disableModelInvocation` value is false. The coding `skill` tool enforces the
+  same gate before loading full content.
+- Every enabled Skill remains explicitly user-invocable. `/<name>` and
+  `/skill:<name>` may appear at the head or middle of a user query; text after
+  the selected token is the argument string.
+- `SkillRegistry.invoke()` is an explicit SDK primitive. It is not blocked by
+  `disable-model-invocation: true`; an embedder exposing it to a model must add
+  its own model-tool admission instead of treating the registry as that gate.
+- The legacy `user-invocable` frontmatter field and Runtime DTO field are kept
+  for compatibility. Enabled Skills report `userInvocable: true`.
+
+```ts
+import { SkillRegistry } from '@kodax-ai/kodax/skills';
+
+const registry = new SkillRegistry(process.cwd());
+await registry.discover();
+
+const modelCatalog = registry.getSystemPromptSnippet(); // model-visible only
+const explicit = await registry.invoke('manual-only-skill', 'src/', {
+  workingDirectory: process.cwd(),
+  projectRoot: process.cwd(),
+  disableDynamicContext: true,
+});
+```
+
+Terminal embedders accepting raw user text can reuse
+`resolveUserSkillInvocation` and `prepareInvocationExecution` from
+`@kodax-ai/kodax/repl`. The first resolves trusted registry membership and
+builds structured `skillInvocation`; the second owns hooks, permission policy,
+fork context, and finalization. Expanded Skill content belongs in structured
+system context exactly once, not in both the user prompt and system prompt.
+
+That structured field is also the delegation provenance boundary. Workflow and
+child runs inherit an active explicit Skill. A slash token written only inside
+a model-authored child objective is a new model invocation and must pass the
+governed `skill` tool; it cannot bypass `disable-model-invocation`.
+
 ### Quick start
 
 ```ts
@@ -314,9 +356,10 @@ host UI mediates everything else).
 
 ### The LLM-triggered `skill` tool path — `KodaXOptions.skillDynamicContext` (v0.7.58)
 
-The `SkillContext` hook above covers skills your host expands itself via
-`resolveSkillContent`. But a skill can also be **auto-triggered by the model**
-through the built-in `skill` tool — and that path builds its own `SkillContext`
+The `SkillContext` hook above covers Skills your host explicitly expands via
+`resolveSkillContent` or `SkillRegistry.invoke()`. A model-visible Skill can
+also be **auto-triggered by the model** through the built-in `skill` tool — and
+that path builds its own `SkillContext`
 internally, so it does not see your `resolveSkillContent` hook. Without wiring,
 an auto-triggered `SKILL.md` (including a cloned project-level
 `.kodax/skills/*`) would run its `` !`cmd` `` blocks through the built-in
@@ -3274,6 +3317,11 @@ await runtime.mcp.reloadServers();
 const commands = await runtime.catalog.commands(process.cwd());
 const skills = await runtime.catalog.skills({ projectRoot: process.cwd() });
 ```
+
+`runtime.catalog.skills()` returns all enabled Skills. `userInvocable` is true
+for every entry; `disableModelInvocation` tells the host whether the entry is
+also model-visible. The legacy `userInvocableOnly` filter is accepted for wire
+compatibility but no longer removes enabled Skills.
 
 This is the intended path for KodaX Space, IDE adapters, and settings UIs:
 session defaults go through `sessions.updateSettings()`, one-turn overrides go

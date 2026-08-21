@@ -13,7 +13,12 @@
  *
  * Usage:
  * ```ts
- * import { loadConfig, FileSessionStorage } from '@kodax-ai/kodax/repl';
+ * import {
+ *   loadConfig,
+ *   FileSessionStorage,
+ *   resolveUserSkillInvocation,
+ *   prepareInvocationExecution,
+ * } from '@kodax-ai/kodax/repl';
  * ```
  *
  * See docs/ADR.md ADR-024 for the SDK formalization decision.

@@ -578,6 +578,20 @@ Reasoning:
 - 保留 skill 的智能性
 - 避免 raw skill workflow 平铺污染所有角色
 
+Invocation boundary clarification (2026-08-21):
+
+- model invocation and explicit user/SDK invocation are separate sources;
+- every enabled Skill is explicitly invocable, while
+  `disable-model-invocation` controls only model catalog disclosure and the
+  model `skill` tool;
+- explicit `/<name>` and `/skill:<name>` tokens may occur at the query head or
+  in the middle, with following text passed as arguments;
+- Workflow/child reuse requires the host-owned structured `skillInvocation`
+  record. Model-authored slash text or copied `<skill>` text is not provenance
+  and remains subject to the model-tool gate;
+- the expanded Skill body is injected exactly once, while the original user
+  request and arguments remain user content.
+
 ---
 
 ## ADR-008: Evidence, Not Self-Report, Defines Completion

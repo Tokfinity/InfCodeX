@@ -84,11 +84,11 @@ stay host-owned when a non-empty CLI `uiHistory` exists.
 
 ## SDK
 
-- [Embedder Guide](./sdk/embedder-guide.md) — Full SDK integration guide for host applications
+- [Embedder Guide](./sdk/embedder-guide.md) — Full SDK integration guide for host applications, including explicit-vs-model Skill invocation and dynamic-context policy
 
 ## Guides
 
-*(More guides coming soon: CLI reference, REPL commands, sessions, multi-agent, skills, extensions, MCP, A2A, repo intelligence, memory, workflows, compaction, doctor, tools reference.)*
+*(More standalone guides coming soon: CLI reference, REPL commands, sessions, multi-agent, skills, extensions, MCP, A2A, repo intelligence, memory, workflows, compaction, doctor, tools reference. Current Skill SDK semantics are documented in the Embedder Guide.)*
 
 ## Reference
 

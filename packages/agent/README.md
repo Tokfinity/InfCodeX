@@ -58,6 +58,31 @@ console.log(result.output);
 
 The generic `Runner` path can be used with a caller-provided `llm` callback. The coding preset wires a richer substrate through `@kodax-ai/coding` / `@kodax-ai/kodax/coding`.
 
+## Skill 调用契约
+
+Skill 的可见性与显式调用是两个独立维度：
+
+| 来源 | 可用范围 | `disable-model-invocation: true` |
+|---|---|---|
+| 模型自然语言匹配 / `skill` 工具 | 仅 model-visible Skills | 不注入 catalog，并由工具拒绝 |
+| 用户 `/<name>`、`/skill:<name>` | 所有已启用 Skills | 仍可调用 |
+| SDK `SkillRegistry.invoke()` | 所有已启用 Skills | 仍可调用 |
+
+```typescript
+const registry = new SkillRegistry(process.cwd());
+await registry.discover();
+
+// 只包含允许模型发现的 name/description。
+const modelCatalog = registry.getSystemPromptSnippet();
+
+// 显式 SDK primitive；模型调用权限应由调用方的 tool admission 管理。
+const result = await registry.invoke('manual-only-skill', 'src/', {
+  workingDirectory: process.cwd(),
+});
+```
+
+`user-invocable` 仅保留 frontmatter/DTO 兼容性；已启用 Skill 始终显式可调用并报告 `userInvocable: true`。宿主显式展开后应以结构化 `skillInvocation` 传递一次；模型写在 child objective 里的 slash 文本不是用户来源证明，仍必须走模型工具策略。
+
 ## 常用公开能力
 
 - Agent primitives: `createAgent`, `createHandoff`, `Runner`, `DefaultSummaryCompaction`

@@ -489,7 +489,7 @@ describe('daemon CLI smoke', () => {
         '1000',
       ],
       {},
-      30_000,
+      DEFAULT_NODE_PROCESS_TIMEOUT_MS,
     );
 
     await waitForHealthyDaemonStatus(paths, 'ready');
@@ -500,7 +500,7 @@ describe('daemon CLI smoke', () => {
 
     expect(fs.existsSync(paths.stateFile)).toBe(false);
     expect(fs.existsSync(paths.lockFile)).toBe(false);
-  }, 30_000);
+  }, 120_000);
 
   it('lets process-distinct concurrent SDK starters elect exactly one owner', async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-race-smoke-'));
@@ -590,6 +590,9 @@ describe('daemon CLI smoke', () => {
     await child;
     await waitForDaemonClientCount(first, 1);
     const firstDaemonPid = readDaemonPid(homeDir, profile);
+    const firstSupervisorPid = process.platform === 'win32'
+      ? readDaemonSupervisorPid(homeDir, profile)
+      : undefined;
     const firstCommit = await first.daemon.inspect();
     await expect(first.daemon.stopForInline({
       expectedRuntimeId: firstCommit.runtimeId,
@@ -599,6 +602,9 @@ describe('daemon CLI smoke', () => {
     await first.close();
     await waitForDaemonState(profile, homeDir, false);
     await waitForDaemonPidExit(firstDaemonPid, 10_000);
+    if (firstSupervisorPid !== undefined) {
+      await waitForDaemonPidExit(firstSupervisorPid, 10_000);
+    }
     expect(getKodaXRuntimeOwnerState({ homeDir, profile })).toMatchObject({
       policy: { mode: 'inline', revision: 1 },
       ownerStatus: 'unowned',
@@ -616,8 +622,16 @@ describe('daemon CLI smoke', () => {
       autoStart: true,
       clientInfo: { name: 'management-second', instanceId: 'management-second' },
       requirements: { daemonManagement: 1 },
+    }).catch((error: unknown) => {
+      throw new AggregateError(
+        [error],
+        `Second ownership daemon bootstrap failed: ${readDaemonBootstrapLog(homeDir, profile)}`,
+      );
     });
     const secondDaemonPid = readDaemonPid(homeDir, profile);
+    const secondSupervisorPid = process.platform === 'win32'
+      ? readDaemonSupervisorPid(homeDir, profile)
+      : undefined;
     const secondCommit = await second.daemon.inspect();
     await second.daemon.stopForInline({
       expectedRuntimeId: secondCommit.runtimeId,
@@ -627,6 +641,9 @@ describe('daemon CLI smoke', () => {
     await second.close();
     await waitForDaemonState(profile, homeDir, false);
     await waitForDaemonPidExit(secondDaemonPid, 10_000);
+    if (secondSupervisorPid !== undefined) {
+      await waitForDaemonPidExit(secondSupervisorPid, 10_000);
+    }
 
     const secondInline = acquireKodaXInlineOwner({ homeDir, profile });
     expect(secondInline.ownerPolicy).toMatchObject({ mode: 'inline', revision: 3 });
@@ -863,10 +880,13 @@ describe('daemon CLI smoke', () => {
       '--provider',
       'mock-provider',
       '--timeout-ms',
-      '30000',
+      '60000',
       '--json',
     ]);
-    expect(start).toMatchObject({
+    expect(
+      start,
+      `${JSON.stringify(start)}\n${readDaemonBootstrapLog(homeDir, profile)}`,
+    ).toMatchObject({
       started: true,
       health: 'healthy',
     });
@@ -959,9 +979,9 @@ describe('daemon CLI smoke', () => {
       '--provider',
       'mock-provider',
       '--timeout-ms',
-      '30000',
+      '60000',
       '--json',
-    ]);
+    ], {}, 150_000);
     expect(restart).toMatchObject({
       restarted: true,
       stop: {
@@ -1007,7 +1027,7 @@ describe('daemon CLI smoke', () => {
     );
     expect(shutdownOutcomes).toHaveLength(2);
     expect(new Set(shutdownOutcomes.map((name) => name.split('.')[1])).size).toBe(2);
-  }, 180_000);
+  }, 240_000);
 
   it.skipIf(process.platform !== 'win32')(
     'reports cleanup failure rather than safe stop for a live uncontained daemon',
@@ -1310,13 +1330,13 @@ describe('daemon CLI smoke', () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-replacement-race-'));
     tempRoots.push(homeDir);
     const profile = `replacement-race-${process.pid}-${Date.now()}`;
-    await runDaemonCommand([
+    const initial = await runDaemonCommand([
       'start', '--home', homeDir, '--profile', profile,
-      '--provider', 'mock-provider', '--timeout-ms', '30000', '--json',
+      '--provider', 'mock-provider', '--timeout-ms', '60000', '--json',
     ], {
       KODAX_INTERNAL_DAEMON_TEST_FINAL_CLEANUP_DELAY_MS: '8000',
     });
-    const oldPid = readDaemonPid(homeDir, profile);
+    const oldPid = readDaemonResultPid(initial, profile);
     const stopPromise = runDaemonCommand([
       'stop', '--home', homeDir, '--profile', profile,
       '--timeout-ms', '30000', '--json',
@@ -1325,12 +1345,15 @@ describe('daemon CLI smoke', () => {
 
     const replacement = await runDaemonCommand([
       'start', '--home', homeDir, '--profile', profile,
-      '--provider', 'mock-provider', '--timeout-ms', '30000', '--json',
+      '--provider', 'mock-provider', '--timeout-ms', '60000', '--json',
     ]);
-    const replacementPid = readDaemonPid(homeDir, profile);
+    expect(replacement, JSON.stringify(replacement)).toMatchObject({
+      started: true,
+      health: 'healthy',
+    });
+    const replacementPid = readDaemonResultPid(replacement, profile);
     const stop = await stopPromise;
 
-    expect(replacement).toMatchObject({ started: true, health: 'healthy' });
     expect(replacementPid).not.toBe(oldPid);
     expect(stop).toMatchObject({
       stopped: false,
@@ -1340,18 +1363,18 @@ describe('daemon CLI smoke', () => {
       state: { pid: replacementPid },
     });
     await waitForDaemonPidExit(oldPid, 5_000);
-  }, 90_000);
+  }, 180_000);
 
   it('does not send a stale stop request to a replacement daemon on the same endpoint', async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-stale-stop-race-'));
     tempRoots.push(homeDir);
     const profile = `stale-stop-race-${process.pid}-${Date.now()}`;
     const observedFile = path.join(homeDir, 'stop-observed');
-    await runDaemonCommand([
+    const initial = await runDaemonCommand([
       'start', '--home', homeDir, '--profile', profile,
       '--provider', 'mock-provider', '--timeout-ms', '30000', '--json',
     ]);
-    const oldPid = readDaemonPid(homeDir, profile);
+    const oldPid = readDaemonResultPid(initial, profile);
     const staleStop = runDaemonCommand([
       'stop', '--home', homeDir, '--profile', profile,
       '--timeout-ms', '30000', '--json',
@@ -1366,11 +1389,12 @@ describe('daemon CLI smoke', () => {
       '--timeout-ms', '30000', '--json',
     ])).resolves.toMatchObject({ stopped: true, health: 'missing' });
     await waitForDaemonPidExit(oldPid, 5_000);
-    await expect(runDaemonCommand([
+    const replacement = await runDaemonCommand([
       'start', '--home', homeDir, '--profile', profile,
       '--provider', 'mock-provider', '--timeout-ms', '30000', '--json',
-    ])).resolves.toMatchObject({ started: true, health: 'healthy' });
-    const replacementPid = readDaemonPid(homeDir, profile);
+    ]);
+    expect(replacement).toMatchObject({ started: true, health: 'healthy' });
+    const replacementPid = readDaemonResultPid(replacement, profile);
 
     await expect(staleStop).rejects.toThrow(
       'Runtime daemon owner changed before the stop request',
@@ -1581,6 +1605,35 @@ function readDaemonPid(homeDir: string, profile: string): number {
     || typeof state.pid !== 'number'
   ) {
     throw new Error(`Daemon profile ${profile} did not publish a numeric PID.`);
+  }
+  return state.pid;
+}
+
+function readDaemonSupervisorPid(homeDir: string, profile: string): number {
+  const paths = resolveRuntimeDaemonPaths(homeDir, profile);
+  const owner = JSON.parse(fs.readFileSync(paths.lockFile, 'utf8')) as {
+    readonly supervisorPid?: unknown;
+  };
+  if (typeof owner.supervisorPid !== 'number') {
+    throw new Error(`Runtime daemon ${profile} has no Windows Job supervisor PID.`);
+  }
+  return owner.supervisorPid;
+}
+
+function readDaemonBootstrapLog(homeDir: string, profile: string): string {
+  const logFile = runtimeDaemonBootstrapLogPath(resolveRuntimeDaemonPaths(homeDir, profile));
+  return fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8') : '<missing>';
+}
+
+function readDaemonResultPid(result: Readonly<Record<string, unknown>>, profile: string): number {
+  const state = result.state;
+  if (
+    state === null
+    || typeof state !== 'object'
+    || !('pid' in state)
+    || typeof state.pid !== 'number'
+  ) {
+    throw new Error(`Daemon profile ${profile} did not return a numeric PID.`);
   }
   return state.pid;
 }

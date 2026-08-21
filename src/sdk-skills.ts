@@ -16,6 +16,11 @@
  * ```ts
  * import { loadSkill, SkillRegistry } from '@kodax-ai/kodax/skills';
  * ```
+ * `SkillRegistry.invoke()` is an explicit host/SDK primitive. The
+ * `disable-model-invocation` gate belongs to the coding model-tool path; it
+ * does not block direct registry invocation. Enabled Skills always report
+ * `userInvocable: true`; the legacy frontmatter field remains parse-only
+ * compatibility metadata.
  *
  * Note: explicit named re-exports (not `export * from
  * '@kodax-ai/agent/capabilities/skills'`) because rollup-plugin-dts does

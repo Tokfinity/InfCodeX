@@ -86,6 +86,30 @@ const options: RepLOptions = {
 await runInteractiveMode(options);
 ```
 
+## 显式 Skill 调用
+
+Ink、Classic 和非交互 CLI 都由宿主解析用户输入中的 `/<name>` 与
+`/skill:<name>`；token 可位于 query 头部或中间，后缀文本作为参数。
+忙碌时识别出的 Skill 输入以 host-owned queue entry 保存，不能被 Runtime
+mid-turn drain 当成普通自然语言提前送给模型。
+
+嵌入式终端宿主可复用同一解析/展开入口：
+
+```typescript
+import { resolveUserSkillInvocation } from '@kodax-ai/kodax/repl';
+
+const userInput = '/manual-only-skill src/';
+const request = await resolveUserSkillInvocation(userInput, {
+  workingDirectory: process.cwd(),
+  projectRoot: process.cwd(),
+});
+```
+
+返回的 `request.skillInvocation` 是后续 Workflow/child 复用显式 Skill 的
+结构化来源证明。`disable-model-invocation` 只影响模型 catalog/tool，不影响
+此入口。需要完整 hooks、权限和 finalize 生命周期的宿主应继续使用导出的
+`prepareInvocationExecution`，不要把 `request.prompt` 当普通用户文本重复注入。
+
 ## 配置管理
 
 ```typescript
@@ -176,6 +200,7 @@ Session-only consumers can import the same session APIs from `@kodax-ai/kodax/se
 
 - Entrypoints: `runInkInteractiveMode`, `runInteractiveMode`, `processSpecialSyntax`
 - Commands: `InteractiveContext`, `parseCommand`, `executeCommand`, `BUILTIN_COMMANDS`
+- Explicit Skills: `resolveUserSkillInvocation`, `createUserSkillInvocation`, `prepareInvocationExecution`
 - Config: `loadConfig`, `prepareRuntimeConfig`, `saveConfig`, custom-provider CRUD, MCP-server CRUD
 - Sessions: `FileSessionStorage`, `findMostRecentResumableSession`, `listSessions`, `loadSession`, `readConversationHistory`, `readFullTranscript`, `readSessionCapture`, `exportSessionBundle`, `forkSession`, `rewindSession`, `archiveSession`, `watchSessions`
 - Permissions: `computeConfirmTools`, `isPermissionMode`, `isToolCallAllowed`, `getPlanModeBlockReason`

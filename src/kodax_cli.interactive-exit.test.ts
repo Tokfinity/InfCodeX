@@ -384,6 +384,8 @@ async function importMainWithMocks(options: {
       readExtensionsIntegration: vi.fn(() => ({ revision: 'default', document: { version: 1, paths: [] } })),
       ensureExampleConfigFiles: vi.fn(() => []),
       resolveInteractiveSurfacePreference: vi.fn(() => surface),
+      resolveUserSkillInvocation: vi.fn(async () => undefined),
+      prepareInvocationExecution: vi.fn(),
       runInteractiveMode,
       runInkInteractiveMode,
       inspectProviderSetupReadiness,

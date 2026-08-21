@@ -1,6 +1,6 @@
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 import { afterEach, describe, expect, it } from 'vitest';
@@ -31,6 +31,10 @@ function run(
 }
 
 function runNpm(args: readonly string[]) {
+  const configuredNpmCli = process.env.npm_execpath?.trim();
+  if (configuredNpmCli && existsSync(configuredNpmCli)) {
+    return run(process.execPath, [configuredNpmCli, ...args]);
+  }
   if (process.platform === 'win32') {
     const npmCli = join(
       dirname(process.execPath),
@@ -61,20 +65,25 @@ describe('Issue 206 publish tarball regression', () => {
     const packed = runNpm([
       'pack',
       '--json',
-      '--ignore-scripts',
       '--pack-destination',
       scratch,
     ]);
 
     expect(packed.status, packed.error || packed.stderr || packed.stdout).toBe(0);
-    const rows = JSON.parse(packed.stdout) as ReadonlyArray<{
-      readonly filename?: string;
-    }>;
+    const parsed: unknown = JSON.parse(packed.stdout);
+    const rows: readonly unknown[] = Array.isArray(parsed) ? parsed : [parsed];
     expect(rows).toHaveLength(1);
-    const filename = rows[0]?.filename;
+    const row = rows[0];
+    const filename = typeof row === 'object'
+      && row !== null
+      && 'filename' in row
+      ? row.filename
+      : undefined;
     expect(filename).toBeTypeOf('string');
 
-    const tarball = join(scratch, filename ?? '');
+    const tarball = typeof filename === 'string' && isAbsolute(filename)
+      ? filename
+      : join(scratch, typeof filename === 'string' ? filename : '');
     const audited = run(process.execPath, [
       resolve('scripts/audit-sidecar-tarball.mjs'),
       tarball,

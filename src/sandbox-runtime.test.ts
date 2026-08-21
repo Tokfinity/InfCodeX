@@ -2530,11 +2530,20 @@ describe('ASRT workspace shell adapter', () => {
   it.runIf(process.platform === 'win32')(
     'keeps persistent Windows sensitive-root guards outside ASRT startup propagation',
     async () => {
-      const agentHome = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-agent-home-'));
-      tempRoots.push(agentHome);
+      const home = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-home-'));
+      tempRoots.push(home);
+      vi.stubEnv('USERPROFILE', home);
+      const agentHome = path.join(home, '.kodax');
+      await Promise.all(['', 'runtime', 'processes', 'learned'].map((directory) => (
+        mkdir(path.join(agentHome, directory), { recursive: true })
+      )));
+      await Promise.all([
+        mkdir(path.join(home, '.ssh')),
+        mkdir(path.join(home, 'AppData')),
+      ]);
       vi.stubEnv('KODAX_HOME', agentHome);
       const sandbox = createAsrtShellSandbox({
-        workspaceRoot: os.homedir(),
+        workspaceRoot: home,
         shouldSandbox: () => true,
       });
 
@@ -2542,8 +2551,8 @@ describe('ASRT workspace shell adapter', () => {
         toolCallId: 'bash-home-workspace',
         toolInput: { command: 'echo safe' },
         command: 'echo safe',
-        cwd: os.homedir(),
-        env: process.env,
+        cwd: home,
+        env: { Path: process.env.Path ?? process.env.PATH },
       });
       if (!prepared) throw new Error('expected home workspace invocation');
       try {
@@ -2563,7 +2572,7 @@ describe('ASRT workspace shell adapter', () => {
             readonly paths: readonly { readonly path: string }[];
           }).paths.map((entry) => entry.path);
         });
-        expect(guardedPaths).toContain(path.join(os.homedir(), '.ssh'));
+        expect(guardedPaths).toContain(path.join(home, '.ssh'));
         const guardScript = capturedSyncSpawns
           .map((call) => {
             const encodedIndex = call.args.indexOf('-EncodedCommand');

@@ -297,6 +297,19 @@ describe('FEATURE_218 manual registry', () => {
     expect(content).toContain('without overwriting');
   });
 
+  it('documents explicit user invocation separately from model Skill discovery', () => {
+    const content = resolveKodaXManual({ topic: 'skills' }).content;
+
+    expect(content).toContain('disable-model-invocation: true');
+    expect(content).toContain('/<name>');
+    expect(content).toContain('/skill:<name>');
+    expect(content).toContain('head or middle');
+    expect(content).toContain('SkillRegistry.invoke()');
+    expect(content).toContain('user-invocable');
+    expect(content).toContain('structured `skillInvocation`');
+    expect(content).toContain('model-authored child objective');
+  });
+
   it('documents the v0.7.73 setup, Qwen Token Plan, and Runtime permission contracts', () => {
     const install = resolveKodaXManual({ topic: 'install' }).content;
     const providers = resolveKodaXManual({ topic: 'providers' }).content;

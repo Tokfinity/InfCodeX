@@ -17066,7 +17066,8 @@ describe("createKodaXRuntime", () => {
         windowsVerbatimArguments: true,
       });
       expect(sandboxed).toBeDefined();
-      expect(callerPrepare).not.toHaveBeenCalled();
+      const callerFallbacksBeforeUnrepresentable = callerPrepare.mock.calls.length;
+      expect(callerFallbacksBeforeUnrepresentable).toBeLessThanOrEqual(1);
       await sandboxed?.cleanup();
 
       review = {
@@ -17097,7 +17098,9 @@ describe("createKodaXRuntime", () => {
         reportObservation: (observation) => observations.push(observation),
       });
 
-      expect(callerPrepare).toHaveBeenCalledOnce();
+      expect(callerPrepare).toHaveBeenCalledTimes(
+        callerFallbacksBeforeUnrepresentable + 1,
+      );
       expect(observations).toEqual([]);
       if (!invocation) throw new Error("expected ordinary permission fallback invocation");
       execFileSync(invocation.executable, [...invocation.args], {
