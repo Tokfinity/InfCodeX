@@ -4536,7 +4536,14 @@ async function startWorkspaceSessionClientWithFence(
         if (idleTimer) clearTimeout(idleTimer);
         setWorkspaceSessionReferenced(child, true);
         if (activeLeases > 0) {
-          await new Promise<void>((resolve) => { resolveDrained = resolve; });
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, WORKSPACE_SESSION_TERMINATE_GRACE_MS);
+            timer.unref?.();
+            resolveDrained = () => {
+              clearTimeout(timer);
+              resolve();
+            };
+          });
         }
         await withExclusiveFileSystemEffectFence(
           commandFenceHeld || closeAclFenceHeld,

@@ -927,6 +927,8 @@ afterEach(async () => {
   workspaceSessionControl.releaseClose?.();
   workspaceSessionControl.releaseClose = undefined;
   workspaceSessionControl.closeExitCode = 0;
+  stubbornBroker.mode = 'none';
+  await _resetFileSystemEffectLeasesForTests();
   await resetAsrtWorkspaceSessionsForTest();
   capturedBrokerRequests.length = 0;
   capturedSpawnEnvironments.length = 0;
@@ -939,7 +941,6 @@ afterEach(async () => {
   capturedSandboxWrapConfigs.length = 0;
   capturedKillSignals.length = 0;
   capturedProcessTreeKillOptions.length = 0;
-  stubbornBroker.mode = 'none';
   deferredBrokerRead.enabled = false;
   deferredBrokerRead.missing = false;
   sandboxInitialize.mockReset();
@@ -4556,6 +4557,28 @@ describe('ASRT workspace shell adapter', () => {
       arg.includes('sandbox-workspace-session')
       || arg === '__asrt-workspace-session'
     )))).toHaveLength(process.platform === 'win32' ? 2 : 3);
+  });
+
+  it('closes an outstanding workspace lease without waiting for the Vitest hook budget', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-session-drain-bound-'));
+    tempRoots.push(root);
+    const sandbox = createAsrtShellSandbox({
+      workspaceRoot: root,
+      shouldSandbox: () => true,
+    });
+    const prepared = await sandbox.prepare({
+      toolCallId: 'bash-unreleased-lease',
+      toolInput: { command: 'node --version' },
+      command: 'node --version',
+      executable: process.execPath,
+      args: ['--version'],
+      cwd: root,
+      env: process.env,
+    });
+    if (!prepared) throw new Error('expected workspace invocation');
+    const startedAt = Date.now();
+    await resetAsrtWorkspaceSessionsForTest();
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
   });
 
   it('uses the compiled KodaX internal session entry in bundled builds', async () => {
