@@ -1110,15 +1110,39 @@ describe('ASRT workspace shell adapter', () => {
     'keeps POSIX workspace session startup behind a real namespace mutation',
     async () => {
       processTreeKillMock.childPid = process.pid;
+      const blockedRoot = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-text-posix-namespace-start-'));
       const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-text-posix-namespace-'));
-      tempRoots.push(root);
+      tempRoots.push(blockedRoot, root);
+      const blockedTarget = path.join(blockedRoot, 'target.txt');
       const target = path.join(root, 'target.txt');
+      await writeFile(blockedTarget, 'before', 'utf8');
       await writeFile(target, 'before', 'utf8');
+      const releaseStartupNamespace = await acquireExclusiveFileSystemEffectLease();
+      try {
+        const blocked = createAsrtTextFileMutationSandbox({
+          workspaceRoot: blockedRoot,
+          shouldSandbox: () => true,
+        });
+        await expect(blocked.read({
+          toolCallId: 'edit-behind-namespace-startup',
+          toolName: 'edit',
+          toolInput: { path: blockedTarget },
+          path: blockedTarget,
+        })).resolves.toEqual({ status: 'unavailable' });
+        expect(capturedWorkspaceSessionConfigs).toHaveLength(0);
+      } finally {
+        await releaseStartupNamespace();
+      }
+
       const sandbox = createAsrtTextFileMutationSandbox({
         workspaceRoot: root,
         shouldSandbox: () => true,
       });
-      const releaseNamespace = await acquireExclusiveFileSystemEffectLease();
+      await vi.waitFor(() => expect(capturedWorkspaceSessionConfigs).not.toHaveLength(0));
+      const releaseNamespace = await vi.waitFor(
+        () => acquireExclusiveFileSystemEffectLease(),
+        { timeout: 5_000 },
+      );
       try {
         await expect(sandbox.read({
           toolCallId: 'edit-behind-namespace',
@@ -1717,50 +1741,104 @@ describe('ASRT workspace shell adapter', () => {
 
       await otherPreparation;
       expect(otherFailure).toBeUndefined();
-      expect(otherResult).toBeUndefined();
+      expect(otherResult).toEqual(expect.objectContaining({
+        executable: process.execPath,
+        cleanup: expect.any(Function),
+      }));
       expect(workspaceSessionControl.releaseReady).toBeDefined();
-      workspaceSessionControl.releaseReady?.();
-      workspaceSessionControl.releaseReady = undefined;
+      try {
+        await (otherResult as { cleanup: () => Promise<unknown> }).cleanup();
+      } finally {
+        workspaceSessionControl.releaseReady?.();
+        workspaceSessionControl.releaseReady = undefined;
+      }
     },
   );
 
-  it('falls back without initializing ACLs while an ordinary filesystem effect is active', async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-acl-fence-'));
-    tempRoots.push(root);
-    const releaseActiveEffect = await acquireFileSystemMutationLease();
-    let preparing: ReturnType<ReturnType<typeof createAsrtShellSandbox>['prepare']>;
-    let preparedPrematurely = false;
-    let sessionCountWhileBlocked = 0;
-    try {
-      const sandbox = createAsrtShellSandbox({
-        workspaceRoot: root,
-        shouldSandbox: () => true,
-      });
-      preparing = sandbox.prepare({
-        toolCallId: 'acl-fence',
-        toolInput: { command: 'echo safe' },
-        command: 'echo safe',
-        cwd: root,
-        env: process.env,
-      });
-      preparedPrematurely = await Promise.race([
-        preparing.then(() => true),
-        new Promise<false>((resolve) => setTimeout(() => resolve(false), 300)),
-      ]);
-      sessionCountWhileBlocked = capturedWorkspaceSessionConfigs.length;
-    } finally {
-      await releaseActiveEffect();
-    }
+  it.runIf(process.platform === 'win32')(
+    'falls back without initializing ACLs while an ordinary filesystem effect is active',
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-acl-fence-'));
+      tempRoots.push(root);
+      const releaseActiveEffect = await acquireFileSystemMutationLease();
+      let preparing: ReturnType<ReturnType<typeof createAsrtShellSandbox>['prepare']>;
+      let preparedPrematurely = false;
+      let sessionCountWhileBlocked = 0;
+      try {
+        const sandbox = createAsrtShellSandbox({
+          workspaceRoot: root,
+          shouldSandbox: () => true,
+        });
+        preparing = sandbox.prepare({
+          toolCallId: 'acl-fence',
+          toolInput: { command: 'echo safe' },
+          command: 'echo safe',
+          cwd: root,
+          env: process.env,
+        });
+        preparedPrematurely = await Promise.race([
+          preparing.then(() => true),
+          new Promise<false>((resolve) => setTimeout(() => resolve(false), 300)),
+        ]);
+        sessionCountWhileBlocked = capturedWorkspaceSessionConfigs.length;
+      } finally {
+        await releaseActiveEffect();
+      }
 
-    const invocation = await preparing!;
-    try {
-      expect(preparedPrematurely).toBe(true);
-      expect(sessionCountWhileBlocked).toBe(0);
-      expect(invocation).toBeUndefined();
-    } finally {
-      await invocation?.cleanup();
-    }
-  });
+      const invocation = await preparing!;
+      try {
+        expect(preparedPrematurely).toBe(true);
+        expect(sessionCountWhileBlocked).toBe(0);
+        expect(invocation).toBeUndefined();
+      } finally {
+        await invocation?.cleanup();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'starts a POSIX workspace session while an ordinary shell effect is active',
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-posix-shell-overlap-'));
+      tempRoots.push(root);
+      const releaseActiveEffect = await acquireFileSystemMutationLease();
+      let preparing: ReturnType<ReturnType<typeof createAsrtShellSandbox>['prepare']>;
+      let preparedPrematurely = false;
+      let sessionCountWhileBlocked = 0;
+      try {
+        const sandbox = createAsrtShellSandbox({
+          workspaceRoot: root,
+          shouldSandbox: () => true,
+        });
+        preparing = sandbox.prepare({
+          toolCallId: 'posix-shell-overlap',
+          toolInput: { command: 'echo safe' },
+          command: 'echo safe',
+          cwd: root,
+          env: process.env,
+        });
+        preparedPrematurely = await Promise.race([
+          preparing.then(() => true),
+          new Promise<false>((resolve) => setTimeout(() => resolve(false), 300)),
+        ]);
+        sessionCountWhileBlocked = capturedWorkspaceSessionConfigs.length;
+      } finally {
+        await releaseActiveEffect();
+      }
+
+      const invocation = await preparing!;
+      try {
+        expect(preparedPrematurely).toBe(true);
+        expect(sessionCountWhileBlocked).toBe(1);
+        expect(invocation).toEqual(expect.objectContaining({
+          executable: process.execPath,
+          cleanup: expect.any(Function),
+        }));
+      } finally {
+        await invocation?.cleanup();
+      }
+    },
+  );
 
   it.runIf(process.platform === 'win32')(
     'does not materialize workspace grants before an admitted Windows command',
