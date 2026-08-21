@@ -4884,6 +4884,7 @@ function firstUpgradeableCapability(
     "crashOutcomeModel",
     "managedRunDurability",
     "sessionEventJournal",
+    "conversationHistory",
     "runtimeAutoModeGuardrail",
     "runtimeEventCoalescing",
     "liveOutputSegments",

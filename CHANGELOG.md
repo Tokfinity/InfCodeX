@@ -16,7 +16,8 @@ All notable changes to this project will be documented in this file.
   `conversationHistory:2` only when
   ordinary history is topology-transparent across managed context and direct
   clone provenance is preserved. Embedders can require v2 to reject stale daemon
-  processes that still expose the legacy projection contract.
+  processes that still expose the legacy projection contract. Auto-start replaces
+  an idle v1 daemon and fails closed while an incompatible daemon is busy.
 
 ### Fixed
 

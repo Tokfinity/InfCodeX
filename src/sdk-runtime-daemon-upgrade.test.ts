@@ -168,6 +168,51 @@ describe('Runtime daemon capability upgrade', () => {
     expect(newClose).toHaveBeenCalled();
   });
 
+  it('replaces an idle daemon whose ordinary conversation history contract is still v1', async () => {
+    const calls: string[] = [];
+    const oldTransport = createLegacyTransport({
+      preflight: createPreflight(),
+      calls,
+      close: vi.fn(async () => undefined),
+      capabilities: {
+        conversationHistory: { version: 1 },
+        daemonManagement: { version: 1 },
+        runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
+        runtimeEventCoalescing: { version: 1 },
+        sandboxRuntime: { version: 4 },
+      },
+      onRollback: () => upgradeMocks.readLockOwner.mockReturnValue(undefined),
+    });
+    const newClose = vi.fn(async () => undefined);
+    upgradeMocks.acquireProcessLease
+      .mockResolvedValueOnce(createLease(oldTransport))
+      .mockResolvedValueOnce(createLease(createCurrentTransport(calls, newClose)));
+    upgradeMocks.readLockOwner.mockReturnValue({
+      runtimeId: RUNTIME_ID,
+      pid: 101,
+      createdAt: '2026-07-19T00:00:00.000Z',
+      kind: 'daemon',
+    });
+
+    const runtime = await connectKodaXRuntime({
+      autoStart: true,
+      profile: PROFILE,
+      homeDir: path.join('C:', 'kodax-upgrade-test'),
+      requirements: { conversationHistory: 2 },
+    });
+
+    expect(runtime.identity.runtimeId).toBe('runtime_current');
+    expect(calls).toEqual([
+      'old:initialize',
+      'old:daemon.management.get',
+      'old:daemon.rollbackToInline',
+      'old:close',
+      'new:initialize',
+    ]);
+    await runtime.close();
+    expect(newClose).toHaveBeenCalled();
+  });
+
   it('replaces an idle v3 daemon when auto-start requires the v4 non-persistent fallback contract', async () => {
     const calls: string[] = [];
     const oldTransport = createLegacyTransport({
@@ -1076,6 +1121,47 @@ describe('Runtime daemon capability upgrade', () => {
     expect(upgradeMocks.enableDaemonOwner).not.toHaveBeenCalled();
   });
 
+  it('fails closed instead of replacing a busy daemon whose conversation history is v1', async () => {
+    const calls: string[] = [];
+    const oldTransport = createLegacyTransport({
+      preflight: createPreflight({
+        blockers: ['active_runs'],
+        canStop: false,
+      }),
+      calls,
+      close: vi.fn(async () => undefined),
+      capabilities: {
+        conversationHistory: { version: 1 },
+        daemonManagement: { version: 1 },
+        runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
+        runtimeEventCoalescing: { version: 1 },
+        sandboxRuntime: { version: 4 },
+      },
+    });
+    upgradeMocks.acquireProcessLease.mockResolvedValueOnce(createLease(oldTransport));
+
+    await expect(
+      connectKodaXRuntime({
+        autoStart: true,
+        profile: PROFILE,
+        homeDir: path.join('C:', 'kodax-upgrade-test'),
+        requirements: { conversationHistory: 2 },
+      }),
+    ).rejects.toMatchObject({
+      code: 'daemon_capability_upgrade_required',
+      recoverable: true,
+      restartRequired: true,
+      capability: 'conversationHistory',
+      preflight: {
+        blockers: ['active_runs'],
+        canStop: false,
+      },
+    });
+    expect(calls).toEqual(['old:initialize', 'old:daemon.management.get', 'old:close']);
+    expect(upgradeMocks.acquireProcessLease).toHaveBeenCalledTimes(1);
+    expect(upgradeMocks.enableDaemonOwner).not.toHaveBeenCalled();
+  });
+
   it('refuses to replace a busy daemon that only lacks Runtime event coalescing', async () => {
     const calls: string[] = [];
     const oldTransport = createLegacyTransport({
@@ -1313,6 +1399,7 @@ function createCurrentTransport(
       }
       return initializeResult('runtime_current', {
         actorSettlementConvergence: { version: 2 },
+        conversationHistory: { version: 2 },
         crashOutcomeModel: { version: 2 },
         managedRunDurability: { version: 1 },
         liveOutputSegments: { version: 1 },
