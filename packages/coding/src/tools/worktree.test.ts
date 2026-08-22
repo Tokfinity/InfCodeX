@@ -30,6 +30,7 @@ vi.mock('@kodax-ai/agent', async (importOriginal) => ({
   containWindowsEffectProcess: vi.fn(async (pid: number) => ({
     drained: Promise.resolve(),
     supervisorPid: pid,
+    unref: () => undefined,
   })),
   killChildProcessTree: vi.fn(async () => ({ status: 'already-exited' as const })),
 }));
@@ -120,6 +121,7 @@ afterEach(async () => {
   vi.mocked(containWindowsEffectProcess).mockImplementation(async (pid: number) => ({
     drained: Promise.resolve(),
     supervisorPid: pid,
+    unref: () => undefined,
   }));
   vi.mocked(killChildProcessTree).mockResolvedValue({ status: 'already-exited' });
   await _resetFileSystemEffectLeasesForTests();
@@ -333,6 +335,7 @@ describe('toolWorktreeCreate', () => {
       vi.mocked(containWindowsEffectProcess).mockResolvedValueOnce({
         drained,
         supervisorPid: 2_147_483_647,
+        unref: () => undefined,
       });
       vi.mocked(killChildProcessTree).mockResolvedValueOnce({ status: 'already-exited' });
 

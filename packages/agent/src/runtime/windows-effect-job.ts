@@ -199,6 +199,14 @@ export interface WindowsEffectJob {
   readonly drained: Promise<void>;
   /** The process that owns the Job handle and proves the effect is still fenced. */
   readonly supervisorPid: number;
+  /** Stops the supervisor and its pipes from keeping the Node.js event loop alive. */
+  unref?(): void;
+}
+
+function unrefIfSupported(resource: object | null): void {
+  if (resource === null) return;
+  const unref = Reflect.get(resource, 'unref');
+  if (typeof unref === 'function') unref.call(resource);
 }
 
 export async function containWindowsEffectProcess(
@@ -265,7 +273,18 @@ export async function containWindowsEffectProcess(
   }
   supervisor.stdout?.resume();
   supervisor.stderr?.resume();
-  return { drained, supervisorPid: supervisor.pid };
+  let unreferenced = false;
+  return {
+    drained,
+    supervisorPid: supervisor.pid,
+    unref: () => {
+      if (unreferenced) return;
+      unreferenced = true;
+      supervisor.unref();
+      unrefIfSupported(supervisor.stdout);
+      unrefIfSupported(supervisor.stderr);
+    },
+  };
 }
 
 function waitForEffectJobReady(supervisor: ChildProcess): Promise<void> {

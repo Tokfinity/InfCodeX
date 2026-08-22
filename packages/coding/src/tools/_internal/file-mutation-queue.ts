@@ -36,12 +36,14 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 
 import {
   acquireKodaXFileLock,
   cleanupRegisteredManagedChildren,
   emitKodaXDiagnostic,
   getAgentConfigHome,
+  KodaXFileLockTimeoutError,
   readProcessStartIdentity,
 } from '@kodax-ai/agent';
 import {
@@ -60,7 +62,15 @@ const FILE_SYSTEM_EFFECT_CONFLICT_TIMEOUT_MS = 1_000;
 // Exact-policy ACL setup/reset is serialized, not rejected. Real Windows
 // account/ACL work can legitimately exceed the ordinary conflict budget.
 const FILE_SYSTEM_EFFECT_POLICY_TRANSITION_TIMEOUT_MS = 30_000;
+// Workspace ACL reset already has a 130-second process deadline. Keep the
+// coordinator wait bounded to the same budget so standalone SDK cleanup also
+// fails closed instead of polling forever.
+const FILE_SYSTEM_EFFECT_CLEANUP_TIMEOUT_MS = 130_000;
+const FILE_SYSTEM_EFFECT_POLL_MAX_MS = 500;
 const FILE_SYSTEM_EFFECT_RELEASE_ATTEMPTS = 3;
+const FILE_SYSTEM_EFFECT_BACKGROUND_RETRY_ATTEMPTS = 10;
+const FILE_SYSTEM_EFFECT_BACKGROUND_RETRY_MAX_MS = 5_000;
+const FILE_SYSTEM_EFFECT_BACKGROUND_LOCK_TIMEOUT_MS = 0;
 const EFFECT_STATE_FILE = 'model-filesystem-effects.json';
 const EFFECT_COORDINATOR_LOCK = 'model-filesystem-effects.lock';
 let effectOwnerStartIdentity: string | undefined;
@@ -77,6 +87,8 @@ const EFFECT_TEST_SCOPE = process.env.VITEST_WORKER_ID === undefined
   : `${process.env.VITEST_WORKER_ID}-${process.pid}`.replace(/[^a-z0-9_-]/gi, '_');
 
 interface EffectLeaseOwner {
+  // Kept inside `namespaces` so older Runtime copies still fence this owner.
+  readonly cleanupTransition?: boolean;
   readonly effectFinished?: boolean;
   readonly effectPid?: number;
   readonly effectProcessStartIdentity?: string;
@@ -99,12 +111,19 @@ interface EffectLeaseStorage {
   readonly statePath: string;
 }
 
-type EffectLeaseMode = 'direct' | 'namespace' | 'shell';
+type EffectLeaseMode = 'cleanup' | 'direct' | 'namespace' | 'shell';
 
 export interface FileSystemMutationLeaseRelease {
   (): Promise<void>;
   bindEffectProcess(pid: number, windowsJobContained: boolean): Promise<void>;
   finishEffectProcess(): Promise<void>;
+}
+
+export class FileSystemCleanupAdmissionTimeoutError extends Error {
+  constructor() {
+    super('Filesystem cleanup could not drain active effects before its deadline.');
+    this.name = 'FileSystemCleanupAdmissionTimeoutError';
+  }
 }
 
 function effectRuntimePath(agentHome: string, name: string): string {
@@ -135,6 +154,7 @@ function isEffectLeaseOwner(value: unknown): value is EffectLeaseOwner {
   const record = value as Record<string, unknown>;
   return Number.isInteger(record.pid)
     && typeof record.token === 'string'
+    && (record.cleanupTransition === undefined || typeof record.cleanupTransition === 'boolean')
     && (record.effectPid === undefined || Number.isInteger(record.effectPid))
     && (record.effectProcessStartIdentity === undefined
       || typeof record.effectProcessStartIdentity === 'string')
@@ -216,6 +236,7 @@ function modelEffectTreeState(
       || currentIdentity === owner.effectProcessStartIdentity
     )
   ) return 'alive';
+  if (currentIdentity === undefined && isProcessAlive(owner.effectPid)) return 'unknown';
   if (process.platform !== 'win32') return 'absent';
   if (owner.windowsJobContained === true || !managedCleanupSkipped) return 'absent';
   return 'unknown';
@@ -287,14 +308,17 @@ async function removeEffectReleaseMarkerBestEffort(
   }
 }
 
-async function reconcileAbandonedManagedEffects(storage: EffectLeaseStorage): Promise<boolean> {
+async function reconcileAbandonedManagedEffects(
+  storage: EffectLeaseStorage,
+  acquireTimeoutMs = FILE_SYSTEM_EFFECT_COORDINATOR_TIMEOUT_MS,
+): Promise<boolean> {
   const hasAbandonedExternalEffect = await withEffectLeaseCoordinator(storage, async () => {
     const state = await readEffectLeaseState(storage);
     return [...state.namespaces, ...state.shells]
       .some((owner) => !isEffectLeaseOwnerAlive(owner));
-  });
+  }, acquireTimeoutMs);
   if (!hasAbandonedExternalEffect) return true;
-  const cleanup = await cleanupRegisteredManagedChildren();
+  const cleanup = await cleanupRegisteredManagedChildren({ requireCurrentOwnerCleanup: true });
   return cleanup.skipped > 0;
 }
 
@@ -328,10 +352,11 @@ async function writeEffectLeaseState(
 async function withEffectLeaseCoordinator<T>(
   storage: EffectLeaseStorage,
   operation: () => Promise<T>,
+  acquireTimeoutMs = FILE_SYSTEM_EFFECT_COORDINATOR_TIMEOUT_MS,
 ): Promise<T> {
   const release = await acquireKodaXFileLock(
     storage.coordinatorPath,
-    FILE_SYSTEM_EFFECT_COORDINATOR_TIMEOUT_MS,
+    acquireTimeoutMs,
   );
   try {
     return await operation();
@@ -344,6 +369,7 @@ function namespaceConflictsWithShell(
   namespace: EffectLeaseOwner,
   shellPolicyKey: string | undefined,
 ): boolean {
+  if (namespace.cleanupTransition === true) return true;
   if (namespace.sandboxPolicyKey === undefined) return true;
   // Only an exact, verified sandbox policy may share the ACL transition.
   // Ordinary permission execution still has to wait until path-based ACL
@@ -361,11 +387,51 @@ function shellConflictsWithNamespace(
   return shell.sandboxPolicyKey !== namespacePolicyKey;
 }
 
-async function acquireEffectLease(
+async function rollbackQueuedCleanupLease(
+  storage: EffectLeaseStorage,
+  token: string,
+  acquireTimeoutMs = FILE_SYSTEM_EFFECT_COORDINATOR_TIMEOUT_MS,
+): Promise<void> {
+  await withEffectLeaseCoordinator(storage, async () => {
+    const state = await readEffectLeaseState(storage);
+    if (!state.namespaces.some((lease) => lease.token === token)) return;
+    await writeEffectLeaseState(storage, {
+      ...state,
+      namespaces: state.namespaces.filter((lease) => lease.token !== token),
+    });
+    await removeEffectReleaseMarkerBestEffort(storage, token);
+  }, acquireTimeoutMs);
+}
+
+interface EffectLeaseContext {
+  readonly cleanupOwner: EffectLeaseOwner;
+  readonly mode: EffectLeaseMode;
+  readonly owner: EffectLeaseOwner;
+  readonly storage: EffectLeaseStorage;
+  readonly token: string;
+}
+
+interface EffectLeaseLifecycle {
+  backgroundFinishScheduled: boolean;
+  backgroundReleaseScheduled: boolean;
+  effectFinished: boolean;
+  effectProcessBound: boolean;
+  releaseRecorded: boolean;
+  releaseRequested: boolean;
+  released: boolean;
+  stateUpdateAttempted: boolean;
+}
+
+type EffectLeaseAdmission =
+  | true
+  | false
+  | 'sandbox-acl-transition'
+  | 'sandbox-policy-conflict';
+
+function createEffectLeaseContext(
   mode: EffectLeaseMode,
   sandboxPolicyKey?: string,
-): Promise<FileSystemMutationLeaseRelease> {
-  const storage = captureEffectLeaseStorage();
+): EffectLeaseContext {
   const token = randomUUID();
   const ownerStartIdentity = getEffectOwnerStartIdentity();
   const owner: EffectLeaseOwner = {
@@ -376,306 +442,641 @@ async function acquireEffectLease(
       : { processStartIdentity: ownerStartIdentity }),
     ...(sandboxPolicyKey === undefined ? {} : { sandboxPolicyKey }),
   };
-  const conflictDeadline = Date.now() + FILE_SYSTEM_EFFECT_CONFLICT_TIMEOUT_MS;
-  const policyTransitionDeadline = Date.now()
-    + FILE_SYSTEM_EFFECT_POLICY_TRANSITION_TIMEOUT_MS;
-  const managedCleanupSkipped = await reconcileAbandonedManagedEffects(storage);
-  while (true) {
-    const acquired = await withEffectLeaseCoordinator(storage, async () => {
-      const storedState = await readEffectLeaseState(storage);
-      const releasedTokens = await releasedEffectTokens(storage, storedState);
-      const state = removeStaleEffectLeases(
-        storedState,
-        managedCleanupSkipped,
-        releasedTokens,
-      );
-      const retainedTokens = new Set(
-        [...state.direct, ...state.namespaces, ...state.shells]
-          .map((lease) => lease.token),
-      );
-      const conflicts = mode === 'shell'
-        ? state.direct.length > 0
-          || state.namespaces.some((lease) => (
-            namespaceConflictsWithShell(lease, sandboxPolicyKey)
-          ))
-        : mode === 'direct'
-          ? state.shells.length > 0 || state.namespaces.length > 0
-          : state.direct.length > 0
-            || state.namespaces.length > 0
-            || state.shells.some((lease) => (
-              shellConflictsWithNamespace(lease, sandboxPolicyKey)
-            ));
-      if (conflicts) {
-        const incompatibleSandboxPolicy = sandboxPolicyKey !== undefined && (
-          mode === 'namespace'
-            ? state.namespaces.some((lease) => (
-                lease.sandboxPolicyKey !== sandboxPolicyKey
-              ))
-              || state.shells.some((lease) => (
-                shellConflictsWithNamespace(lease, sandboxPolicyKey)
-              ))
-            : mode === 'shell'
-              && state.namespaces.some((lease) => (
-                lease.sandboxPolicyKey !== undefined
-                && lease.sandboxPolicyKey !== sandboxPolicyKey
-              ))
-        );
-        if (incompatibleSandboxPolicy) return 'sandbox-policy-conflict' as const;
-        const sandboxAclTransition = state.direct.length === 0 && (
-          mode === 'namespace'
-            ? sandboxPolicyKey !== undefined
-              && state.shells.every((lease) => (
-                !shellConflictsWithNamespace(lease, sandboxPolicyKey)
-              ))
-              && state.namespaces.length > 0
-              && state.namespaces.every((lease) => (
-                lease.sandboxPolicyKey === sandboxPolicyKey
-              ))
-            : mode === 'shell'
-              && sandboxPolicyKey === undefined
-              && state.namespaces.length > 0
-              && state.namespaces.every((lease) => (
-                lease.sandboxPolicyKey !== undefined
-              ))
-        );
-        return sandboxAclTransition
-          ? 'sandbox-acl-transition' as const
-          : false;
-      }
-      await writeEffectLeaseState(storage, mode === 'shell'
-        ? { direct: state.direct, namespaces: state.namespaces, shells: [...state.shells, owner] }
-        : mode === 'direct'
-          ? { direct: [...state.direct, owner], namespaces: state.namespaces, shells: state.shells }
-          : { direct: state.direct, namespaces: [...state.namespaces, owner], shells: state.shells });
-      await Promise.all([...releasedTokens]
-        .filter((releasedToken) => !retainedTokens.has(releasedToken))
-        .map((releasedToken) => (
-        removeEffectReleaseMarkerBestEffort(storage, releasedToken)
-        )));
-      return true;
-    });
-    if (acquired === true) break;
-    if (acquired === 'sandbox-policy-conflict') {
-      throw new Error('A different sandbox policy is already active.');
-    }
-    const deadline = acquired === 'sandbox-acl-transition'
-      ? policyTransitionDeadline
-      : conflictDeadline;
-    if (Date.now() >= deadline) {
-      throw new Error('A model filesystem effect is already active; retry after it finishes.');
-    }
-    await new Promise<void>((resolve) => setTimeout(resolve, 20));
-  }
+  // Cleanup is deliberately policy-agnostic. Older Runtime readers do not
+  // understand `cleanupTransition`, but they already treat an unscoped
+  // namespace owner as conflicting with every shell admission.
+  return {
+    cleanupOwner: {
+      pid: owner.pid,
+      token: owner.token,
+      ...(owner.processStartIdentity === undefined
+        ? {}
+        : { processStartIdentity: owner.processStartIdentity }),
+      cleanupTransition: true,
+    },
+    mode,
+    owner,
+    storage: captureEffectLeaseStorage(),
+    token,
+  };
+}
 
-  let released = false;
-  let releaseRecorded = false;
-  let releaseAttempt: Promise<void> | undefined;
-  let backgroundReleaseScheduled = false;
-  let stateUpdateAttempted = false;
-  let effectProcessBound = false;
-  let effectFinished = false;
-  const releaseOnce = (): Promise<void> => withEffectLeaseCoordinator(storage, async () => {
-    const state = await readEffectLeaseState(storage);
-    const owned = (mode === 'shell'
-      ? state.shells
-      : mode === 'direct'
-        ? state.direct
-        : state.namespaces)
-      .find((lease) => lease.token === token);
-    if (owned === undefined) {
-      if (releaseRecorded || stateUpdateAttempted) {
-        await removeEffectReleaseMarkerBestEffort(storage, token);
-        return;
+function effectOwners(
+  state: EffectLeaseState,
+  mode: EffectLeaseMode,
+): readonly EffectLeaseOwner[] {
+  if (mode === 'direct') return state.direct;
+  if (mode === 'shell') return state.shells;
+  return state.namespaces;
+}
+
+function updateEffectOwners(
+  state: EffectLeaseState,
+  mode: EffectLeaseMode,
+  update: (owners: readonly EffectLeaseOwner[]) => readonly EffectLeaseOwner[],
+): EffectLeaseState {
+  if (mode === 'direct') return { ...state, direct: update(state.direct) };
+  if (mode === 'shell') return { ...state, shells: update(state.shells) };
+  return { ...state, namespaces: update(state.namespaces) };
+}
+
+function cleanupNamespaceIsBlocked(
+  state: EffectLeaseState,
+  token: string,
+  queuedIndex: number,
+): boolean {
+  return state.namespaces.some((lease, index) => (
+    lease.token !== token
+    && (
+      lease.cleanupTransition !== true
+      || queuedIndex === -1
+      || index < queuedIndex
+    )
+  ));
+}
+
+function effectLeaseConflicts(
+  state: EffectLeaseState,
+  context: EffectLeaseContext,
+  queuedCleanupIndex: number,
+): boolean {
+  const policyKey = context.owner.sandboxPolicyKey;
+  if (context.mode === 'cleanup') return state.direct.length > 0
+    || cleanupNamespaceIsBlocked(state, context.token, queuedCleanupIndex)
+    || state.shells.some((lease) => (
+      lease.effectFinished !== true || shellConflictsWithNamespace(lease, policyKey)
+    ));
+  if (context.mode === 'shell') return state.direct.length > 0
+    || state.namespaces.some((lease) => namespaceConflictsWithShell(lease, policyKey));
+  if (context.mode === 'direct') return state.shells.length > 0
+    || state.namespaces.length > 0;
+  return state.direct.length > 0
+    || state.namespaces.length > 0
+    || state.shells.some((lease) => shellConflictsWithNamespace(lease, policyKey));
+}
+
+function hasIncompatibleSandboxPolicy(
+  state: EffectLeaseState,
+  context: EffectLeaseContext,
+): boolean {
+  const policyKey = context.owner.sandboxPolicyKey;
+  if (context.mode === 'cleanup' || policyKey === undefined) return false;
+  if (context.mode === 'namespace') return state.namespaces.some(
+    (lease) => lease.sandboxPolicyKey !== policyKey,
+  ) || state.shells.some((lease) => shellConflictsWithNamespace(lease, policyKey));
+  return context.mode === 'shell' && state.namespaces.some((lease) => (
+    lease.sandboxPolicyKey !== undefined && lease.sandboxPolicyKey !== policyKey
+  ));
+}
+
+function isSandboxAclTransition(
+  state: EffectLeaseState,
+  context: EffectLeaseContext,
+): boolean {
+  if (context.mode === 'cleanup') return true;
+  if (state.namespaces.some((lease) => lease.cleanupTransition === true)) return true;
+  if (state.direct.length > 0) return false;
+  const policyKey = context.owner.sandboxPolicyKey;
+  if (context.mode === 'namespace') return policyKey !== undefined
+    && state.shells.every((lease) => !shellConflictsWithNamespace(lease, policyKey))
+    && state.namespaces.length > 0
+    && state.namespaces.every((lease) => lease.sandboxPolicyKey === policyKey);
+  return context.mode === 'shell'
+    && policyKey === undefined
+    && state.namespaces.length > 0
+    && state.namespaces.every((lease) => lease.sandboxPolicyKey !== undefined);
+}
+
+function appendEffectLeaseOwner(
+  state: EffectLeaseState,
+  context: EffectLeaseContext,
+  queuedCleanupIndex: number,
+): EffectLeaseState {
+  if (context.mode === 'cleanup' && queuedCleanupIndex !== -1) return state;
+  const owner = context.mode === 'cleanup' ? context.cleanupOwner : context.owner;
+  return updateEffectOwners(state, context.mode, (owners) => [...owners, owner]);
+}
+
+async function removeObsoleteReleaseMarkers(
+  storage: EffectLeaseStorage,
+  releasedTokens: ReadonlySet<string>,
+  retainedTokens: ReadonlySet<string>,
+): Promise<void> {
+  await Promise.all([...releasedTokens]
+    .filter((token) => !retainedTokens.has(token))
+    .map((token) => removeEffectReleaseMarkerBestEffort(storage, token)));
+}
+
+async function tryAcquireEffectLease(
+  context: EffectLeaseContext,
+  managedCleanupSkipped: boolean,
+  onCleanupQueued: () => void,
+  acquireTimeoutMs = FILE_SYSTEM_EFFECT_COORDINATOR_TIMEOUT_MS,
+): Promise<EffectLeaseAdmission> {
+  return withEffectLeaseCoordinator(context.storage, async () => {
+    const stored = await readEffectLeaseState(context.storage);
+    const releasedTokens = await releasedEffectTokens(context.storage, stored);
+    const state = removeStaleEffectLeases(stored, managedCleanupSkipped, releasedTokens);
+    const retainedTokens = new Set(
+      [...state.direct, ...state.namespaces, ...state.shells].map((lease) => lease.token),
+    );
+    const queuedIndex = state.namespaces.findIndex((lease) => lease.token === context.token);
+    if (queuedIndex !== -1) onCleanupQueued();
+    if (effectLeaseConflicts(state, context, queuedIndex)) {
+      if (hasIncompatibleSandboxPolicy(state, context)) return 'sandbox-policy-conflict';
+      if (context.mode === 'cleanup' && queuedIndex === -1) {
+        await writeEffectLeaseState(context.storage, appendEffectLeaseOwner(state, context, -1));
+        onCleanupQueued();
       }
-      throw new Error('Filesystem effect lease ownership was lost.');
+      return isSandboxAclTransition(state, context) ? 'sandbox-acl-transition' : false;
+    }
+    await writeEffectLeaseState(
+      context.storage,
+      appendEffectLeaseOwner(state, context, queuedIndex),
+    );
+    if (context.mode === 'cleanup') onCleanupQueued();
+    await removeObsoleteReleaseMarkers(context.storage, releasedTokens, retainedTokens);
+    return true;
+  }, acquireTimeoutMs);
+}
+
+function checkEffectLeaseDeadline(
+  context: EffectLeaseContext,
+  deadline: number,
+  cleanupWaitExpired: boolean,
+  onCleanupWaitExpired?: (error: Error) => void,
+): boolean {
+  if (performance.now() < deadline) return cleanupWaitExpired;
+  if (context.mode !== 'cleanup') {
+    throw new Error('A model filesystem effect is already active; retry after it finishes.');
+  }
+  if (!cleanupWaitExpired) onCleanupWaitExpired?.(new FileSystemCleanupAdmissionTimeoutError());
+  return true;
+}
+
+function waitForEffectLeasePoll(delayMs: number, allowProcessExit: boolean): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, delayMs);
+    if (allowProcessExit) timer.unref?.();
+  });
+}
+
+function effectLeaseCoordinatorTimeout(
+  context: EffectLeaseContext,
+  cleanupDeadline: number,
+): number {
+  if (context.mode !== 'cleanup') return FILE_SYSTEM_EFFECT_COORDINATOR_TIMEOUT_MS;
+  return Math.max(
+    0,
+    Math.min(FILE_SYSTEM_EFFECT_COORDINATOR_TIMEOUT_MS, cleanupDeadline - performance.now()),
+  );
+}
+
+function isCoordinatorLockTimeout(error: unknown): boolean {
+  return error instanceof KodaXFileLockTimeoutError
+    || (
+      error instanceof Error
+      && 'code' in error
+      && error.code === 'kodax_file_lock_timeout'
+    );
+}
+
+async function reconcileManagedEffectsBeforeAdmission(
+  context: EffectLeaseContext,
+  cleanupDeadline: number,
+  onCleanupWaitExpired?: (error: Error) => void,
+): Promise<{ readonly cleanupWaitExpired: boolean; readonly managedCleanupSkipped: boolean }> {
+  let cleanupWaitExpired = false;
+  let pollDelayMs = 20;
+  while (true) {
+    try {
+      const managedCleanupSkipped = await reconcileAbandonedManagedEffects(
+        context.storage,
+        effectLeaseCoordinatorTimeout(context, cleanupDeadline),
+      );
+      if (context.mode === 'cleanup') {
+        cleanupWaitExpired = checkEffectLeaseDeadline(
+          context,
+          cleanupDeadline,
+          cleanupWaitExpired,
+          onCleanupWaitExpired,
+        );
+      }
+      return { cleanupWaitExpired, managedCleanupSkipped };
+    } catch (error: unknown) {
+      const cleanupDeadlineReached = context.mode === 'cleanup'
+        && performance.now() >= cleanupDeadline;
+      if (!cleanupDeadlineReached) throw error;
+      cleanupWaitExpired = checkEffectLeaseDeadline(
+        context,
+        cleanupDeadline,
+        cleanupWaitExpired,
+        onCleanupWaitExpired,
+      );
+      if (!isCoordinatorLockTimeout(error)) throw error;
+      await waitForEffectLeasePoll(pollDelayMs, true);
+      pollDelayMs = Math.min(pollDelayMs * 2, FILE_SYSTEM_EFFECT_POLL_MAX_MS);
+    }
+  }
+}
+
+async function waitForEffectLeaseAdmission(
+  context: EffectLeaseContext,
+  onCleanupWaitExpired?: (error: Error) => void,
+): Promise<void> {
+  const conflictDeadline = performance.now() + FILE_SYSTEM_EFFECT_CONFLICT_TIMEOUT_MS;
+  const policyTransitionDeadline = performance.now()
+    + FILE_SYSTEM_EFFECT_POLICY_TRANSITION_TIMEOUT_MS;
+  const cleanupDeadline = performance.now() + FILE_SYSTEM_EFFECT_CLEANUP_TIMEOUT_MS;
+  const reconciliation = await reconcileManagedEffectsBeforeAdmission(
+    context,
+    cleanupDeadline,
+    onCleanupWaitExpired,
+  );
+  const managedCleanupSkipped = reconciliation.managedCleanupSkipped;
+  let cleanupQueued = false;
+  let cleanupWaitExpired = reconciliation.cleanupWaitExpired;
+  let pollDelayMs = 20;
+  try {
+    while (true) {
+      let acquired: EffectLeaseAdmission;
+      try {
+        acquired = await tryAcquireEffectLease(
+          context,
+          managedCleanupSkipped,
+          () => { cleanupQueued = true; },
+          effectLeaseCoordinatorTimeout(context, cleanupDeadline),
+        );
+      } catch (error: unknown) {
+        const cleanupDeadlineReached = context.mode === 'cleanup'
+          && performance.now() >= cleanupDeadline;
+        if (cleanupDeadlineReached) {
+          cleanupWaitExpired = checkEffectLeaseDeadline(
+            context,
+            cleanupDeadline,
+            cleanupWaitExpired,
+            onCleanupWaitExpired,
+          );
+        }
+        if (!cleanupDeadlineReached || !isCoordinatorLockTimeout(error)) throw error;
+        await waitForEffectLeasePoll(pollDelayMs, true);
+        pollDelayMs = Math.min(pollDelayMs * 2, FILE_SYSTEM_EFFECT_POLL_MAX_MS);
+        continue;
+      }
+      if (context.mode === 'cleanup') {
+        cleanupWaitExpired = checkEffectLeaseDeadline(
+          context,
+          cleanupDeadline,
+          cleanupWaitExpired,
+          onCleanupWaitExpired,
+        );
+      }
+      if (acquired === true) break;
+      if (acquired === 'sandbox-policy-conflict') {
+        throw new Error('A different sandbox policy is already active.');
+      }
+      const deadline = context.mode === 'cleanup'
+        ? cleanupDeadline
+        : acquired === 'sandbox-acl-transition'
+          ? policyTransitionDeadline
+          : conflictDeadline;
+      if (context.mode !== 'cleanup') {
+        cleanupWaitExpired = checkEffectLeaseDeadline(
+          context,
+          deadline,
+          cleanupWaitExpired,
+          onCleanupWaitExpired,
+        );
+      }
+      await waitForEffectLeasePoll(pollDelayMs, cleanupWaitExpired);
+      pollDelayMs = Math.min(pollDelayMs * 2, FILE_SYSTEM_EFFECT_POLL_MAX_MS);
+    }
+  } catch (error: unknown) {
+    if (!cleanupQueued) throw error;
+    try {
+      await rollbackQueuedCleanupLease(
+        context.storage,
+        context.token,
+        cleanupWaitExpired || performance.now() >= cleanupDeadline
+          ? FILE_SYSTEM_EFFECT_BACKGROUND_LOCK_TIMEOUT_MS
+          : FILE_SYSTEM_EFFECT_COORDINATOR_TIMEOUT_MS,
+      );
+    } catch (rollbackError: unknown) {
+      throw new AggregateError(
+        [error, rollbackError],
+        'Filesystem cleanup admission and queued-marker rollback both failed.',
+      );
+    }
+    throw error;
+  }
+}
+
+function replaceOwnedEffectLease(
+  state: EffectLeaseState,
+  context: EffectLeaseContext,
+  replace: (owner: EffectLeaseOwner) => EffectLeaseOwner,
+  missingMessage: string,
+): EffectLeaseState {
+  const owners = effectOwners(state, context.mode);
+  if (!owners.some((lease) => lease.token === context.token)) throw new Error(missingMessage);
+  return updateEffectOwners(state, context.mode, (current) => current.map((lease) => (
+    lease.token === context.token ? replace(lease) : lease
+  )));
+}
+
+async function bindEffectLeaseProcess(
+  context: EffectLeaseContext,
+  lifecycle: EffectLeaseLifecycle,
+  effectPid: number,
+  windowsJobContained: boolean,
+): Promise<void> {
+  if (!Number.isInteger(effectPid) || effectPid <= 0) {
+    throw new Error(`Invalid filesystem effect process id: ${effectPid}`);
+  }
+  const effectProcessStartIdentity = readProcessStartIdentity(effectPid);
+  const boundOwner: EffectLeaseOwner = {
+    ...(context.mode === 'cleanup' ? context.cleanupOwner : context.owner),
+    effectPid,
+    effectFinished: false,
+    ...(effectProcessStartIdentity === undefined ? {} : { effectProcessStartIdentity }),
+    posixProcessGroup: process.platform !== 'win32',
+    windowsJobContained,
+  };
+  await withEffectLeaseCoordinator(context.storage, async () => {
+    const state = await readEffectLeaseState(context.storage);
+    await writeEffectLeaseState(context.storage, replaceOwnedEffectLease(
+      state,
+      context,
+      () => boundOwner,
+      'Filesystem effect lease ownership was lost before process binding.',
+    ));
+  });
+  lifecycle.effectProcessBound = true;
+  lifecycle.effectFinished = false;
+}
+
+async function finishEffectLeaseProcessOnce(
+  context: EffectLeaseContext,
+  acquireTimeoutMs = FILE_SYSTEM_EFFECT_COORDINATOR_TIMEOUT_MS,
+): Promise<void> {
+  await withEffectLeaseCoordinator(context.storage, async () => {
+    const state = await readEffectLeaseState(context.storage);
+    await writeEffectLeaseState(context.storage, replaceOwnedEffectLease(
+      state,
+      context,
+      (owner) => ({ ...owner, effectFinished: true }),
+      'Filesystem effect lease ownership was lost before tree completion.',
+    ));
+  }, acquireTimeoutMs);
+}
+
+async function retryEffectLeaseUpdate(operation: () => Promise<void>): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= FILE_SYSTEM_EFFECT_RELEASE_ATTEMPTS; attempt += 1) {
+    try {
+      await operation();
+      return;
+    } catch (error: unknown) {
+      lastError = error;
+      if (attempt < FILE_SYSTEM_EFFECT_RELEASE_ATTEMPTS) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      }
+    }
+  }
+  throw lastError;
+}
+
+function scheduleUnrefRetry(
+  operation: () => Promise<void>,
+  onSuccess: () => void,
+  onExhausted: (error: unknown) => void,
+): void {
+  let attempt = 0;
+  const retry = (lastError?: unknown): void => {
+    if (attempt >= FILE_SYSTEM_EFFECT_BACKGROUND_RETRY_ATTEMPTS) {
+      onExhausted(lastError);
+      return;
+    }
+    const delayMs = Math.min(
+      250 * (2 ** attempt),
+      FILE_SYSTEM_EFFECT_BACKGROUND_RETRY_MAX_MS,
+    );
+    attempt += 1;
+    const timer = setTimeout(() => {
+      void operation().then(onSuccess).catch(retry);
+    }, delayMs);
+    timer.unref?.();
+  };
+  retry();
+}
+
+function scheduleBackgroundFinish(
+  context: EffectLeaseContext,
+  lifecycle: EffectLeaseLifecycle,
+): void {
+  if (lifecycle.effectFinished || lifecycle.backgroundFinishScheduled) return;
+  lifecycle.backgroundFinishScheduled = true;
+  scheduleUnrefRetry(
+    async () => {
+      if (lifecycle.released) return;
+      await finishEffectLeaseProcessOnce(
+        context,
+        FILE_SYSTEM_EFFECT_BACKGROUND_LOCK_TIMEOUT_MS,
+      );
+    },
+    () => {
+      lifecycle.backgroundFinishScheduled = false;
+      if (lifecycle.released) return;
+      lifecycle.effectFinished = true;
+      if (lifecycle.releaseRequested) scheduleBackgroundRelease(context, lifecycle);
+    },
+    (error) => {
+      lifecycle.backgroundFinishScheduled = false;
+      emitKodaXDiagnostic({
+        source: 'coding.filesystem-effect-coordinator',
+        level: 'warn',
+        message: 'Filesystem-effect completion retries were exhausted; the durable fence remains closed.',
+        detail: error,
+      });
+    },
+  );
+}
+
+async function finishEffectLeaseProcessReliably(
+  context: EffectLeaseContext,
+  lifecycle: EffectLeaseLifecycle,
+): Promise<void> {
+  try {
+    await retryEffectLeaseUpdate(() => finishEffectLeaseProcessOnce(context));
+    lifecycle.effectFinished = true;
+  } catch (error: unknown) {
+    scheduleBackgroundFinish(context, lifecycle);
+    throw error;
+  }
+}
+
+function createEffectProcessControls(
+  context: EffectLeaseContext,
+  lifecycle: EffectLeaseLifecycle,
+): Pick<FileSystemMutationLeaseRelease, 'bindEffectProcess' | 'finishEffectProcess'> {
+  let finishAttempt: Promise<void> | undefined;
+  return {
+    bindEffectProcess: (pid, jobContained) => (
+      bindEffectLeaseProcess(context, lifecycle, pid, jobContained)
+    ),
+    async finishEffectProcess() {
+      if (lifecycle.effectFinished) return;
+      finishAttempt ??= finishEffectLeaseProcessReliably(context, lifecycle).finally(() => {
+        finishAttempt = undefined;
+      });
+      await finishAttempt;
+    },
+  };
+}
+
+async function releaseEffectLeaseOnce(
+  context: EffectLeaseContext,
+  lifecycle: EffectLeaseLifecycle,
+  acquireTimeoutMs = FILE_SYSTEM_EFFECT_COORDINATOR_TIMEOUT_MS,
+): Promise<void> {
+  await withEffectLeaseCoordinator(context.storage, async () => {
+    const state = await readEffectLeaseState(context.storage);
+    const owned = effectOwners(state, context.mode).find(
+      (lease) => lease.token === context.token,
+    );
+    if (owned === undefined) {
+      if (!lifecycle.releaseRecorded && !lifecycle.stateUpdateAttempted) {
+        throw new Error('Filesystem effect lease ownership was lost.');
+      }
+      await removeEffectReleaseMarkerBestEffort(context.storage, context.token);
+      return;
     }
     if (owned.effectPid !== undefined && owned.effectFinished !== true) {
       throw new Error('Filesystem effect process tree has not been proven drained.');
     }
-    stateUpdateAttempted = true;
-    await writeEffectLeaseState(storage, mode === 'shell'
-      ? {
-          direct: state.direct,
-          namespaces: state.namespaces,
-          shells: state.shells.filter((lease) => lease.token !== token),
-        }
-      : mode === 'direct'
-        ? {
-            direct: state.direct.filter((lease) => lease.token !== token),
-            namespaces: state.namespaces,
-            shells: state.shells,
-          }
-        : {
-            direct: state.direct,
-            namespaces: state.namespaces.filter((lease) => lease.token !== token),
-            shells: state.shells,
-          });
-    await removeEffectReleaseMarkerBestEffort(storage, token);
-  });
-  const scheduleBackgroundRelease = (): void => {
-    if (released || backgroundReleaseScheduled) return;
-    backgroundReleaseScheduled = true;
-    const retry = (): void => {
-      const timer = setTimeout(() => {
-        void releaseOnce().then(() => {
-          released = true;
-          backgroundReleaseScheduled = false;
-        }).catch(() => {
-          retry();
-        });
-      }, 250);
-      timer.unref?.();
-    };
-    retry();
-  };
-  const releaseReliably = async (): Promise<void> => {
-    let releaseProofError: unknown;
-    if (!releaseRecorded && (!effectProcessBound || effectFinished)) {
-      try {
-        await writeFile(effectReleaseMarkerPath(storage, token), `${token}\n`, 'utf8');
-        releaseRecorded = true;
-      } catch (error) {
-        releaseProofError = error;
-      }
-    }
-    let lastError: unknown;
-    for (let attempt = 1; attempt <= FILE_SYSTEM_EFFECT_RELEASE_ATTEMPTS; attempt += 1) {
-      try {
-        await releaseOnce();
-        if (releaseProofError !== undefined) {
-          emitKodaXDiagnostic({
-            source: 'coding.filesystem-effect-coordinator',
-            level: 'warn',
-            message: 'Filesystem-effect release converged without a durable release marker.',
-            detail: releaseProofError,
-          });
-        }
-        return;
-      } catch (error) {
-        lastError = error;
-        if (attempt < FILE_SYSTEM_EFFECT_RELEASE_ATTEMPTS) {
-          await new Promise<void>((resolve) => setTimeout(resolve, 20));
-        }
-      }
-    }
-    scheduleBackgroundRelease();
-    throw releaseProofError === undefined
-      ? lastError
-      : new AggregateError(
-          [releaseProofError, lastError],
-          'Filesystem-effect release marker and coordinator cleanup both failed.',
-        );
-  };
-  const release = async (): Promise<void> => {
-    if (released) return;
-    releaseAttempt ??= releaseReliably().then(() => {
-      released = true;
+    lifecycle.stateUpdateAttempted = true;
+    await writeEffectLeaseState(context.storage, updateEffectOwners(
+      state,
+      context.mode,
+      (owners) => owners.filter((lease) => lease.token !== context.token),
+    ));
+    await removeEffectReleaseMarkerBestEffort(context.storage, context.token);
+  }, acquireTimeoutMs);
+}
+
+async function writeEffectReleaseProof(
+  context: EffectLeaseContext,
+  lifecycle: EffectLeaseLifecycle,
+): Promise<unknown> {
+  if (lifecycle.releaseRecorded || (lifecycle.effectProcessBound && !lifecycle.effectFinished)) {
+    return undefined;
+  }
+  try {
+    await writeFile(
+      effectReleaseMarkerPath(context.storage, context.token),
+      `${context.token}\n`,
+      'utf8',
+    );
+    lifecycle.releaseRecorded = true;
+    return undefined;
+  } catch (error: unknown) {
+    return error;
+  }
+}
+
+function scheduleBackgroundRelease(
+  context: EffectLeaseContext,
+  lifecycle: EffectLeaseLifecycle,
+): void {
+  if (lifecycle.released || lifecycle.backgroundReleaseScheduled) return;
+  lifecycle.backgroundReleaseScheduled = true;
+  scheduleUnrefRetry(
+    () => releaseEffectLeaseOnce(
+      context,
+      lifecycle,
+      FILE_SYSTEM_EFFECT_BACKGROUND_LOCK_TIMEOUT_MS,
+    ),
+    () => {
+      lifecycle.released = true;
+      lifecycle.backgroundReleaseScheduled = false;
+    },
+    (error) => {
+      lifecycle.backgroundReleaseScheduled = false;
+      emitKodaXDiagnostic({
+        source: 'coding.filesystem-effect-coordinator',
+        level: 'warn',
+        message: 'Filesystem-effect release retries were exhausted; the durable fence remains closed.',
+        detail: error,
+      });
+    },
+  );
+}
+
+async function releaseEffectLeaseReliably(
+  context: EffectLeaseContext,
+  lifecycle: EffectLeaseLifecycle,
+): Promise<void> {
+  lifecycle.releaseRequested = true;
+  const releaseProofError = await writeEffectReleaseProof(context, lifecycle);
+  let releaseError: unknown;
+  try {
+    await retryEffectLeaseUpdate(() => releaseEffectLeaseOnce(context, lifecycle));
+  } catch (error: unknown) {
+    releaseError = error;
+  }
+  if (releaseError === undefined) {
+    if (releaseProofError !== undefined) emitKodaXDiagnostic({
+      source: 'coding.filesystem-effect-coordinator',
+      level: 'warn',
+      message: 'Filesystem-effect release converged without a durable release marker.',
+      detail: releaseProofError,
+    });
+    return;
+  }
+  scheduleBackgroundRelease(context, lifecycle);
+  throw releaseProofError === undefined
+    ? releaseError
+    : new AggregateError(
+        [releaseProofError, releaseError],
+        'Filesystem-effect release marker and coordinator cleanup both failed.',
+      );
+}
+
+function createEffectLeaseRelease(
+  context: EffectLeaseContext,
+  lifecycle: EffectLeaseLifecycle,
+): () => Promise<void> {
+  let releaseAttempt: Promise<void> | undefined;
+  return async () => {
+    if (lifecycle.released) return;
+    releaseAttempt ??= releaseEffectLeaseReliably(context, lifecycle).then(() => {
+      lifecycle.released = true;
     }).finally(() => {
       releaseAttempt = undefined;
     });
     await releaseAttempt;
   };
-  const bindEffectProcess = async (
-    effectPid: number,
-    windowsJobContained: boolean,
-  ): Promise<void> => {
-    if (!Number.isInteger(effectPid) || effectPid <= 0) {
-      throw new Error(`Invalid filesystem effect process id: ${effectPid}`);
-    }
-    await withEffectLeaseCoordinator(storage, async () => {
-      const state = await readEffectLeaseState(storage);
-      const owners = mode === 'shell'
-        ? state.shells
-        : mode === 'direct'
-          ? state.direct
-          : state.namespaces;
-      if (!owners.some((lease) => lease.token === token)) {
-        throw new Error('Filesystem effect lease ownership was lost before process binding.');
-      }
-      const effectProcessStartIdentity = readProcessStartIdentity(effectPid);
-      const boundOwner: EffectLeaseOwner = {
-        ...owner,
-        effectPid,
-        effectFinished: false,
-        ...(effectProcessStartIdentity === undefined
-          ? {}
-          : { effectProcessStartIdentity }),
-        posixProcessGroup: process.platform !== 'win32',
-        windowsJobContained,
-      };
-      const replaceOwner = (lease: EffectLeaseOwner): EffectLeaseOwner => (
-        lease.token === token ? boundOwner : lease
-      );
-      await writeEffectLeaseState(storage, {
-        direct: mode === 'direct' ? state.direct.map(replaceOwner) : state.direct,
-        namespaces: mode === 'namespace' ? state.namespaces.map(replaceOwner) : state.namespaces,
-        shells: mode === 'shell' ? state.shells.map(replaceOwner) : state.shells,
-      });
-    });
-    effectProcessBound = true;
-    effectFinished = false;
+}
+
+async function acquireEffectLease(
+  mode: EffectLeaseMode,
+  sandboxPolicyKey?: string,
+  onCleanupWaitExpired?: (error: Error) => void,
+): Promise<FileSystemMutationLeaseRelease> {
+  const context = createEffectLeaseContext(mode, sandboxPolicyKey);
+  await waitForEffectLeaseAdmission(context, onCleanupWaitExpired);
+  const lifecycle: EffectLeaseLifecycle = {
+    backgroundFinishScheduled: false,
+    backgroundReleaseScheduled: false,
+    effectFinished: false,
+    effectProcessBound: false,
+    releaseRecorded: false,
+    releaseRequested: false,
+    released: false,
+    stateUpdateAttempted: false,
   };
-  let finishAttempt: Promise<void> | undefined;
-  let backgroundFinishScheduled = false;
-  const finishEffectProcessOnce = (): Promise<void> => withEffectLeaseCoordinator(storage, async () => {
-      const state = await readEffectLeaseState(storage);
-      const replaceOwner = (lease: EffectLeaseOwner): EffectLeaseOwner => (
-        lease.token === token ? { ...lease, effectFinished: true } : lease
-      );
-      const owners = mode === 'shell'
-        ? state.shells
-        : mode === 'direct'
-          ? state.direct
-          : state.namespaces;
-      if (!owners.some((lease) => lease.token === token)) {
-        throw new Error('Filesystem effect lease ownership was lost before tree completion.');
-      }
-      await writeEffectLeaseState(storage, {
-        direct: mode === 'direct' ? state.direct.map(replaceOwner) : state.direct,
-        namespaces: mode === 'namespace' ? state.namespaces.map(replaceOwner) : state.namespaces,
-        shells: mode === 'shell' ? state.shells.map(replaceOwner) : state.shells,
-      });
-    });
-  const scheduleBackgroundFinish = (): void => {
-    if (effectFinished || backgroundFinishScheduled) return;
-    backgroundFinishScheduled = true;
-    const retry = (): void => {
-      const timer = setTimeout(() => {
-        void finishEffectProcessOnce().then(() => {
-          effectFinished = true;
-          backgroundFinishScheduled = false;
-        }).catch(() => {
-          retry();
-        });
-      }, 250);
-      timer.unref?.();
-    };
-    retry();
-  };
-  const finishEffectProcess = async (): Promise<void> => {
-    if (effectFinished) return;
-    finishAttempt ??= (async () => {
-      let lastError: unknown;
-      for (let attempt = 1; attempt <= FILE_SYSTEM_EFFECT_RELEASE_ATTEMPTS; attempt += 1) {
-        try {
-          await finishEffectProcessOnce();
-          effectFinished = true;
-          return;
-        } catch (error) {
-          lastError = error;
-          if (attempt < FILE_SYSTEM_EFFECT_RELEASE_ATTEMPTS) {
-            await new Promise<void>((resolve) => setTimeout(resolve, 20));
-          }
-        }
-      }
-      scheduleBackgroundFinish();
-      throw lastError;
-    })().finally(() => {
-      finishAttempt = undefined;
-    });
-    await finishAttempt;
-  };
-  return Object.assign(release, { bindEffectProcess, finishEffectProcess });
+  const release = createEffectLeaseRelease(context, lifecycle);
+  return Object.assign(release, createEffectProcessControls(context, lifecycle));
 }
 
 /**
@@ -694,6 +1095,94 @@ export function acquireExclusiveFileSystemEffectLease(
   sandboxPolicyKey?: string,
 ): Promise<FileSystemMutationLeaseRelease> {
   return acquireEffectLease('namespace', sandboxPolicyKey);
+}
+
+export async function finishAndReleaseFileSystemEffectLease(
+  lease: FileSystemMutationLeaseRelease,
+): Promise<void> {
+  let finishError: unknown;
+  try {
+    await lease.finishEffectProcess();
+  } catch (error: unknown) {
+    finishError = error;
+  }
+  try {
+    await lease();
+  } catch (releaseError: unknown) {
+    throw finishError === undefined
+      ? releaseError
+      : new AggregateError(
+          [finishError, releaseError],
+          'Filesystem cleanup completion and lease release both failed.',
+        );
+  }
+  if (finishError !== undefined) throw finishError;
+}
+
+/**
+ * Internal cleanup transaction. The action must prove its process tree and ACL
+ * reset before resolving; admission may time out for its caller but keeps converging.
+ */
+export function withExclusiveFileSystemCleanupLease<T>(
+  sandboxPolicyKey: string,
+  cleanupProcess: {
+    readonly pid: number;
+    readonly windowsJobContained: boolean;
+  },
+  action: () => Promise<T>,
+  onDeferredFailure?: (error: unknown) => Promise<void>,
+): Promise<T> {
+  let callerTimedOut = false;
+  let cleanupActionCompleted = false;
+  let rejectWaitExpired: ((error: Error) => void) | undefined;
+  let deadlineTimer: NodeJS.Timeout | undefined;
+  const expireCallerWait = (error: Error): void => {
+    if (callerTimedOut) return;
+    callerTimedOut = true;
+    rejectWaitExpired?.(error);
+  };
+  const waitExpired = new Promise<never>((_resolve, reject) => {
+    rejectWaitExpired = reject;
+    deadlineTimer = setTimeout(
+      () => expireCallerWait(new FileSystemCleanupAdmissionTimeoutError()),
+      FILE_SYSTEM_EFFECT_CLEANUP_TIMEOUT_MS,
+    );
+    deadlineTimer.unref?.();
+  });
+  const workflow = (async (): Promise<T> => {
+    const lease = await acquireEffectLease('cleanup', sandboxPolicyKey, expireCallerWait);
+    await lease.bindEffectProcess(
+      cleanupProcess.pid,
+      cleanupProcess.windowsJobContained,
+    );
+    const result = await action();
+    cleanupActionCompleted = true;
+    await finishAndReleaseFileSystemEffectLease(lease);
+    return result;
+  })();
+  void workflow.catch(async (error: unknown) => {
+    if (!callerTimedOut) return;
+    emitKodaXDiagnostic({
+      source: 'coding.filesystem-effect-coordinator',
+      level: 'warn',
+      message: 'Filesystem cleanup failed after its caller deadline; the durable fence remains closed.',
+      detail: error,
+    });
+    if (cleanupActionCompleted || onDeferredFailure === undefined) return;
+    try {
+      await onDeferredFailure(error);
+    } catch (handlerError: unknown) {
+      emitKodaXDiagnostic({
+        source: 'coding.filesystem-effect-coordinator',
+        level: 'error',
+        message: 'Deferred filesystem cleanup failure could not be persisted.',
+        detail: new AggregateError([error, handlerError]),
+      });
+    }
+  });
+  return Promise.race([workflow, waitExpired]).finally(() => {
+    if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+  });
 }
 
 /** Degraded host fallback only; sandboxed text mutations do not acquire this lease. */

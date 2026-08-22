@@ -71,6 +71,25 @@ describe.runIf(process.platform === 'win32')('Windows effect Job', () => {
     }
   });
 
+  it('detaches supervisor handles idempotently without weakening drain proof', async () => {
+    const gate = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    try {
+      expect(gate.pid).toBeTypeOf('number');
+      const effectJob = await containWindowsEffectProcess(gate.pid!);
+      expect(() => {
+        effectJob.unref?.();
+        effectJob.unref?.();
+      }).not.toThrow();
+      gate.kill();
+      await effectJob.drained;
+    } finally {
+      gate.kill();
+    }
+  });
+
   it('does not report drained until a detached descendant has been terminated', async () => {
     const directory = mkdtempSync(path.join(os.tmpdir(), 'kodax-effect-job-'));
     const sentinel = path.join(directory, 'escaped.txt');

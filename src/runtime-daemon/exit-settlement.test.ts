@@ -422,11 +422,14 @@ describe('runtime exit settlement', () => {
     expect(readRuntimeOwnerPolicy(paths).mode).toBe('daemon');
   });
 
-  it('refuses a reused Windows PID without sending a destructive signal', async () => {
+  it('settles a reused Windows PID without sending a destructive signal', async () => {
     const configHome = tempConfigHome();
     const expectedOwner = owner();
     seedDaemon(configHome, expectedOwner);
     const kill = vi.fn(async () => 'terminated' as const);
+    const waitForProcessExit = vi.fn(async (pid: number) => (
+      pid === expectedOwner.supervisorPid
+    ));
 
     const result = await settleRuntimeDaemonExitForTest({
       configHome,
@@ -436,17 +439,49 @@ describe('runtime exit settlement', () => {
     }, dependencies({
       isPidAlive: vi.fn((pid) => pid === expectedOwner.pid),
       readProcessStartIdentity: vi.fn(() => 'different-process-generation'),
-      waitForProcessExit: vi.fn(async () => false),
+      waitForProcessExit,
       killPidTree: kill,
     }));
 
-    expect(result).toMatchObject({
-      status: 'blocked',
-      reason: 'owner_identity_mismatch',
-      nextAction: 'restart-system',
+    expect(result).toEqual({
+      status: 'recovered',
+      repairs: ['windows_sandbox_acl'],
     });
     expect(kill).not.toHaveBeenCalled();
-    expect(readRuntimeExitSettlementIntent(configHome, 'coder')?.phase).toBe('stop_accepted');
+    expect(waitForProcessExit).toHaveBeenCalledWith(
+      expectedOwner.supervisorPid,
+      expect.any(Number),
+    );
+    expect(readRuntimeExitSettlementIntent(configHome, 'coder')).toBeUndefined();
+  });
+
+  it('continues settlement when the retained Windows PID exits before identity verification', async () => {
+    const configHome = tempConfigHome();
+    const expectedOwner = owner();
+    seedDaemon(configHome, expectedOwner);
+    const kill = vi.fn(async () => 'terminated' as const);
+    let ownerLivenessChecks = 0;
+
+    const result = await settleRuntimeDaemonExitForTest({
+      configHome,
+      profile: 'coder',
+      runtime: runtime(expectedOwner),
+      timeoutMs: TEST_TRANSACTION_TIMEOUT_MS,
+    }, dependencies({
+      isPidAlive: vi.fn((pid) => (
+        pid === expectedOwner.pid && ++ownerLivenessChecks === 1
+      )),
+      readProcessStartIdentity: vi.fn(() => undefined),
+      waitForProcessExit: vi.fn(async (pid) => pid === expectedOwner.supervisorPid),
+      killPidTree: kill,
+    }));
+
+    expect(result).toEqual({
+      status: 'recovered',
+      repairs: ['windows_sandbox_acl'],
+    });
+    expect(ownerLivenessChecks).toBe(2);
+    expect(kill).not.toHaveBeenCalled();
   });
 
   it('never escalates a retained POSIX daemon by cached PID', async () => {
@@ -1018,7 +1053,7 @@ describe('runtime exit settlement', () => {
       timeoutMs: TEST_TRANSACTION_TIMEOUT_MS,
     }, dependencies({
       isPidAlive: vi.fn(() => true),
-      readProcessStartIdentity: vi.fn(() => 'different-process-start-identity'),
+      readProcessStartIdentity: vi.fn(() => undefined),
       waitForProcessExit: vi.fn((_pid, _timeoutMs, signal) => new Promise<boolean>((resolve) => {
         signal?.addEventListener('abort', () => {
           observationAborted = true;

@@ -522,14 +522,12 @@ async function executeToolBash(
         }
       : { executable: '/bin/sh', args: ['-c', command], env: legacyEnv });
   const resolvedInvocation = sandboxInvocation ?? ordinaryInvocation;
-  const gatedInvocation = internal.bypassEffectContainment
-    ? resolvedInvocation
-    : gatedShellInvocation(
-        resolvedInvocation.executable,
-        resolvedInvocation.args,
-        resolvedInvocation.env,
-        resolvedInvocation.windowsVerbatimArguments,
-      );
+  const gatedInvocation = gatedShellInvocation(
+    resolvedInvocation.executable,
+    resolvedInvocation.args,
+    resolvedInvocation.env,
+    resolvedInvocation.windowsVerbatimArguments,
+  );
   const spawnCommand = () => spawn(
     gatedInvocation.executable,
     [...gatedInvocation.args],
@@ -607,17 +605,23 @@ async function executeToolBash(
       });
     return mutationLeaseRelease;
   };
-  const bindMutationProcess = async (proc: ManagedChildProcess): Promise<void> => {
-    if (proc.pid === undefined || (!internal.bypassEffectContainment && proc.stdin === null)) {
-      throw new Error('Shell effect gate did not expose a managed process and stdin.');
+  const finishUnstartedMutation = async (): Promise<boolean> => {
+    try {
+      await releaseMutationLease.finishEffectProcess();
+    } catch (error: unknown) {
+      recordEffectLifecycleFailure(error);
     }
-    if (internal.bypassEffectContainment) {
-      mutationStartCommitted = true;
-      return;
+    await cleanupSandbox();
+    await releaseMutation();
+    return true;
+  };
+  const bindMutationProcess = async (proc: ManagedChildProcess): Promise<void> => {
+    if (proc.pid === undefined || proc.stdin === null) {
+      throw new Error('Shell effect gate did not expose a managed process and stdin.');
     }
     mutationProcessBindingSettled = false;
     mutationProcessBinding = (async () => {
-      if (process.platform === 'win32') {
+      if (process.platform === 'win32' && !internal.bypassEffectContainment) {
         windowsEffectJob = await containWindowsEffectProcess(proc.pid!);
       }
       await releaseMutationLease.bindEffectProcess(
@@ -680,26 +684,75 @@ async function executeToolBash(
       ctx.abortSignal?.removeEventListener('abort', onAbort);
     }
   };
-  const spawnWithMutationLease = () => {
+  const spawnWithMutationLease = async (): Promise<ManagedChildProcess> => {
     try {
       return spawnCommand();
     } catch (error) {
-      void cleanupSandbox().then(() => releaseMutation());
+      await finishUnstartedMutation();
       throw error;
     }
   };
-  const registerMutationProcess = (
+  const detachUnregisteredEffectGate = (proc: ManagedChildProcess): void => {
+    proc.stdin?.destroy();
+    const stdout = proc.stdout as (NodeJS.ReadableStream & { unref?: () => void }) | null;
+    const stderr = proc.stderr as (NodeJS.ReadableStream & { unref?: () => void }) | null;
+    stdout?.unref?.();
+    stderr?.unref?.();
+    proc.unref();
+  };
+  const settleUnregisteredEffectGateAfterClose = (proc: ManagedChildProcess): void => {
+    let settlementStarted = false;
+    const settle = (): void => {
+      if (settlementStarted) return;
+      settlementStarted = true;
+      void finishUnstartedMutation().catch((error: unknown) => {
+        emitKodaXDiagnostic({
+          source: 'coding:bash-filesystem-effect',
+          level: 'warn',
+          message: 'Unregistered shell effect gate exited but cleanup did not converge.',
+          detail: error,
+        });
+      });
+    };
+    proc.once('close', settle);
+    if (proc.exitCode !== null || proc.signalCode !== null) queueMicrotask(settle);
+  };
+  const registerMutationProcess = async (
     proc: ManagedChildProcess,
     kind: 'bash' | 'bash-background',
-  ): (() => void) => {
+  ): Promise<() => void> => {
     try {
       return registerManagedChildProcess(proc, { kind, command, cwd }, {
         manualUnregister: true,
         requireDurableRecord: true,
       });
     } catch (error) {
-      killChildProcessTreeSync(proc);
-      void cleanupSandbox().then(() => releaseMutation());
+      let termination = killChildProcessTreeSync(proc);
+      if (termination.status === 'unknown') {
+        try {
+          termination = await killChildProcessTree(proc, {
+            forceMs: 500,
+            taskkillMs: 500,
+          });
+        } catch (terminationError: unknown) {
+          emitKodaXDiagnostic({
+            source: 'coding:bash-filesystem-effect',
+            level: 'warn',
+            message: 'Async cleanup failed after durable child registration was rejected.',
+            detail: terminationError,
+          });
+        }
+      }
+      if (termination.status === 'unknown') {
+        recordEffectLifecycleFailure(new Error(
+          'Shell effect process tree termination was not confirmed after durable registration failed; '
+          + 'its sandbox owner and filesystem fence remain closed.',
+        ));
+        settleUnregisteredEffectGateAfterClose(proc);
+        detachUnregisteredEffectGate(proc);
+      } else {
+        await finishUnstartedMutation();
+      }
       throw error;
     }
   };
@@ -711,12 +764,7 @@ async function executeToolBash(
       mutationProcessBindingFailed = true;
       mutationProcessBindingError ??= error;
     }
-    if (internal.bypassEffectContainment) {
-      // The root process has emitted close. This narrow path is selected only
-      // after the normal Windows Job primitive failed before the sandbox target
-      // started, so it must not re-enter that same unavailable containment.
-      drained = true;
-    } else if (windowsEffectJob !== undefined) {
+    if (windowsEffectJob !== undefined) {
       try {
         await windowsEffectJob.drained;
         drained = true;
@@ -748,28 +796,23 @@ async function executeToolBash(
         'Shell effect process tree termination was not confirmed; '
         + 'later filesystem effects remain fenced.',
       ));
-      await cleanupSandbox(
-        mutationProcessBindingFailed ? 'not_started' : 'started_or_unknown',
-      );
       emitKodaXDiagnostic({
         source: 'coding:bash-filesystem-effect',
         level: 'warn',
-        message: 'Shell effect tree could not be proven drained; the filesystem fence remains closed.',
+        message: 'Shell effect tree could not be proven drained; its sandbox owner and filesystem fence remain closed.',
       });
       return false;
     }
-    if (!internal.bypassEffectContainment) {
-      try {
-        await releaseMutationLease.finishEffectProcess();
-      } catch (error: unknown) {
-        recordEffectLifecycleFailure(error);
-        emitKodaXDiagnostic({
-          source: 'coding:bash-filesystem-effect',
-          level: 'warn',
-          message: 'Filesystem effect completion could not be persisted.',
-          detail: error,
-        });
-      }
+    try {
+      await releaseMutationLease.finishEffectProcess();
+    } catch (error: unknown) {
+      recordEffectLifecycleFailure(error);
+      emitKodaXDiagnostic({
+        source: 'coding:bash-filesystem-effect',
+        level: 'warn',
+        message: 'Filesystem effect completion could not be persisted.',
+        detail: error,
+      });
     }
     await cleanupSandbox(
       mutationProcessBindingFailed ? 'not_started' : 'started_or_unknown',
@@ -798,13 +841,11 @@ async function executeToolBash(
     ));
   };
   if (ctx.abortSignal?.aborted) {
-    await cleanupSandbox();
-    await releaseMutation();
+    await finishUnstartedMutation();
     return withSandboxCleanupFailure(cancelledCommandResult(command));
   }
   if (Date.now() >= deadlineAt) {
-    await cleanupSandbox();
-    await releaseMutation();
+    await finishUnstartedMutation();
     return withSandboxCleanupFailure(commandPreparationTimeoutResult(command, timeout));
   }
 
@@ -815,8 +856,7 @@ async function executeToolBash(
     try {
       logStream = await openBackgroundLog(outputFile);
     } catch (error) {
-      await cleanupSandbox();
-      await releaseMutation();
+      await finishUnstartedMutation();
       const message = error instanceof Error ? error.message : String(error);
       return withSandboxCleanupFailure(
         `[Error] Background command was not started because its output file could not be created: ${message}`,
@@ -825,8 +865,15 @@ async function executeToolBash(
 
     // POSIX background jobs get a process group so cleanup can signal -pid and
     // reap shell descendants.
-    const proc = spawnWithMutationLease();
-    const unregisterManagedChild = registerMutationProcess(proc, 'bash-background');
+    let proc: ManagedChildProcess;
+    let unregisterManagedChild: () => void;
+    try {
+      proc = await spawnWithMutationLease();
+      unregisterManagedChild = await registerMutationProcess(proc, 'bash-background');
+    } catch (error) {
+      logStream.destroy();
+      throw error;
+    }
     const cleanupOnProcessExit = (): void => {
       killChildProcessTreeSync(proc);
     };
@@ -858,10 +905,7 @@ async function executeToolBash(
     let finishBackgroundEffect: Promise<boolean> | undefined;
     const finishBackground = (): Promise<boolean> => {
       finishBackgroundEffect ??= proc.pid === undefined
-        ? cleanupSandbox().then(async () => {
-            await releaseMutation();
-            return true;
-          })
+        ? finishUnstartedMutation()
         : finishBoundMutationProcess(proc);
       return finishBackgroundEffect;
     };
@@ -962,9 +1006,9 @@ async function executeToolBash(
     return `Command started in background.\nPID: ${proc.pid}\nOutput: ${outputFile}\n\nUse the read tool to check output when done. A final [Exit: ...] footer confirms capture completed; if it is absent, the command is still running or capture failed.`;
   }
 
+  const proc = await spawnWithMutationLease();
+  const unregisterManagedChild = await registerMutationProcess(proc, 'bash');
   return new Promise(resolve => {
-    const proc = spawnWithMutationLease();
-    const unregisterManagedChild = registerMutationProcess(proc, 'bash');
     void bindMutationProcess(proc).catch((error: unknown) => {
       mutationProcessBindingFailed = true;
       mutationProcessBindingError ??= error;
@@ -983,10 +1027,7 @@ async function executeToolBash(
     let finishForegroundEffect: Promise<boolean> | undefined;
     const finishForeground = (): Promise<boolean> => {
       finishForegroundEffect ??= proc.pid === undefined
-        ? cleanupSandbox().then(async () => {
-            await releaseMutation();
-            return true;
-          })
+        ? finishUnstartedMutation()
         : finishBoundMutationProcess(proc);
       return finishForegroundEffect.then((drained) => {
         process.off('exit', cleanupOnProcessExit);
@@ -1410,8 +1451,7 @@ async function executeToolBash(
         if (timer) clearTimeout(timer);
         if (proc.pid === undefined) {
           unregisterForegroundCommand();
-          await cleanupSandbox();
-          await releaseMutation();
+          await finishUnstartedMutation();
         } else {
           await finishForeground();
         }

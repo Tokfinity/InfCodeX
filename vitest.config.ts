@@ -39,6 +39,7 @@ export function createVitestConfig(options: TestSuiteOptions = {}) {
         '@kodax-ai/kodax/runtime': resolveFromRoot('src', 'sdk-runtime.ts'),
         '@kodax-ai/agent/media': resolveFromRoot('packages', 'agent', 'src', 'media', 'index.ts'),
         '@kodax-ai/coding/media': resolveFromRoot('packages', 'coding', 'src', 'media', 'index.ts'),
+        '@kodax-ai/coding/internal/file-system-effects': resolveFromRoot('packages', 'coding', 'src', 'internal', 'file-system-effects.ts'),
         '@kodax-ai/agent/capabilities/skills/shared/yaml': resolveFromRoot('packages', 'agent', 'src', 'capabilities', 'skills', 'shared', 'yaml.ts'),
         '@kodax-ai/agent/messaging/queue': resolveFromRoot('packages', 'agent', 'src', 'messaging', 'queue.ts'),
         // FEATURE_217: value-imported subpath — MUST precede the root alias

@@ -741,7 +741,10 @@ async function settleAcceptedRuntimeExit(
       dependencies,
     );
   const repairs: Array<'windows_process_tree' | 'windows_sandbox_acl'> = [];
-  if (!gracefullyExited && dependencies.isPidAlive(owner.pid)) {
+  let retainedOwnerAlive = !previousBoot
+    && !gracefullyExited
+    && dependencies.isPidAlive(owner.pid);
+  if (retainedOwnerAlive) {
     if (dependencies.platform !== 'win32') {
       return blocked(
         'cleanup_unverified',
@@ -750,38 +753,48 @@ async function settleAcceptedRuntimeExit(
       );
     }
     const currentIdentity = dependencies.readProcessStartIdentity(owner.pid);
-    if (currentIdentity !== owner.processStartIdentity) {
-      return blocked(
-        'owner_identity_mismatch',
-        'restart-system',
-        'The retained daemon PID no longer has the expected OS process identity.',
-      );
+    if (currentIdentity === undefined) {
+      if (dependencies.isPidAlive(owner.pid)) {
+        return blocked(
+          'owner_identity_mismatch',
+          'restart-system',
+          'The retained daemon PID process identity could not be verified.',
+        );
+      }
+      retainedOwnerAlive = false;
     }
-    if (remainingTimeoutMs(deadline) < WINDOWS_PROCESS_TREE_RECOVERY_TIMEOUT_MS) {
-      return settlementDeadlineBlocked(dependencies.platform);
-    }
-    const killed = await dependencies.killPidTree(
-      owner.pid,
-      owner.processStartIdentity!,
-      WINDOWS_PROCESS_TREE_RECOVERY_TIMEOUT_MS,
-    );
-    if (
-      killed === 'unknown'
-      || !await dependencies.waitForProcessExit(
+    if (retainedOwnerAlive && currentIdentity !== owner.processStartIdentity) {
+      // A readable different generation proves the retained owner exited.
+      // Never signal the replacement process that reused its numeric PID.
+      retainedOwnerAlive = false;
+    } else if (retainedOwnerAlive) {
+      if (remainingTimeoutMs(deadline) < WINDOWS_PROCESS_TREE_RECOVERY_TIMEOUT_MS) {
+        return settlementDeadlineBlocked(dependencies.platform);
+      }
+      const killed = await dependencies.killPidTree(
         owner.pid,
-        Math.min(1_000, remainingTimeoutMs(deadline)),
-      )
-    ) {
-      return blocked(
-        'cleanup_unverified',
-        'restart-system',
-        'The exact Windows daemon process tree did not prove that it exited.',
+        owner.processStartIdentity!,
+        WINDOWS_PROCESS_TREE_RECOVERY_TIMEOUT_MS,
       );
+      if (
+        killed === 'unknown'
+        || !await dependencies.waitForProcessExit(
+          owner.pid,
+          Math.min(1_000, remainingTimeoutMs(deadline)),
+        )
+      ) {
+        return blocked(
+          'cleanup_unverified',
+          'restart-system',
+          'The exact Windows daemon process tree did not prove that it exited.',
+        );
+      }
+      retainedOwnerAlive = false;
+      repairs.push('windows_process_tree');
     }
-    repairs.push('windows_process_tree');
   }
 
-  if (!previousBoot && dependencies.isPidAlive(owner.pid)) {
+  if (retainedOwnerAlive) {
     return blocked('cleanup_unverified', 'manual-recovery', 'Runtime daemon is still active.');
   }
   if (
