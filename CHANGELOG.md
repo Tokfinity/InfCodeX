@@ -6,6 +6,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+---
+
+## [0.7.95] - 2026-08-23
+
 ### Fixed
 
 - KodaX-created linked worktrees now join the Session's exact sandbox policy
@@ -58,6 +62,13 @@ All notable changes to this project will be documented in this file.
   status-lock cleanup reports failure, the exact committed proposal is reread
   and its terminal event is still published once; a different authoritative
   status is never overwritten or republished.
+- The coding runtime now delays its public `onComplete` completion signal until
+  extension completion and asynchronous result finalization have produced the
+  authoritative `KodaXResult`. A2A responses and other completion subscribers
+  can no longer observe an empty successful answer before the coding result
+  settles, including the lost-executor-Promise fallback path (Issue 302). A
+  completion observer that throws after finalization is diagnosed without
+  rewriting the persisted terminal facts.
 
 ---
 

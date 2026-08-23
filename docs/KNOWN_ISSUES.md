@@ -7,27 +7,39 @@ _Last Updated: 2026-08-23_
 > **Archive Notice**: Historical issue records are maintained in `docs/ISSUES_ARCHIVED.md`.
 > This file tracks the active issue backlog plus recently resolved issue records that have not yet been archived.
 
-## Unreleased maintenance corrections
+## v0.7.95 Release Corrections
 
-- Stale zero-byte, malformed, and truncated learning authority locks now
-  recover automatically only after the stale boundary and an unchanged
-  bytes/mtime/size comparison. A valid live owner or replacement record is
-  never removed.
-- Windows same-boot `unconfirmed-owner` ACL tickets no longer require manual
-  deletion. Recovery retries in the background and clears the ticket only when
-  an exact sandbox-user SID probe proves the account idle. Probe failure is
-  diagnosable and remains fail-closed for sandbox work without blocking other
-  KodaX work.
-- Fullscreen terminal teardown has an idempotent exit fallback for mouse and
-  alternate-screen modes. Explicit Skill execution preserves exact user input
-  in canonical history, rejects multiple active references, and treats failed
-  or malformed `PreToolUse` hooks as denial.
-- A failed terminal Run status write now produces
-  `run_settlement_not_persisted` / `unknown`. If the Session event journal is
-  also fenced, live observations are invalidated and must resnapshot rather
-  than retaining stale state. Current source advertises
-  `runtimeExitSettlement:2` and Windows `sandboxRuntime:5`; release assignment
-  remains with the maintainer.
+The v0.7.95 maintenance release closes Issues 301 and 302 and lands the
+post-v0.7.94 sandbox recovery and dynamic-worktree corrections. Windows
+sandbox cleanup keeps every ACL-mutating helper and command owner in a
+recoverable machine-global Job, persists self-healing recovery tickets, and
+retries process drain, ACL reset, and filesystem-effect fence release in the
+background; Runtime shutdown verifies exact daemon and supervisor process
+generations, so PID reuse or an interrupted exit cannot strand a
+manual-recovery requirement. Same-boot `unconfirmed-owner` tickets retry
+automatically and clear only after an exact sandbox-user SID probe proves the
+account idle; probe failure stays fail-closed without blocking non-sandbox
+work. Text cleanup recovery records completed phases and retains a consumed
+sandbox attestation across retries. KodaX-created linked worktrees join the
+exact Session shell/text sandbox policy before their paths are returned,
+persist across later Runs, revalidate against the same Git common directory,
+and are revoked on removal; unregistered siblings remain fenced. Stale
+zero-byte, malformed, and truncated learning locks recover only after an
+unchanged bytes/stat comparison, and fullscreen TUI teardown restores the
+terminal from a guaranteed unmount boundary (Issue 301). Explicit Skill
+execution preserves exact user input in canonical history, rejects multiple
+active references, and treats failed or malformed `PreToolUse` hooks as
+denial. A failed terminal Run status write produces
+`run_settlement_not_persisted` / `unknown`; if the event journal is also
+fenced, live observations are invalidated and must resnapshot. The coding
+runtime finalizes its authoritative result before emitting the public
+completion signal, so A2A cannot publish an empty successful answer
+(Issue 302). This release advances to Windows `sandboxRuntime:5` and
+`runtimeExitSettlement:2`; `crashOutcomeModel:2` is unchanged and Issue 256
+remains Open. See
+[ISSUE_301_v0.7.95_REGRESSION_GUIDE.md](test-guides/ISSUE_301_v0.7.95_REGRESSION_GUIDE.md)
+and
+[ISSUE_302_v0.7.95_REGRESSION_GUIDE.md](test-guides/ISSUE_302_v0.7.95_REGRESSION_GUIDE.md).
 
 ## v0.7.94 Release Corrections
 
@@ -139,8 +151,8 @@ by the focused sandbox, lineage, REPL, and coding-runtime tests.
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
-| 302 | High | Resolved | Runtime completion fallback could publish an empty A2A answer before the coding result settled | v0.7.79 Runtime completion fallback | Unreleased | 2026-08-23 | 2026-08-23 |
-| 301 | High | Resolved | Stale invalid learning lock could stall interactive work and TUI teardown lacked a direct terminal restore fallback | shared learning lock / fullscreen TUI | Unreleased | 2026-08-23 | 2026-08-23 |
+| 302 | High | Resolved | Runtime completion fallback could publish an empty A2A answer before the coding result settled | v0.7.79 Runtime completion fallback | v0.7.95 release | 2026-08-23 | 2026-08-23 |
+| 301 | High | Resolved | Stale invalid learning lock could stall interactive work and TUI teardown lacked a direct terminal restore fallback | shared learning lock / fullscreen TUI | v0.7.95 release | 2026-08-23 | 2026-08-23 |
 | 300 | Medium | Resolved | Sandboxed git `safe.directory` trust set misaligned with authorized roots | v0.7.93 ASRT 0.0.65 git trust | v0.7.94 | 2026-08-20 | 2026-08-21 |
 | 299 | High | Resolved | Previous-boot foreign Windows ACL markers blocked SDK-owned Runtime exit settlement | v0.7.91 Runtime exit settlement | v0.7.93 | 2026-08-19 | 2026-08-19 |
 | 298 | High | Resolved | Provider SDK abort wrapper bypasses managed Stop classification and becomes a credential failure | v0.7.69 managed run-scoped credentials | v0.7.93 | 2026-08-19 | 2026-08-19 |
@@ -335,7 +347,7 @@ by the focused sandbox, lineage, REPL, and coding-runtime tests.
 - **Priority**: High
 - **Status**: Resolved
 - **Introduced**: v0.7.79 Runtime completion fallback
-- **Fixed**: Unreleased
+- **Fixed**: v0.7.95 release
 - **Created**: 2026-08-23
 - **Resolved**: 2026-08-23
 
@@ -375,7 +387,7 @@ already authoritative result or its persisted Memory/learning outcome.
 - `packages/coding/src/types.ts`
 - `src/sdk-runtime.test.ts`
 - `src/a2a/a2a.test.ts`
-- `docs/test-guides/ISSUE_302_UNRELEASED_REGRESSION_GUIDE.md`
+- `docs/test-guides/ISSUE_302_v0.7.95_REGRESSION_GUIDE.md`
 
 #### Tests Added
 
@@ -390,14 +402,14 @@ already authoritative result or its persisted Memory/learning outcome.
   compatibility boundaries.
 
 See
-[`ISSUE_302_UNRELEASED_REGRESSION_GUIDE.md`](test-guides/ISSUE_302_UNRELEASED_REGRESSION_GUIDE.md).
+[`ISSUE_302_v0.7.95_REGRESSION_GUIDE.md`](test-guides/ISSUE_302_v0.7.95_REGRESSION_GUIDE.md).
 
 ### 301: Stale invalid learning lock could stall interactive work and TUI teardown lacked a direct terminal restore fallback
 
 - **Priority**: High
 - **Status**: Resolved
 - **Introduced**: shared learning lock / fullscreen TUI
-- **Fixed**: Unreleased
+- **Fixed**: v0.7.95 release
 - **Created**: 2026-08-23
 - **Resolved**: 2026-08-23
 
@@ -440,7 +452,7 @@ mouse tracking and leaves the alternate screen before it propagates. Stream
 backpressure no longer bypasses guard registration.
 
 See
-[`ISSUE_301_UNRELEASED_REGRESSION_GUIDE.md`](test-guides/ISSUE_301_UNRELEASED_REGRESSION_GUIDE.md).
+[`ISSUE_301_v0.7.95_REGRESSION_GUIDE.md`](test-guides/ISSUE_301_v0.7.95_REGRESSION_GUIDE.md).
 
 ### 300: Sandboxed git `safe.directory` trust set misaligned with authorized roots
 
@@ -969,7 +981,7 @@ fence.
 - Inline close becomes retryable and makes release failure visible.
 
 See
-[ISSUE_291_UNRELEASED_REGRESSION_GUIDE.md](test-guides/ISSUE_291_UNRELEASED_REGRESSION_GUIDE.md).
+[ISSUE_291_v0.7.86_REGRESSION_GUIDE.md](test-guides/ISSUE_291_v0.7.86_REGRESSION_GUIDE.md).
 
 ### 290: Mixed-case custom provider aliases lose model autocomplete
 
@@ -13032,7 +13044,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 
 ## Changelog
 
-### 2026-08-23: Issue 302 resolved (Unreleased)
+### 2026-08-23: Issue 302 resolved (v0.7.95)
 - Delayed the coding `onComplete` signal until extension completion and
   asynchronous result finalization have produced the authoritative result.
 - Preserved the Runtime's lost-executor-Promise fallback and added a CAP-005

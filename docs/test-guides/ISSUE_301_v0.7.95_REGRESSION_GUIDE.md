@@ -1,7 +1,8 @@
-# Issue 301 / Unreleased Lock, Terminal, Skill, and Runtime Recovery Guide
+# Issue 301 v0.7.95 Lock, Terminal, Skill, and Runtime Recovery Guide
 
-> Release/version assignment is owned by the maintainer. This Unreleased guide
-> neither prepares nor publishes a new package version.
+> This guide covers the v0.7.95 maintenance release fixes for Issues 301/302
+> and the sandbox recovery layer. npm publication remains a manual maintainer
+> step.
 
 ## Scope
 
