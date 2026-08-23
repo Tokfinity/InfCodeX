@@ -4672,6 +4672,11 @@ async function waitForWorkspaceSessionResets(): Promise<void> {
   if (process.platform !== 'win32') assertWindowsSandboxAclProcessSafe();
 }
 
+/** Test-only drain for deferred workspace-session cleanup. */
+export async function waitForWorkspaceSessionResetsForTest(): Promise<void> {
+  await waitForWorkspaceSessionResets();
+}
+
 async function closeCachedWorkspaceSessions(): Promise<unknown[]> {
   const sessions = [...workspaceSessions.values()];
   workspaceSessions.clear();
@@ -6100,6 +6105,7 @@ export function createAsrtShellSandbox(
         };
         let observationResolved = false;
         let retainedObservation: KodaXShellSandboxObservation | undefined;
+        let cleanupPromise: Promise<KodaXShellSandboxObservation | undefined> | undefined;
         return {
           executable: process.execPath,
           args: launch.args,
@@ -6107,62 +6113,71 @@ export function createAsrtShellSandbox(
           fileSystemEffectPolicyKey: policyKey,
           authorizeStart: () => assertWindowsSandboxAclSafe(policyKey),
           async cleanup(cleanupInput) {
-            const cleanupFailures: unknown[] = [];
-            if (!observationResolved) {
+            if (cleanupPromise !== undefined) return cleanupPromise;
+            const current = (async () => {
+              const cleanupFailures: unknown[] = [];
+              if (!observationResolved) {
+                try {
+                  retainedObservation = await readFile(observationFile, 'utf8')
+                    .then(parseBrokerObservation)
+                    .catch((error: NodeJS.ErrnoException) => {
+                      if (error.code === 'ENOENT') return undefined;
+                      throw error;
+                    });
+                  observationResolved = true;
+                } catch (error: unknown) {
+                  cleanupFailures.push(error);
+                }
+              }
+              const removals = await Promise.allSettled([
+                rm(requestFile, { force: true }),
+                ...(observationResolved ? [rm(observationFile, { force: true })] : []),
+              ]);
+              for (const removal of removals) {
+                if (removal.status === 'rejected') cleanupFailures.push(removal.reason);
+              }
               try {
-                retainedObservation = await readFile(observationFile, 'utf8')
-                  .then(parseBrokerObservation)
-                  .catch((error: NodeJS.ErrnoException) => {
-                    if (error.code === 'ENOENT') return undefined;
-                    throw error;
-                  });
-                observationResolved = true;
+                await activeLease.release();
               } catch (error: unknown) {
                 cleanupFailures.push(error);
               }
-            }
-            const removals = await Promise.allSettled([
-              rm(requestFile, { force: true }),
-              ...(observationResolved ? [rm(observationFile, { force: true })] : []),
-            ]);
-            for (const removal of removals) {
-              if (removal.status === 'rejected') cleanupFailures.push(removal.reason);
-            }
+              const attestationMissing = cleanupInput?.execution === 'started_or_unknown'
+                && retainedObservation === undefined;
+              if (attestationMissing) {
+                cleanupFailures.push(new Error(
+                  'Required OS sandbox execution could not be attested; '
+                  + 'the workspace session must be retired and the command was not retried',
+                ));
+              }
+              if (cleanupFailures.length > 0) {
+                const summary = attestationMissing
+                  ? 'Required OS sandbox execution could not be attested and request cleanup failed; '
+                    + 'the workspace session must be retired and the command was not retried.'
+                  : 'Required OS sandbox request cleanup failed; '
+                    + 'the workspace session must be retired.';
+                const message = cleanupFailures.length === 1
+                  ? `${summary} Cause: ${errorText(cleanupFailures[0])}`
+                  : summary;
+                const error = new AggregateError(
+                  cleanupFailures,
+                  message,
+                );
+                emitKodaXDiagnostic({
+                  source: 'sandbox:workspace-session',
+                  level: 'warn',
+                  message: 'Workspace sandbox command cleanup failed.',
+                  detail: error,
+                });
+                throw error;
+              }
+              return retainedObservation;
+            })();
+            cleanupPromise = current;
             try {
-              await activeLease.release();
-            } catch (error: unknown) {
-              cleanupFailures.push(error);
+              return await current;
+            } finally {
+              if (cleanupPromise === current) cleanupPromise = undefined;
             }
-            const attestationMissing = cleanupInput?.execution === 'started_or_unknown'
-              && retainedObservation === undefined;
-            if (attestationMissing) {
-              cleanupFailures.push(new Error(
-                'Required OS sandbox execution could not be attested; '
-                + 'the workspace session must be retired and the command was not retried',
-              ));
-            }
-            if (cleanupFailures.length > 0) {
-              const summary = attestationMissing
-                ? 'Required OS sandbox execution could not be attested and request cleanup failed; '
-                  + 'the workspace session must be retired and the command was not retried.'
-                : 'Required OS sandbox request cleanup failed; '
-                  + 'the workspace session must be retired.';
-              const message = cleanupFailures.length === 1
-                ? `${summary} Cause: ${errorText(cleanupFailures[0])}`
-                : summary;
-              const error = new AggregateError(
-                cleanupFailures,
-                message,
-              );
-              emitKodaXDiagnostic({
-                source: 'sandbox:workspace-session',
-                level: 'warn',
-                message: 'Workspace sandbox command cleanup failed.',
-                detail: error,
-              });
-              throw error;
-            }
-            return retainedObservation;
           },
           retire: retireWorkspaceSession,
         };
@@ -6434,57 +6449,64 @@ async function executePreparedTextFileMutation(
   let processDrained = false;
   let child: ReturnType<typeof spawn> | undefined;
   let windowsEffectJob: WindowsEffectJob | undefined;
-  const scheduleDelayedDrainRecovery = (): void => {
-    const pendingChild = child;
-    if (pendingChild === undefined) return;
-    let drainRecovered = false;
-    let invocationCleaned = false;
-    let effectLeaseReleased = false;
+  let invocationCleaned = false;
+  let effectLeaseReleased = false;
+  let cleanupRecoveryScheduled = false;
+  const cleanupRecovered = (): boolean => (
+    (child === undefined || processDrained)
+    && (effectLease === undefined || effectProcessFinished)
+    && invocationCleaned
+    && effectLeaseReleased
+  );
+  const recoverTextMutationCleanup = async (terminateContainedJob: boolean): Promise<void> => {
+    if (child !== undefined && !processDrained) {
+      if (terminateContainedJob && windowsEffectJob !== undefined) {
+        await terminateWindowsEffectJob(windowsEffectJob.jobName);
+      } else {
+        const termination = await killChildProcessTree(child);
+        if (termination.status === 'unknown') {
+          throw new Error('Sandboxed text mutation process tree is still not proven drained.');
+        }
+        await windowsEffectJob?.drained;
+      }
+      processDrained = true;
+    }
+    if (effectLease !== undefined && !effectProcessFinished) {
+      await effectLease.finishEffectProcess();
+      effectProcessFinished = true;
+    }
+    if (effectProcessBound) {
+      if (!invocationCleaned) {
+        await invocation.cleanup({ execution });
+        invocationCleaned = true;
+      }
+      if (!effectLeaseReleased) {
+        await effectLease?.();
+        effectLeaseReleased = true;
+      }
+      return;
+    }
+    if (!effectLeaseReleased) {
+      await effectLease?.();
+      effectLeaseReleased = true;
+    }
+    if (!invocationCleaned) {
+      await invocation.cleanup({ execution });
+      invocationCleaned = true;
+    }
+  };
+  const scheduleCleanupRecovery = (): void => {
+    if (cleanupRecoveryScheduled || cleanupRecovered()) return;
+    cleanupRecoveryScheduled = true;
     scheduleUnrefBackgroundRetry(
-      async () => {
-        if (!drainRecovered) {
-          if (windowsEffectJob !== undefined) {
-            await terminateWindowsEffectJob(windowsEffectJob.jobName);
-          } else {
-            const termination = await killChildProcessTree(pendingChild);
-            if (termination.status === 'unknown') {
-              throw new Error('Sandboxed text mutation process tree is still not proven drained.');
-            }
-          }
-          drainRecovered = true;
-          processDrained = true;
-        }
-        if (!effectProcessFinished) {
-          await effectLease?.finishEffectProcess();
-          effectProcessFinished = true;
-        }
-        if (effectProcessBound) {
-          if (!invocationCleaned) {
-            await invocation.cleanup({ execution });
-            invocationCleaned = true;
-          }
-          if (!effectLeaseReleased) {
-            await effectLease?.();
-            effectLeaseReleased = true;
-          }
-        } else {
-          if (!effectLeaseReleased) {
-            await effectLease?.();
-            effectLeaseReleased = true;
-          }
-          if (!invocationCleaned) {
-            await invocation.cleanup({ execution });
-            invocationCleaned = true;
-          }
-        }
-      },
+      () => recoverTextMutationCleanup(true),
       () => undefined,
       (error, attempt) => {
         if (attempt % 10 !== 0) return;
         emitKodaXDiagnostic({
           source: 'runtime:text-file-mutation',
           level: 'warn',
-          message: 'Automatic text-mutation process-tree drain recovery is still pending; its sandbox owner and filesystem fence remain closed.',
+          message: 'Automatic text-mutation cleanup recovery is still pending; its sandbox owner and filesystem fence remain closed.',
           detail: error,
         });
       },
@@ -6560,62 +6582,15 @@ async function executePreparedTextFileMutation(
     throw error;
   } finally {
     const cleanupFailures: unknown[] = [];
-    if (child !== undefined && !processDrained) {
-      try {
-        const termination = await killChildProcessTree(child);
-        if (termination.status === 'unknown') {
-          throw new Error('Sandboxed text mutation process tree could not be proven drained.');
-        }
-        await windowsEffectJob?.drained;
-        processDrained = true;
-      } catch (error: unknown) {
-        cleanupFailures.push(error);
-      }
+    try {
+      await recoverTextMutationCleanup(false);
+    } catch (error: unknown) {
+      cleanupFailures.push(error);
     }
-    if (child !== undefined && !processDrained) scheduleDelayedDrainRecovery();
-    if (
-      effectLease !== undefined
-      && (child === undefined || processDrained)
-      && !effectProcessFinished
-    ) {
-      try {
-        await effectLease.finishEffectProcess();
-        effectProcessFinished = true;
-      } catch (error: unknown) {
-        cleanupFailures.push(error);
-      }
-    }
-    // An unconfirmed process tree remains an authoritative live effect. Keep
-    // both its workspace sandbox owner and effect lease intact so ACL cleanup
-    // cannot race that process. Exit settlement will retire the durable owner
-    // only after the tree is proven drained.
-    if (child === undefined || processDrained) {
-      const releaseEffectLease = async (): Promise<void> => {
-        try {
-          await effectLease?.();
-        } catch (error: unknown) {
-          cleanupFailures.push(error);
-        }
-      };
-      const cleanupInvocation = async (): Promise<void> => {
-        try {
-          await invocation.cleanup({ execution });
-        } catch (cleanupError: unknown) {
-          cleanupFailures.push(cleanupError);
-        }
-      };
-      if (effectProcessBound) {
-        // A successfully bound, now-finished shell remains the atomic fence
-        // while workspace cleanup promotes its same-policy transition.
-        await cleanupInvocation();
-        await releaseEffectLease();
-      } else {
-        // Bind failed before the gated target was authorized, so no effect
-        // exists. Releasing the unbound shell avoids self-blocking cleanup.
-        await releaseEffectLease();
-        await cleanupInvocation();
-      }
-    }
+    // Any unfinished phase keeps the appropriate owner/fence and converges in
+    // the same retry loop, whether the first failure was drain, inner cleanup,
+    // policy reset, or outer lease release.
+    if (!cleanupRecovered()) scheduleCleanupRecovery();
     if (cleanupFailures.length > 0) {
       throw new AggregateError(
         [

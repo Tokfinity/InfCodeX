@@ -1233,6 +1233,7 @@ import {
   sandboxSetupGuidance,
   shutdownAsrtWorkspaceSessions,
   waitForStandaloneBrokerSettlementsForTest,
+  waitForWorkspaceSessionResetsForTest,
   windowsGitTrustRoots,
   withWindowsSandboxChildEnvironment,
 } from './sandbox-runtime.js';
@@ -1927,6 +1928,38 @@ describe('ASRT workspace shell adapter', () => {
         await releaseRecoveredLease();
       } finally {
         windowsEffectJobMock.textMutationDrainFailure = undefined;
+        await _resetFileSystemEffectLeasesForTests();
+      }
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'retries a transient workspace cleanup after the text process already drained',
+    async () => {
+      processTreeKillMock.childPid = process.pid;
+      workspaceSessionControl.cleanupFailureOnCall = 1;
+      const workspace = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-drained-cleanup-retry-'));
+      tempRoots.push(workspace);
+      const target = path.join(workspace, 'target.txt');
+      await writeFile(target, 'before', 'utf8');
+      const sandbox = createAsrtTextFileMutationSandbox({
+        workspaceRoot: workspace,
+        shouldSandbox: () => true,
+      });
+      try {
+        await expect(sandbox.read({
+          toolCallId: 'drained-cleanup-retry-read-1',
+          toolName: 'edit',
+          toolInput: { path: target },
+          path: target,
+        })).rejects.toThrow(/cleanup/i);
+        await vi.waitFor(
+          () => expect(workspaceSessionControl.cleanupRequests).toBe(2),
+          { timeout: 3_000 },
+        );
+        const releaseRecoveredLease = await acquireHostFileSystemMutationLease();
+        await releaseRecoveredLease();
+      } finally {
         await _resetFileSystemEffectLeasesForTests();
       }
     },
@@ -3639,9 +3672,17 @@ describe('ASRT workspace shell adapter', () => {
         expect(entries.some((entry) => entry.startsWith('unconfirmed-owner-'))).toBe(false);
       }
       const effectCallsAfterFailure = recoveryLockMock.effectCalls;
+      const cleanupRequestsAfterFailure = workspaceSessionControl.cleanupRequests;
       recoveryLockMock.effectFailureStartCall = undefined;
-      await expect(prepared.cleanup()).resolves.toBeUndefined();
+      await expect(Promise.all([
+        prepared.cleanup(),
+        prepared.cleanup(),
+      ])).resolves.toEqual([undefined, undefined]);
       expect(recoveryLockMock.effectCalls).toBeGreaterThan(effectCallsAfterFailure);
+      expect(workspaceSessionControl.cleanupRequests).toBe(cleanupRequestsAfterFailure);
+      const effectCallsAfterRecovery = recoveryLockMock.effectCalls;
+      await prepared.cleanup();
+      expect(recoveryLockMock.effectCalls).toBe(effectCallsAfterRecovery);
     },
   );
 
@@ -5150,6 +5191,7 @@ describe('ASRT workspace shell adapter', () => {
       await expect(timeoutOutcome).resolves.toMatchObject({ name: 'TimeoutError' });
       workspaceSessionControl.releaseReady?.();
       workspaceSessionControl.releaseReady = undefined;
+      await waitForWorkspaceSessionResetsForTest();
       const poisonDirectory = path.join(
         path.resolve(process.env.KODAX_HOME!),
         'sandbox-runtime',
@@ -5161,10 +5203,8 @@ describe('ASRT workspace shell adapter', () => {
         'sandbox-runtime',
         'acl-poison',
       );
-      await vi.waitFor(async () => {
-        await expect(readdir(poisonDirectory)).resolves.toEqual([]);
-        await expect(readdir(globalPoisonDirectory)).resolves.toEqual([]);
-      });
+      await expect(readdir(poisonDirectory)).resolves.toEqual([]);
+      await expect(readdir(globalPoisonDirectory)).resolves.toEqual([]);
     },
   );
 

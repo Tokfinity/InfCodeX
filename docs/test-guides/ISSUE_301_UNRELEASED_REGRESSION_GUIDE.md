@@ -44,8 +44,9 @@ Required assertions:
    produce one user-visible rejection; failed/malformed `PreToolUse` hooks deny.
 9. Terminal status persistence failure yields `unknown`; a doubly fenced event
    journal invalidates active Session observations for resnapshot.
-10. Delayed text cleanup retains its consumed attestation and converges after a
-    transient workspace cleanup or policy-reset failure without replay.
+10. Text cleanup retains its consumed attestation and converges after a
+    transient workspace cleanup or policy-reset failure without replay, both
+    after ordinary drain and delayed-drain recovery.
 
 ## Manual test cases
 
@@ -217,7 +218,7 @@ the release matrix.
   `delivery_failed`.
 - [ ] `runs.get()` stays `unknown` and the Session execution fence stays closed.
 
-### TC-011: delayed text cleanup survives partial failure
+### TC-011: text cleanup survives partial failure
 
 **优先级**: High
 **类型**: Windows recovery
@@ -227,6 +228,8 @@ the release matrix.
 2. Allow the drain to settle, then fail the first workspace cleanup response
    after the broker attestation has been read.
 3. Allow the next cleanup response and reacquire the host filesystem lease.
+4. Repeat without the initial delayed drain so the process is already settled
+   before the first workspace cleanup failure.
 
 **预期效果**:
 - [ ] Workspace cleanup is retried and succeeds without rerunning the text read.

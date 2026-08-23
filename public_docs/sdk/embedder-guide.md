@@ -2865,7 +2865,7 @@ while it is busy. Version 5 adds automatic same-boot Windows ACL recovery: a
 sandbox-user SID probe must prove that no unrelated process remains before an
 uncontained `unconfirmed-owner` ticket is cleared. Probe uncertainty is
 diagnosed and retried automatically; it never becomes permission to reset ACLs.
-Delayed sandboxed text cleanup also retains a consumed execution attestation
+Sandboxed text cleanup also retains a consumed execution attestation
 across retries. Transient workspace cleanup, policy reset, and outer effect
 lease release are retried without replaying the text operation or repeating a
 completed cleanup phase.

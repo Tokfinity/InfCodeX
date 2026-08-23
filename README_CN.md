@@ -287,7 +287,7 @@ linked-worktree backlink 校验。旧版本创建的 worktree 没有持久化登
 一次性迁移；若该精确证据已不存在，请先停止后台进程，再通过 KodaX 删除并重新
 创建一次。迁移时不要删除 ProgramData 协调文件。
 
-**当前 Unreleased 自动清理修正**：延迟文本清理会跨重试保留已经读取的执行
+**当前 Unreleased 自动清理修正**：文本清理会跨重试保留已经读取的执行
 attestation，并对瞬时 workspace cleanup、策略 reset 与 effect lease 释放失败自动
 重试；已经完成的阶段不会重复执行，也不会留下必须人工删除的恢复标记。
 

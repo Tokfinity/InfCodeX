@@ -730,7 +730,7 @@ diagnostics rather than hidden.
 malformed, or truncated owner records self-recover after an unchanged
 bytes/stat check. Same-boot Windows `unconfirmed-owner` cleanup retries until
 the sandbox-user SID is proven idle, without requiring marker deletion.
-Delayed text cleanup retains its execution attestation and retries transient
+Text cleanup retains its execution attestation and retries transient
 workspace cleanup, policy reset, and effect-lease release automatically.
 Canonical history stores the exact explicit-Skill query, multiple Skill
 references are rejected, and failed/malformed `PreToolUse` hooks deny the tool.

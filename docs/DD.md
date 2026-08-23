@@ -168,8 +168,9 @@ Sandbox backups use a canonical path minted from the opened helper identity;
 undo rejects a subsequently changed canonical identity. Worktree create/remove additionally keep a per-target queue
 around their namespace lease until the managed Git process tree is proven
 drained.
-Delayed text drain recovery is phase-idempotent. It caches a successfully read
-execution attestation before deleting the broker file, retries a transient
+Text cleanup recovery is phase-idempotent. It applies to both ordinarily
+drained and delayed-drain paths, caches a successfully read execution
+attestation before deleting the broker file, retries a transient
 workspace cleanup or policy reset, and does not repeat finished process-drain,
 effect-process, or outer lease-release phases.
 After `git worktree add` succeeds, the worktree tool validates and canonicalizes

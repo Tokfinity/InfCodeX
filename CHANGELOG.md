@@ -29,8 +29,8 @@ All notable changes to this project will be documented in this file.
   an interrupted exit cannot strand a manual-recovery requirement. Same-boot
   `unconfirmed-owner` tickets are retried automatically and cleared only after a
   sandbox-user SID probe proves the account idle; probe failure remains
-  fail-closed and diagnosable without blocking non-sandbox work. Delayed text
-  drain recovery records each completed cleanup phase and retains a consumed
+  fail-closed and diagnosable without blocking non-sandbox work. Text cleanup
+  recovery records each completed phase and retains a consumed
   sandbox attestation across retries. Transient workspace cleanup, policy-reset,
   or outer lease-release failures therefore retry without losing evidence or
   repeating already completed phases.
