@@ -20,6 +20,13 @@ function collectSkillReferences(input: string): readonly InlineSkillReference[] 
   ].sort((left, right) => left.start - right.start);
 }
 
+export class MultipleUserSkillReferencesError extends Error {
+  constructor(names: readonly string[]) {
+    super(`Only one Skill can be active per request; found: ${names.join(', ')}.`);
+    this.name = 'MultipleUserSkillReferencesError';
+  }
+}
+
 export interface UserSkillReference {
   readonly name: string;
   readonly argumentsText: string;
@@ -27,10 +34,25 @@ export interface UserSkillReference {
 
 /** Parse explicit slash syntax without performing discovery or expansion. */
 export function parseUserSkillReferences(input: string): readonly UserSkillReference[] {
-  return collectSkillReferences(input).map((reference) => ({
+  const references = collectSkillReferences(input);
+  return references.map((reference, index) => ({
     name: reference.name,
-    argumentsText: input.slice(reference.end).trim(),
+    argumentsText: input.slice(reference.end, references[index + 1]?.start).trim(),
   }));
+}
+
+export function assertSingleKnownUserSkillReference(
+  input: string,
+  hasSkill: (name: string) => boolean,
+): UserSkillReference | undefined {
+  const knownReferences = parseUserSkillReferences(input)
+    .filter((reference) => hasSkill(reference.name));
+  if (knownReferences.length > 1) {
+    throw new MultipleUserSkillReferencesError(
+      knownReferences.map((reference) => reference.name),
+    );
+  }
+  return knownReferences[0];
 }
 
 /** Classify a busy-turn slash reference without waiting on discovery. */
@@ -40,7 +62,7 @@ export function findQueueableUserSkillReference(
   registryReady: boolean,
 ): UserSkillReference | undefined {
   const references = parseUserSkillReferences(input);
-  return references.find((reference) => hasSkill(reference.name))
+  return assertSingleKnownUserSkillReference(input, hasSkill)
     ?? (registryReady ? undefined : references[0]);
 }
 
@@ -54,11 +76,7 @@ export async function resolveUserSkillReference(
   if (registry.size === 0) {
     registry = await initializeSkillRegistry(projectRoot);
   }
-  for (const reference of parseUserSkillReferences(input)) {
-    if (!registry.has(reference.name)) continue;
-    return reference;
-  }
-  return undefined;
+  return assertSingleKnownUserSkillReference(input, (name) => registry.has(name));
 }
 
 export async function createUserSkillInvocation(

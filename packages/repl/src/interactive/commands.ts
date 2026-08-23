@@ -80,7 +80,11 @@ import {
   initializeSkillRegistry,
   type SkillMetadata,
 } from '@kodax-ai/agent';
-import { createUserSkillInvocation } from './user-skill-invocation.js';
+import {
+  assertSingleKnownUserSkillReference,
+  createUserSkillInvocation,
+  MultipleUserSkillReferencesError,
+} from './user-skill-invocation.js';
 import { CommandRegistry } from '../commands/registry.js';
 import { formatLearningStatus } from '../ui/view-models/learning-summary.js';
 import { copyCommand } from '../commands/copy-command.js';
@@ -3112,11 +3116,26 @@ export async function executeCommand(
   parsed: { command: string; args: string[]; skillInvocation?: { name: string } },
   context: InteractiveContext,
   callbacks: CommandCallbacks,
-  currentConfig: CurrentConfig
+  currentConfig: CurrentConfig,
+  rawInput?: string,
 ): Promise<CommandResult> {
   // Lazy initialization.
   if (commandRegistry.size === 0) {
     initCommandRegistry(context.gitRoot);
+  }
+
+  if (rawInput !== undefined) {
+    let skillRegistry = getSkillRegistry(context.gitRoot);
+    if (skillRegistry.size === 0) {
+      skillRegistry = await initializeSkillRegistry(context.gitRoot);
+    }
+    try {
+      assertSingleKnownUserSkillReference(rawInput, (name) => skillRegistry.has(name));
+    } catch (error: unknown) {
+      if (!(error instanceof MultipleUserSkillReferencesError)) throw error;
+      console.log(chalk.yellow(`\n${error.message}\n`));
+      return false;
+    }
   }
 
   // Handle legacy /skill:name format.

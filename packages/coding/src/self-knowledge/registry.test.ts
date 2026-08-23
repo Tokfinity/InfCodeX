@@ -111,7 +111,10 @@ describe('FEATURE_218 manual registry', () => {
     const sandbox = resolveKodaXManual({ topic: 'sandbox' }).content;
 
     expect(sdk).toContain('v0.7.94 SDK keeps `sandboxRuntime:4`');
+    expect(sdk).toContain('Current Unreleased source advertises `sandboxRuntime:5`');
+    expect(sdk).toContain('`runtimeExitSettlement:2`');
     expect(sdk).toContain('compatible live Bash lease');
+    expect(sdk).toContain('linked worktree roots persist in the owning Session');
     expect(sdk).toContain('gitSafeDirectory: authorized-repo-roots');
     expect(sdk).toContain('missing workspace directory');
     expect(sdk).toContain('conversationHistory:2');
@@ -123,6 +126,9 @@ describe('FEATURE_218 manual registry', () => {
     expect(sandbox).toContain('gitSafeDirectory: authorized-repo-roots');
     expect(sandbox).toContain('never emits `safe.directory=*`');
     expect(sandbox).toContain('compatible live Bash lease');
+    expect(sandbox).toContain('Current Unreleased source registers KodaX-created linked worktrees');
+    expect(sandbox).toContain('retained successful worktree_create');
+    expect(sandbox).toContain('An unregistered sibling remains');
     expect(sandbox).toContain('strict byte bounds');
     expect(sandbox).toContain('stdin failures stay on the operation Promise');
   });
@@ -210,6 +216,7 @@ describe('FEATURE_218 manual registry', () => {
     expect(sandbox).toContain('case-insensitive PATH/Path');
     expect(sandbox).toContain('verbatim-argument contract');
     expect(sandbox).toContain('capability metadata is version 4');
+    expect(sandbox).toContain('current Unreleased source advertises version 5');
     expect(sandbox).toContain('already-approved normal permission path');
     expect(sandbox).toContain('only the last owner recovers');
   });

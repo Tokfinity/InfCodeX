@@ -12,6 +12,7 @@ import {
   killChildProcessTreeSync,
   prepareJavaScriptChildLaunch,
   registerManagedChildProcess,
+  terminateWindowsEffectJob,
   type WindowsEffectJob,
 } from '@kodax-ai/agent';
 import { KODAX_DEFAULT_TIMEOUT, KODAX_HARD_TIMEOUT } from '../constants.js';
@@ -46,6 +47,7 @@ import {
 } from '../shell-execution/environment.js';
 import {
   acquireFileSystemMutationLease,
+  scheduleUnrefBackgroundRetry,
   type FileSystemMutationLeaseRelease,
 } from './_internal/file-mutation-queue.js';
 
@@ -766,7 +768,10 @@ async function executeToolBash(
       throw error;
     }
   };
-  const finishBoundMutationProcess = async (proc: ManagedChildProcess): Promise<boolean> => {
+  const finishBoundMutationProcess = async (
+    proc: ManagedChildProcess,
+    onRecovered: () => void,
+  ): Promise<boolean> => {
     let drained = false;
     try {
       await mutationProcessBinding;
@@ -811,6 +816,37 @@ async function executeToolBash(
         level: 'warn',
         message: 'Shell effect tree could not be proven drained; its sandbox owner and filesystem fence remain closed.',
       });
+      scheduleUnrefBackgroundRetry(
+        async () => {
+          if (windowsEffectJob !== undefined) {
+            await terminateWindowsEffectJob(windowsEffectJob.jobName);
+          } else {
+            const result = await killChildProcessTree(proc, {
+              forceMs: 500,
+              taskkillMs: 500,
+            });
+            if (result.status === 'unknown') {
+              throw new Error('Shell effect process tree is still not proven drained.');
+            }
+          }
+          await releaseMutationLease.finishEffectProcess();
+          await cleanupSandbox('started_or_unknown');
+          await releaseMutation();
+          if (!mutationLeaseReleased) {
+            throw new Error('Shell effect lease release is still pending.');
+          }
+        },
+        onRecovered,
+        (error, attempt) => {
+          if (attempt % 10 !== 0) return;
+          emitKodaXDiagnostic({
+            source: 'coding:bash-filesystem-effect',
+            level: 'warn',
+            message: 'Automatic shell process-tree drain recovery is still pending; its sandbox owner and filesystem fence remain closed.',
+            detail: error,
+          });
+        },
+      );
       return false;
     }
     try {
@@ -916,7 +952,7 @@ async function executeToolBash(
     const finishBackground = (): Promise<boolean> => {
       finishBackgroundEffect ??= proc.pid === undefined
         ? finishUnstartedMutation()
-        : finishBoundMutationProcess(proc);
+        : finishBoundMutationProcess(proc, cleanupProcessHooks);
       return finishBackgroundEffect;
     };
     logStream.on('error', (error) => {
@@ -1038,7 +1074,7 @@ async function executeToolBash(
     const finishForeground = (): Promise<boolean> => {
       finishForegroundEffect ??= proc.pid === undefined
         ? finishUnstartedMutation()
-        : finishBoundMutationProcess(proc);
+        : finishBoundMutationProcess(proc, unregisterForegroundCommand);
       return finishForegroundEffect.then((drained) => {
         process.off('exit', cleanupOnProcessExit);
         if (drained) unregisterForegroundCommand();

@@ -182,6 +182,15 @@ observes finalization rejections and recovers an admitted `runId` through
 [SDK Embedder Guide](../../public_docs/sdk/embedder-guide.md)
 for host capability requirements.
 
+Current Unreleased source advances Windows `sandboxRuntime` to `5` and local
+`runtimeExitSettlement` to `2`. Same-boot ACL recovery automatically retries a
+sandbox-user SID probe before clearing an `unconfirmed-owner` ticket. Terminal
+status persistence failure converges to `unknown`; if the event journal is also
+fenced, active Session observations are invalidated for a mandatory resnapshot.
+Explicit Skill execution keeps exact `rawUserInput` in canonical history,
+rejects multiple active Skill references, and fails closed when a `PreToolUse`
+hook crashes or returns malformed JSON.
+
 ## 安装 / 导入
 
 ```bash

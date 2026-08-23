@@ -850,7 +850,7 @@ async function retryEffectLeaseUpdate(operation: () => Promise<void>): Promise<v
   throw lastError;
 }
 
-function scheduleUnrefRetry(
+export function scheduleUnrefBackgroundRetry(
   operation: () => Promise<void>,
   onSuccess: () => void,
   onRetryFailure: (error: unknown, attempt: number) => void,
@@ -879,7 +879,7 @@ function scheduleBackgroundFinish(
 ): void {
   if (lifecycle.effectFinished || lifecycle.backgroundFinishScheduled) return;
   lifecycle.backgroundFinishScheduled = true;
-  scheduleUnrefRetry(
+  scheduleUnrefBackgroundRetry(
     async () => {
       if (lifecycle.released) return;
       await finishEffectLeaseProcessOnce(
@@ -993,7 +993,7 @@ function scheduleBackgroundRelease(
 ): void {
   if (lifecycle.released || lifecycle.backgroundReleaseScheduled) return;
   lifecycle.backgroundReleaseScheduled = true;
-  scheduleUnrefRetry(
+  scheduleUnrefBackgroundRetry(
     () => releaseEffectLeaseOnce(
       context,
       lifecycle,
@@ -1266,14 +1266,37 @@ export function acquireHostFileSystemMutationLease(): Promise<FileSystemMutation
   return acquireEffectLease('direct');
 }
 
+async function runWithEffectLeaseRelease<T>(
+  operation: () => Promise<T>,
+  releaseLease: FileSystemMutationLeaseRelease,
+): Promise<T> {
+  let outcome: { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: unknown };
+  try {
+    outcome = { ok: true, value: await operation() };
+  } catch (error: unknown) {
+    outcome = { ok: false, error };
+  }
+  try {
+    await releaseLease();
+  } catch (releaseError: unknown) {
+    if (!outcome.ok) {
+      throw new AggregateError(
+        [outcome.error, releaseError],
+        `Filesystem operation failed and lease release also failed: ${
+          outcome.error instanceof Error ? outcome.error.message : String(outcome.error)
+        }`,
+      );
+    }
+    throw releaseError;
+  }
+  if (!outcome.ok) throw outcome.error;
+  return outcome.value;
+}
+
 /** Keep a degraded host-side sink disjoint from model-started shell effects. */
 export async function withHostFileSystemMutation<T>(operation: () => Promise<T>): Promise<T> {
   const releaseLease = await acquireHostFileSystemMutationLease();
-  try {
-    return await operation();
-  } finally {
-    await releaseLease();
-  }
+  return runWithEffectLeaseRelease(operation, releaseLease);
 }
 
 /** Serialize a host operation that can materialize or remove path aliases. */
@@ -1284,14 +1307,13 @@ export async function withHostFileSystemNamespaceMutation<T>(
   ) => Promise<T>,
 ): Promise<T> {
   const releaseLease = await acquireEffectLease('namespace');
-  try {
-    return await operation(
+  return runWithEffectLeaseRelease(
+    () => operation(
       releaseLease.bindEffectProcess,
       releaseLease.finishEffectProcess,
-    );
-  } finally {
-    await releaseLease();
-  }
+    ),
+    releaseLease,
+  );
 }
 
 /** Capture a stable canonical backup key before a concurrent sink commits. */

@@ -1394,6 +1394,7 @@ async function runReadChildBody(
           shellExecution: scope.ctx.shellExecution,
           shellSandbox: scope.ctx.shellSandbox,
           textFileMutationSandbox: scope.ctx.textFileMutationSandbox,
+          workspaceSandboxRoots: scope.ctx.workspaceSandboxRoots,
           permissionIntent: buildChildPermissionIntent(
             bundle,
             options.parentOptions.permissionIntent ?? scope.ctx.permissionIntent,
@@ -1687,6 +1688,7 @@ async function runWriteChildBody(
           shellExecution: childCtx.shellExecution,
           shellSandbox: childCtx.shellSandbox,
           textFileMutationSandbox: childCtx.textFileMutationSandbox,
+          workspaceSandboxRoots: childCtx.workspaceSandboxRoots,
           permissionIntent: buildChildPermissionIntent(
             bundle,
             options.parentOptions.permissionIntent ?? childCtx.permissionIntent,

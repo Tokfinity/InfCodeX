@@ -55,7 +55,7 @@ import {
   readProcessStartIdentity,
   rememberChildProcessTree,
   terminateWindowsEffectJob,
-  windowsSandboxSidHasActiveProcesses,
+  windowsSandboxSidHasOtherProcesses,
   withKodaXFileLock,
   type ISkillRegistry,
   type RunnerToolCall,
@@ -76,6 +76,7 @@ import {
   acquireExclusiveFileSystemEffectLease,
   FileSystemCleanupAdmissionTimeoutError,
   finishAndReleaseFileSystemEffectLease,
+  scheduleUnrefBackgroundRetry,
   type FileSystemMutationLeaseRelease,
   withExclusiveFileSystemCleanupLease,
 } from '@kodax-ai/coding/internal/file-system-effects';
@@ -174,10 +175,32 @@ export interface AsrtShellSandboxSelection {
 
 export interface CreateAsrtShellSandboxInput {
   readonly workspaceRoot: string;
+  /** Exact Runtime-owned linked-worktree roots that share this workspace policy. */
+  readonly additionalWorkspaceRoots?: () => readonly string[];
   readonly shouldSandbox: (
     call: RunnerToolCall,
   ) => boolean | AsrtShellSandboxSelection
     | Promise<boolean | AsrtShellSandboxSelection>;
+}
+
+function withAdditionalWorkspaceRoots(
+  selection: boolean | AsrtShellSandboxSelection,
+  roots: readonly string[],
+): boolean | AsrtShellSandboxSelection {
+  if (roots.length === 0) return selection;
+  const normalizedRoots = [...new Set(roots.map((root) => path.resolve(root)))];
+  const current = typeof selection === 'object'
+    ? selection.filesystemAccess
+    : undefined;
+  return {
+    ...(typeof selection === 'object' && selection.agentHomeAccess !== undefined
+      ? { agentHomeAccess: selection.agentHomeAccess }
+      : {}),
+    filesystemAccess: {
+      read: [...new Set([...(current?.read ?? []), ...normalizedRoots])],
+      write: [...new Set([...(current?.write ?? []), ...normalizedRoots])],
+    },
+  };
 }
 
 export type KodaXSandboxNetworkPolicy =
@@ -236,7 +259,7 @@ export interface SandboxSetupOutcome {
 }
 
 export interface KodaXSandboxCapability {
-  readonly version: 4;
+  readonly version: 5;
   readonly asrtVersion: string;
   readonly platform: NodeJS.Platform;
   readonly backend: 'windows-restricted-user' | 'macos-seatbelt' | 'linux-bubblewrap' | 'unsupported';
@@ -253,6 +276,8 @@ export interface KodaXSandboxCapability {
    * behavior; clients surface a restart diagnostic instead of failing the gate.
    */
   readonly gitSafeDirectory: 'authorized-repo-roots';
+  readonly delayedEffectDrainRecovery: 'automatic';
+  readonly sameBootAclRecovery: 'sandbox-user-process-probe';
 }
 
 export function sandboxRuntimeCapability(): KodaXSandboxCapability {
@@ -264,7 +289,7 @@ export function sandboxRuntimeCapability(): KodaXSandboxCapability {
         ? 'linux-bubblewrap'
         : 'unsupported';
   return {
-    version: 4,
+    version: 5,
     asrtVersion: KODAX_ASRT_VERSION,
     platform: process.platform,
     backend,
@@ -275,6 +300,8 @@ export function sandboxRuntimeCapability(): KodaXSandboxCapability {
     unavailableBehavior: 'structured-no-execution',
     permissionFallback: 'normal-permission-policy',
     gitSafeDirectory: 'authorized-repo-roots',
+    delayedEffectDrainRecovery: 'automatic',
+    sameBootAclRecovery: 'sandbox-user-process-probe',
   };
 }
 
@@ -1681,8 +1708,17 @@ async function windowsSandboxSidIsIdle(expectedSid?: string): Promise<boolean> {
     const status = getWindowsSandboxUserStatus({ srtWin: runner.srtWin });
     const sid = expectedSid ?? status.sid;
     if (sid === undefined || (status.sid !== undefined && status.sid !== sid)) return false;
-    return !(await windowsSandboxSidHasActiveProcesses(sid));
-  } catch {
+    return !(await windowsSandboxSidHasOtherProcesses(sid, {
+      executable: runner.srtWin.exe,
+      prependArgs: runner.srtWin.prependArgs,
+    }));
+  } catch (error: unknown) {
+    emitKodaXDiagnostic({
+      source: 'runtime:sandbox-acl-recovery',
+      level: 'warn',
+      message: 'Windows sandbox-user process inspection failed; ACL recovery remains fenced for automatic retry.',
+      detail: error,
+    });
     return false;
   }
 }
@@ -5070,7 +5106,7 @@ async function startWorkspaceSessionClientWithFence(
   const terminate = (): Promise<void> => {
     if (terminatePromise) return terminatePromise;
     terminationRequested = true;
-    terminatePromise = (async () => {
+    const current = (async () => {
       try {
         if (await waitForOrderlyClose()) return;
         const result = await killChildProcessTree(child, {
@@ -5097,7 +5133,11 @@ async function startWorkspaceSessionClientWithFence(
         child.stdin.destroy();
       }
     })().finally(evict);
-    return terminatePromise;
+    terminatePromise = current;
+    void current.catch(() => {
+      if (terminatePromise === current) terminatePromise = undefined;
+    });
+    return current;
   };
   const observeFailedTermination = (reason: string): void => {
     void terminate().catch((error: unknown) => {
@@ -5280,6 +5320,7 @@ async function startWorkspaceSessionClientWithFence(
       setWorkspaceSessionReferenced(child, true);
       activeLeases += 1;
       let finalized = false;
+      let closeRequiredAfterFinalize = false;
       const finalize = (): boolean => {
         if (finalized) return false;
         finalized = true;
@@ -5293,7 +5334,10 @@ async function startWorkspaceSessionClientWithFence(
         return idle;
       };
       const finalizeAndCloseIfIdle = async (): Promise<void> => {
-        if (finalize() && process.platform === 'win32') {
+        if (!finalized) {
+          closeRequiredAfterFinalize = finalize() && process.platform === 'win32';
+        }
+        if (closeRequiredAfterFinalize) {
           await client.close();
         }
       };
@@ -5367,34 +5411,44 @@ async function startWorkspaceSessionClientWithFence(
           throw error;
         }
         let released = false;
+        let cleanupCompleted = false;
+        let releasePromise: Promise<void> | undefined;
         return {
           invocation: response.invocation,
           async release() {
             if (released) return;
-            released = true;
-            let cleanupError: unknown;
-            try {
-              const cleanup = await request('cleanup');
-              if (!cleanup.ok) {
-                throw new Error(cleanup.error ?? 'ASRT command cleanup failed.');
+            if (releasePromise !== undefined) return releasePromise;
+            const current = (async (): Promise<void> => {
+              if (!cleanupCompleted) {
+                let cleanup: WorkspaceSessionResponse;
+                try {
+                  cleanup = await request('cleanup');
+                } catch (cleanupError: unknown) {
+                  try {
+                    await finalizeAndCloseIfIdle();
+                    released = true;
+                  } catch (closeError: unknown) {
+                    throw new AggregateError(
+                      [cleanupError, closeError],
+                      'Workspace sandbox command cleanup and policy-group reset both failed.',
+                    );
+                  }
+                  throw cleanupError;
+                }
+                if (!cleanup.ok) {
+                  throw new Error(cleanup.error ?? 'ASRT command cleanup failed.');
+                }
+                cleanupCompleted = true;
               }
-            } catch (error: unknown) {
-              cleanupError = error;
-            }
-            let closeError: unknown;
-            try {
               await finalizeAndCloseIfIdle();
-            } catch (error: unknown) {
-              closeError = error;
+              released = true;
+            })();
+            releasePromise = current;
+            try {
+              await current;
+            } finally {
+              if (releasePromise === current) releasePromise = undefined;
             }
-            if (cleanupError !== undefined && closeError !== undefined) {
-              throw new AggregateError(
-                [cleanupError, closeError],
-                'Workspace sandbox command cleanup and policy-group reset both failed.',
-              );
-            }
-            if (cleanupError !== undefined) throw cleanupError;
-            if (closeError !== undefined) throw closeError;
           },
         };
       } catch (error) {
@@ -5407,7 +5461,7 @@ async function startWorkspaceSessionClientWithFence(
       closing = true;
       evict();
       let aclRecoveryConfirmed = false;
-      closePromise = (async () => {
+      const current = (async () => {
         if (idleTimer) clearTimeout(idleTimer);
         setWorkspaceSessionReferenced(child, true);
         if (activeLeases > 0) {
@@ -5448,8 +5502,14 @@ async function startWorkspaceSessionClientWithFence(
         }
         throw error;
       });
-      trackWorkspaceSessionReset(closePromise);
-      return closePromise;
+      closePromise = current;
+      trackWorkspaceSessionReset(current);
+      try {
+        await current;
+      } catch (error: unknown) {
+        if (closePromise === current) closePromise = undefined;
+        throw error;
+      }
     },
   };
   scheduleIdleClose();
@@ -5845,7 +5905,13 @@ export function createAsrtShellSandbox(
         name: 'bash',
         input: { ...shellInput.toolInput },
       };
-      const selection = await input.shouldSandbox(call);
+      const selected = await input.shouldSandbox(call);
+      const selection = selected
+        ? withAdditionalWorkspaceRoots(
+            selected,
+            input.additionalWorkspaceRoots?.() ?? [],
+          )
+        : false;
       if (!selection) {
         shellInput.reportObservation?.({
           version: 1,
@@ -6032,6 +6098,8 @@ export function createAsrtShellSandbox(
           }
           if (process.platform === 'win32') await retirement;
         };
+        let observationResolved = false;
+        let retainedObservation: KodaXShellSandboxObservation | undefined;
         return {
           executable: process.execPath,
           args: launch.args,
@@ -6039,21 +6107,23 @@ export function createAsrtShellSandbox(
           fileSystemEffectPolicyKey: policyKey,
           authorizeStart: () => assertWindowsSandboxAclSafe(policyKey),
           async cleanup(cleanupInput) {
-            let observation: KodaXShellSandboxObservation | undefined;
             const cleanupFailures: unknown[] = [];
-            try {
-              observation = await readFile(observationFile, 'utf8')
-                .then(parseBrokerObservation)
-                .catch((error: NodeJS.ErrnoException) => {
-                  if (error.code === 'ENOENT') return undefined;
-                  throw error;
-                });
-            } catch (error: unknown) {
-              cleanupFailures.push(error);
+            if (!observationResolved) {
+              try {
+                retainedObservation = await readFile(observationFile, 'utf8')
+                  .then(parseBrokerObservation)
+                  .catch((error: NodeJS.ErrnoException) => {
+                    if (error.code === 'ENOENT') return undefined;
+                    throw error;
+                  });
+                observationResolved = true;
+              } catch (error: unknown) {
+                cleanupFailures.push(error);
+              }
             }
             const removals = await Promise.allSettled([
-                rm(requestFile, { force: true }),
-                rm(observationFile, { force: true }),
+              rm(requestFile, { force: true }),
+              ...(observationResolved ? [rm(observationFile, { force: true })] : []),
             ]);
             for (const removal of removals) {
               if (removal.status === 'rejected') cleanupFailures.push(removal.reason);
@@ -6064,7 +6134,7 @@ export function createAsrtShellSandbox(
               cleanupFailures.push(error);
             }
             const attestationMissing = cleanupInput?.execution === 'started_or_unknown'
-              && observation === undefined;
+              && retainedObservation === undefined;
             if (attestationMissing) {
               cleanupFailures.push(new Error(
                 'Required OS sandbox execution could not be attested; '
@@ -6092,7 +6162,7 @@ export function createAsrtShellSandbox(
               });
               throw error;
             }
-            return observation;
+            return retainedObservation;
           },
           retire: retireWorkspaceSession,
         };
@@ -6364,6 +6434,62 @@ async function executePreparedTextFileMutation(
   let processDrained = false;
   let child: ReturnType<typeof spawn> | undefined;
   let windowsEffectJob: WindowsEffectJob | undefined;
+  const scheduleDelayedDrainRecovery = (): void => {
+    const pendingChild = child;
+    if (pendingChild === undefined) return;
+    let drainRecovered = false;
+    let invocationCleaned = false;
+    let effectLeaseReleased = false;
+    scheduleUnrefBackgroundRetry(
+      async () => {
+        if (!drainRecovered) {
+          if (windowsEffectJob !== undefined) {
+            await terminateWindowsEffectJob(windowsEffectJob.jobName);
+          } else {
+            const termination = await killChildProcessTree(pendingChild);
+            if (termination.status === 'unknown') {
+              throw new Error('Sandboxed text mutation process tree is still not proven drained.');
+            }
+          }
+          drainRecovered = true;
+          processDrained = true;
+        }
+        if (!effectProcessFinished) {
+          await effectLease?.finishEffectProcess();
+          effectProcessFinished = true;
+        }
+        if (effectProcessBound) {
+          if (!invocationCleaned) {
+            await invocation.cleanup({ execution });
+            invocationCleaned = true;
+          }
+          if (!effectLeaseReleased) {
+            await effectLease?.();
+            effectLeaseReleased = true;
+          }
+        } else {
+          if (!effectLeaseReleased) {
+            await effectLease?.();
+            effectLeaseReleased = true;
+          }
+          if (!invocationCleaned) {
+            await invocation.cleanup({ execution });
+            invocationCleaned = true;
+          }
+        }
+      },
+      () => undefined,
+      (error, attempt) => {
+        if (attempt % 10 !== 0) return;
+        emitKodaXDiagnostic({
+          source: 'runtime:text-file-mutation',
+          level: 'warn',
+          message: 'Automatic text-mutation process-tree drain recovery is still pending; its sandbox owner and filesystem fence remain closed.',
+          detail: error,
+        });
+      },
+    );
+  };
   try {
     if (invocation.fileSystemEffectPolicyKey !== undefined) {
       effectLease = await acquireFileSystemMutationLease(invocation.fileSystemEffectPolicyKey);
@@ -6446,6 +6572,7 @@ async function executePreparedTextFileMutation(
         cleanupFailures.push(error);
       }
     }
+    if (child !== undefined && !processDrained) scheduleDelayedDrainRecovery();
     if (
       effectLease !== undefined
       && (child === undefined || processDrained)
@@ -6509,10 +6636,31 @@ export function createAsrtTextFileMutationSandbox(
 ): KodaXTextFileMutationSandbox {
   const workspaceRoot = path.resolve(input.workspaceRoot);
   const canonicalWorkspaceRoot = realpathSync(workspaceRoot);
+  const canonicalCandidate = (filePath: string): string | undefined => {
+    let existing = path.resolve(filePath);
+    const missingSegments: string[] = [];
+    for (;;) {
+      try {
+        return path.join(realpathSync.native(existing), ...missingSegments);
+      } catch {
+        const parent = path.dirname(existing);
+        if (parent === existing) return undefined;
+        missingSegments.unshift(path.basename(existing));
+        existing = parent;
+      }
+    }
+  };
   const canHandlePath = (filePath: string): boolean => {
     const candidate = path.resolve(filePath);
-    return isInside(workspaceRoot, candidate)
-      || isInside(canonicalWorkspaceRoot, candidate);
+    const canonical = canonicalCandidate(candidate);
+    if (
+      isInside(workspaceRoot, candidate)
+      || (canonical !== undefined && isInside(canonicalWorkspaceRoot, canonical))
+    ) return true;
+    if (canonical === undefined) return false;
+    return (input.additionalWorkspaceRoots?.() ?? []).some((root) => (
+      isInside(path.resolve(root), canonical)
+    ));
   };
   const selections = new Map<string, {
     readonly fingerprint: string;
@@ -6520,6 +6668,9 @@ export function createAsrtTextFileMutationSandbox(
   }>();
   const sandbox = createAsrtShellSandbox({
     workspaceRoot: input.workspaceRoot,
+    ...(input.additionalWorkspaceRoots === undefined
+      ? {}
+      : { additionalWorkspaceRoots: input.additionalWorkspaceRoots }),
     shouldSandbox: async (wrapperCall) => {
       const encoded = encodedTextFileMutationCall(wrapperCall);
       if (encoded === undefined) return false;

@@ -90,6 +90,11 @@ describe('resolveUserSkillInvocation', () => {
       (name) => name === 'writing-great-skills',
       true,
     )).toMatchObject({ name: 'writing-great-skills' });
+    expect(() => findQueueableUserSkillReference(
+      '/first-skill one /second-skill two',
+      () => true,
+      true,
+    )).toThrow('Only one Skill can be active per request; found: first-skill, second-skill.');
   });
 
   it('resolves a hidden legacy slash Skill at the query head', async () => {
@@ -168,6 +173,20 @@ describe('resolveUserSkillInvocation', () => {
         argumentsText: 'audit grilling',
       });
     }
+  });
+
+  it('rejects multiple known Skill references instead of swallowing the later invocation', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-multiple-inline-skills-'));
+    tempDirs.push(root);
+    await writeProjectSkill(root, 'first-skill');
+    await writeProjectSkill(root, 'second-skill');
+
+    await expect(resolveUserSkillInvocation(
+      '/first-skill one /second-skill two',
+      { workingDirectory: root, projectRoot: root },
+    )).rejects.toThrow(
+      'Only one Skill can be active per request; found: first-skill, second-skill.',
+    );
   });
 
   it('preserves full invocation policy for a middle slash Skill', async () => {

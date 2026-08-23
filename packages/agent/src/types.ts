@@ -462,6 +462,8 @@ export interface KodaXSessionRuntimeInfo {
   permissionMode?: string;
   /** Agent mode active at session start, e.g. `'sa'` | `'ama'`. */
   agentMode?: string;
+  /** Runtime-owned exact linked-worktree roots admitted for this Session. */
+  sandboxWorktreeRoots?: string[];
 }
 
 export interface KodaXSessionData {
@@ -572,6 +574,13 @@ export interface KodaXExtensionStore {
 export interface KodaXSessionStorage {
   save(id: string, data: KodaXSessionData): Promise<void>;
   load(id: string): Promise<KodaXSessionData | null>;
+  /** Atomically updates Runtime-owned Session metadata without replacing transcript state. */
+  mutateRuntimeInfo?(
+    id: string,
+    mutation: (
+      runtimeInfo: KodaXSessionRuntimeInfo | undefined,
+    ) => KodaXSessionRuntimeInfo | undefined,
+  ): Promise<boolean>;
   /**
    * Atomically mutates context-silent lineage state against the latest
    * persisted session. Hosts that own session persistence may expose this

@@ -726,6 +726,34 @@ permission UI, and recovers stale prepared Session tails through an
 authoritative merge. Background persistence failures are surfaced as
 diagnostics rather than hidden.
 
+**Current Unreleased maintenance:** stale learning locks with zero-byte,
+malformed, or truncated owner records self-recover after an unchanged
+bytes/stat check. Same-boot Windows `unconfirmed-owner` cleanup retries until
+the sandbox-user SID is proven idle, without requiring marker deletion.
+Delayed text cleanup retains its execution attestation and retries transient
+workspace cleanup, policy reset, and effect-lease release automatically.
+Canonical history stores the exact explicit-Skill query, multiple Skill
+references are rejected, and failed/malformed `PreToolUse` hooks deny the tool.
+Terminal persistence uncertainty publishes `unknown` or invalidates live
+Session observers for resnapshot. A status-lock cleanup failure after a
+committed terminal is reconciled only when the reread status exactly matches
+the local proposal, then publishes one terminal event; different authority
+still wins. Current source advertises Windows
+`sandboxRuntime:5` and local `runtimeExitSettlement:2`; version assignment and
+publication remain maintainer steps.
+
+**Current Unreleased dynamic-worktree correction:** KodaX-created linked
+worktrees join the exact Session shell/text sandbox policy before their paths
+are returned, persist across later Runs, and are revalidated against the same
+Git common directory. Removal revokes the root; unrelated siblings remain
+fenced. A real submodule Session root proves that identity through its bounded
+`.git/modules/...` `core.worktree` backlink; candidates still require ordinary
+linked-worktree backlinks. For an older Session without the registry field, a retained successful
+`worktree_create` result is migrated once only after the same Git relationship
+passes validation. If that exact evidence is unavailable, stop the background
+process and remove/recreate the worktree through KodaX once. Do not delete
+ProgramData coordination files for this migration.
+
 **v0.7.94 release:** Runtime text tools may overlap a compatible live Bash
 lease because snapshot and commit run through the same ASRT workspace policy.
 Hard-linked workspace targets are rejected. Windows sandboxed git trusts
@@ -742,8 +770,8 @@ Runtime advertises `conversationHistory:2`. Explicit Skill invocation
 still runs if an embedder result observer throws. Every Run
 finalization and sandbox/managed-child termination rejection is observed. If
 neither terminal record can be persisted, the Run resolves `unknown` with
-`run_settlement_not_persisted` and keeps the Session fenced. Daemon connection
-loss exposes a typed code, `connectionId`, and `reconnectable` fact. Once a
+`run_settlement_not_persisted` and keeps the Session fenced.
+Daemon connection loss exposes a typed code, `connectionId`, and `reconnectable` fact. Once a
 host receives a `runId`, it must retain it and, after reconnecting, call
 `runs.get(runId)` then `runs.await(runId)` on the replacement Runtime. It must
 never replay `runs.start()` for that admitted Run. Capability versions

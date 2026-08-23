@@ -266,6 +266,22 @@ describe('learning file lock stale recovery', () => {
       .resolves.toBe('recovered');
   });
 
+  it.each([
+    'not-an-owner\n',
+    '2147483647 11111111-1111-4111-8111-111111111111 identity=***truncated***\n',
+  ])('reclaims a stale malformed lock owner without manual cleanup', async (malformedOwner) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-store-lock-malformed-'));
+    tempDirs.push(root);
+    const lockPath = path.join(root, 'owner.lock');
+    await writeFile(lockPath, malformedOwner, 'utf8');
+    const old = new Date(Date.now() - 60_000);
+    await utimes(lockPath, old, old);
+
+    const { withLearningFileLock } = await import('./store-lock.js');
+    await expect(withLearningFileLock(lockPath, async () => 'recovered', 250))
+      .resolves.toBe('recovered');
+  });
+
   it('serializes two reclaimers that both observed the same stale owner', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-store-lock-two-reclaimers-'));
     tempDirs.push(root);

@@ -75,6 +75,9 @@ const capturedKillSignals = vi.hoisted(
 const capturedProcessTreeKillOptions = vi.hoisted(
   () => [] as Array<Readonly<Record<string, unknown>>>,
 );
+const capturedDiagnostics = vi.hoisted(
+  () => [] as Array<Readonly<Record<string, unknown>>>,
+);
 const textMutationChildren = vi.hoisted(() => new WeakSet<object>());
 const aclRecoveryGateChildren = vi.hoisted(() => new WeakSet<object>());
 const textMutationStdinMock = vi.hoisted(() => ({
@@ -92,6 +95,7 @@ const processTreeKillMock = vi.hoisted(() => ({
 }));
 const textMutationEffectLeaseMock = vi.hoisted(() => ({
   bindFailure: undefined as string | undefined,
+  releaseFailureOnCall: undefined as number | undefined,
   bindCalls: 0,
   releaseCalls: 0,
 }));
@@ -101,6 +105,8 @@ const windowsEffectJobMock = vi.hoisted(() => ({
   containFailureOnCall: undefined as number | undefined,
   terminateOutcome: 'drained' as 'drained' | 'not_found',
   drainFailure: undefined as string | undefined,
+  textMutationDrainFailure: undefined as string | undefined,
+  drainFailureOnCall: undefined as number | undefined,
   drainPending: false,
   releaseDrain: undefined as (() => void) | undefined,
   unrefCalls: 0,
@@ -168,6 +174,7 @@ const workspaceSessionControl = vi.hoisted(() => ({
   releaseWrap: undefined as (() => void) | undefined,
   wrapFailure: undefined as string | undefined,
   cleanupFailure: undefined as string | undefined,
+  cleanupFailureOnCall: undefined as number | undefined,
   delayCleanup: false,
   releaseCleanup: undefined as (() => void) | undefined,
   afterWrapResponse: undefined as (() => void) | undefined,
@@ -186,6 +193,7 @@ const windowsSandboxMock = vi.hoisted(() => ({
   aclRecoveryOutcomes: [] as Array<'success' | 'failure' | 'malformed'>,
   sidProcessesActive: true,
   sidInspectionCalls: 0,
+  sidProbeLaunches: [] as Array<Readonly<Record<string, unknown>>>,
   sidInspectionFailure: undefined as string | undefined,
   guardReady: true,
   user: {
@@ -571,6 +579,11 @@ vi.mock('node:child_process', async (importOriginal) => {
               capturedWorkspaceRequests.push(message.request);
             }
             if (message.type === 'cleanup') workspaceSessionControl.cleanupRequests += 1;
+            const cleanupFailure = workspaceSessionControl.cleanupFailure
+              ?? (workspaceSessionControl.cleanupFailureOnCall
+                === workspaceSessionControl.cleanupRequests
+                ? 'injected transient cleanup failure'
+                : undefined);
             const response = message.type === 'wrap'
               ? workspaceSessionControl.wrapFailure === undefined ? {
                   id: message.id,
@@ -588,13 +601,13 @@ vi.mock('node:child_process', async (importOriginal) => {
                   ok: false,
                   error: workspaceSessionControl.wrapFailure,
                 }
-              : workspaceSessionControl.cleanupFailure === undefined
+              : cleanupFailure === undefined
                 ? { id: message.id, type: 'result', ok: true }
                 : {
                     id: message.id,
                     type: 'result',
                     ok: false,
-                    error: workspaceSessionControl.cleanupFailure,
+                    error: cleanupFailure,
                   };
             const reportResponse = (): void => {
               control.write(workspaceSessionControl.malformedResponseFor === message.type
@@ -915,6 +928,10 @@ vi.mock('@kodax-ai/agent', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@kodax-ai/agent')>();
   return {
     ...actual,
+    emitKodaXDiagnostic: (diagnostic: Readonly<Record<string, unknown>>) => {
+      capturedDiagnostics.push(diagnostic);
+      actual.emitKodaXDiagnostic(diagnostic);
+    },
     acquireKodaXFileLock: async (
       lockPath: string,
       acquireTimeoutMs?: number,
@@ -939,7 +956,12 @@ vi.mock('@kodax-ai/agent', async (importOriginal) => {
       windowsEffectJobMock.containedChild = containedChild;
       const drainFailure = containedChild !== undefined && aclRecoveryGateChildren.has(containedChild)
         ? windowsEffectJobMock.aclRecoveryDrainFailure
-        : windowsEffectJobMock.drainFailure;
+        : containedChild !== undefined && textMutationChildren.has(containedChild)
+          ? windowsEffectJobMock.textMutationDrainFailure
+          : windowsEffectJobMock.drainFailureOnCall === undefined
+            || windowsEffectJobMock.drainFailureOnCall === windowsEffectJobMock.containCalls
+            ? windowsEffectJobMock.drainFailure
+            : undefined;
       const drainPending = containedChild !== undefined
         && !aclRecoveryGateChildren.has(containedChild)
         && windowsEffectJobMock.drainPending;
@@ -986,8 +1008,12 @@ vi.mock('@kodax-ai/agent', async (importOriginal) => {
       }
       return Promise.resolve(windowsEffectJobMock.terminateOutcome);
     },
-    windowsSandboxSidHasActiveProcesses: () => {
+    windowsSandboxSidHasOtherProcesses: (
+      sid: string,
+      launcher: Readonly<Record<string, unknown>>,
+    ) => {
       windowsSandboxMock.sidInspectionCalls += 1;
+      windowsSandboxMock.sidProbeLaunches.push({ sid, launcher });
       if (windowsSandboxMock.sidInspectionFailure !== undefined) {
         return Promise.reject(new Error(windowsSandboxMock.sidInspectionFailure));
       }
@@ -1094,18 +1120,27 @@ vi.mock('@kodax-ai/coding/internal/file-system-effects', async (importOriginal) 
     },
     acquireFileSystemMutationLease: async (sandboxPolicyKey?: string) => {
       const lease = await actual.acquireFileSystemMutationLease(sandboxPolicyKey);
-      if (textMutationEffectLeaseMock.bindFailure === undefined) return lease;
       return Object.assign(
         async () => {
           textMutationEffectLeaseMock.releaseCalls += 1;
+          if (
+            textMutationEffectLeaseMock.releaseFailureOnCall
+            === textMutationEffectLeaseMock.releaseCalls
+          ) {
+            throw new Error('injected text mutation effect lease release failure');
+          }
           await lease();
         },
         {
-          bindEffectProcess: async () => {
+          bindEffectProcess: async (pid: number, windowsJobContained: boolean) => {
             textMutationEffectLeaseMock.bindCalls += 1;
-            throw new Error(textMutationEffectLeaseMock.bindFailure);
+            if (textMutationEffectLeaseMock.bindFailure !== undefined) {
+              throw new Error(textMutationEffectLeaseMock.bindFailure);
+            }
+            await lease.bindEffectProcess(pid, windowsJobContained);
           },
           finishEffectProcess: () => lease.finishEffectProcess(),
+          released: lease.released,
         },
       );
     },
@@ -1280,9 +1315,12 @@ afterEach(async () => {
   processTreeKillMock.outcome = 'actual';
   processTreeKillMock.childPid = undefined;
   textMutationEffectLeaseMock.bindFailure = undefined;
+  textMutationEffectLeaseMock.releaseFailureOnCall = undefined;
   textMutationEffectLeaseMock.bindCalls = 0;
   textMutationEffectLeaseMock.releaseCalls = 0;
   windowsEffectJobMock.drainFailure = undefined;
+  windowsEffectJobMock.textMutationDrainFailure = undefined;
+  windowsEffectJobMock.drainFailureOnCall = undefined;
   windowsEffectJobMock.aclRecoveryDrainFailure = undefined;
   windowsEffectJobMock.containCalls = 0;
   windowsEffectJobMock.containFailureOnCall = undefined;
@@ -1309,6 +1347,7 @@ afterEach(async () => {
   workspaceSessionControl.releaseWrap = undefined;
   workspaceSessionControl.wrapFailure = undefined;
   workspaceSessionControl.cleanupFailure = undefined;
+  workspaceSessionControl.cleanupFailureOnCall = undefined;
   workspaceSessionControl.delayCleanup = false;
   workspaceSessionControl.releaseCleanup?.();
   workspaceSessionControl.releaseCleanup = undefined;
@@ -1351,7 +1390,9 @@ afterEach(async () => {
   windowsSandboxMock.aclRecoveryOutcomes.length = 0;
   windowsSandboxMock.sidProcessesActive = true;
   windowsSandboxMock.sidInspectionCalls = 0;
+  windowsSandboxMock.sidProbeLaunches.length = 0;
   windowsSandboxMock.sidInspectionFailure = undefined;
+  capturedDiagnostics.length = 0;
   windowsSandboxMock.guardReady = true;
   windowsSandboxMock.user = {
     provisioned: true,
@@ -1486,6 +1527,69 @@ describe('ASRT workspace shell adapter', () => {
     } finally {
       await preparedShell.cleanup();
     }
+  });
+
+  it('shares a newly registered workspace root between a live shell and direct text mutations', async () => {
+    processTreeKillMock.childPid = process.pid;
+    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-dynamic-root-'));
+    const worktree = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-dynamic-worktree-'));
+    tempRoots.push(root, worktree);
+    const target = path.join(worktree, 'target.txt');
+    await writeFile(target, 'before', 'utf8');
+    const workspaceRoots = new Set<string>();
+    const additionalWorkspaceRoots = () => [...workspaceRoots];
+    const shouldSandbox = vi.fn(() => true);
+    const liveShell = createAsrtShellSandbox({
+      workspaceRoot: root,
+      additionalWorkspaceRoots,
+      shouldSandbox,
+    });
+    const textSandbox = createAsrtTextFileMutationSandbox({
+      workspaceRoot: root,
+      additionalWorkspaceRoots,
+      shouldSandbox,
+    });
+
+    expect(textSandbox.canHandlePath?.(target)).toBe(false);
+    workspaceRoots.add(worktree);
+    expect(textSandbox.canHandlePath?.(target)).toBe(true);
+
+    const preparedShell = await liveShell.prepare({
+      toolCallId: 'dynamic-worktree-shell',
+      toolInput: { command: 'long-running-service' },
+      command: 'long-running-service',
+      cwd: worktree,
+      env: process.env,
+    });
+    if (preparedShell?.fileSystemEffectPolicyKey === undefined) {
+      throw new Error('expected a sandboxed dynamic-worktree shell');
+    }
+    const releaseShell = await acquireFileSystemMutationLease(
+      preparedShell.fileSystemEffectPolicyKey,
+    );
+    try {
+      await expect(textSandbox.read({
+        toolCallId: 'dynamic-worktree-edit',
+        toolName: 'edit',
+        toolInput: { path: target },
+        path: target,
+      })).resolves.toMatchObject({ status: 'ok' });
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(1);
+      const config = capturedWorkspaceSessionConfigs[0] as {
+        readonly filesystem: {
+          readonly allowRead: readonly string[];
+          readonly allowWrite: readonly string[];
+        };
+      };
+      expect(config.filesystem.allowRead).toContain(path.resolve(worktree));
+      expect(config.filesystem.allowWrite).toContain(path.resolve(worktree));
+    } finally {
+      await releaseShell();
+      await preparedShell.cleanup();
+    }
+
+    workspaceRoots.delete(worktree);
+    expect(textSandbox.canHandlePath?.(target)).toBe(false);
   });
 
   it.runIf(process.platform !== 'win32')(
@@ -1756,10 +1860,11 @@ describe('ASRT workspace shell adapter', () => {
   });
 
   it.runIf(process.platform === 'win32')(
-    'keeps the text effect lease when Windows Job drain is unconfirmed',
+    'keeps the text effect lease until delayed Windows Job drain recovery completes',
     async () => {
       processTreeKillMock.childPid = process.pid;
-      windowsEffectJobMock.drainFailure = 'injected Windows Job drain failure';
+      windowsEffectJobMock.textMutationDrainFailure = 'injected Windows Job drain failure';
+      textMutationEffectLeaseMock.releaseFailureOnCall = 1;
       const workspace = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-job-drain-'));
       tempRoots.push(workspace);
       const target = path.join(workspace, 'target.txt');
@@ -1775,10 +1880,53 @@ describe('ASRT workspace shell adapter', () => {
           toolInput: { path: target },
           path: target,
         })).rejects.toThrow(/Job drain|cleanup/i);
-        await expect(acquireHostFileSystemMutationLease())
-          .rejects.toThrow('filesystem effect is already active');
+        windowsEffectJobMock.textMutationDrainFailure = undefined;
+        await vi.waitFor(
+          () => {
+            expect(workspaceSessionControl.cleanupRequests).toBe(1);
+            expect(textMutationEffectLeaseMock.releaseCalls).toBe(2);
+          },
+          { timeout: 3_000 },
+        );
+        const releaseRecoveredLease = await acquireHostFileSystemMutationLease();
+        await releaseRecoveredLease();
       } finally {
-        windowsEffectJobMock.drainFailure = undefined;
+        windowsEffectJobMock.textMutationDrainFailure = undefined;
+        await _resetFileSystemEffectLeasesForTests();
+      }
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'recovers delayed text cleanup after consuming attestation before a transient workspace cleanup failure',
+    async () => {
+      processTreeKillMock.childPid = process.pid;
+      windowsEffectJobMock.textMutationDrainFailure = 'injected Windows Job drain failure';
+      workspaceSessionControl.cleanupFailureOnCall = 1;
+      const workspace = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-cleanup-retry-'));
+      tempRoots.push(workspace);
+      const target = path.join(workspace, 'target.txt');
+      await writeFile(target, 'before', 'utf8');
+      const sandbox = createAsrtTextFileMutationSandbox({
+        workspaceRoot: workspace,
+        shouldSandbox: () => true,
+      });
+      try {
+        await expect(sandbox.read({
+          toolCallId: 'cleanup-retry-read-1',
+          toolName: 'edit',
+          toolInput: { path: target },
+          path: target,
+        })).rejects.toThrow(/Job drain|cleanup/i);
+        windowsEffectJobMock.textMutationDrainFailure = undefined;
+        await vi.waitFor(
+          () => expect(workspaceSessionControl.cleanupRequests).toBe(2),
+          { timeout: 3_000 },
+        );
+        const releaseRecoveredLease = await acquireHostFileSystemMutationLease();
+        await releaseRecoveredLease();
+      } finally {
+        windowsEffectJobMock.textMutationDrainFailure = undefined;
         await _resetFileSystemEffectLeasesForTests();
       }
     },
@@ -3490,6 +3638,10 @@ describe('ASRT workspace shell adapter', () => {
         const entries = await readdir(directory);
         expect(entries.some((entry) => entry.startsWith('unconfirmed-owner-'))).toBe(false);
       }
+      const effectCallsAfterFailure = recoveryLockMock.effectCalls;
+      recoveryLockMock.effectFailureStartCall = undefined;
+      await expect(prepared.cleanup()).resolves.toBeUndefined();
+      expect(recoveryLockMock.effectCalls).toBeGreaterThan(effectCallsAfterFailure);
     },
   );
 
@@ -6395,6 +6547,89 @@ describe('ASRT workspace shell adapter', () => {
       })).resolves.toMatchObject({ status: 'completed', exitCode: 0 });
       await expect(stat(marker)).rejects.toMatchObject({ code: 'ENOENT' });
       expect(capturedBrokerRequests).toHaveLength(1);
+      expect(windowsSandboxMock.sidProbeLaunches).toContainEqual({
+        sid: windowsSandboxMock.user.sid,
+        launcher: expect.objectContaining({
+          executable: expect.stringMatching(/[\\/]sandbox-runtime[\\/]runner[\\/].*srt-win\.exe$/i),
+          prependArgs: ['--srt-win'],
+        }),
+      });
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'automatically clears a same-boot unconfirmed owner after its sandbox SID becomes idle',
+    async () => {
+      const poisonDirectory = path.join(
+        path.resolve(process.env.KODAX_HOME!),
+        'sandbox-runtime',
+        'acl-poison',
+      );
+      const marker = path.join(poisonDirectory, 'unconfirmed-owner-same-boot.json');
+      await mkdir(poisonDirectory, { recursive: true });
+      await writeFile(marker, JSON.stringify({
+        version: 3,
+        state: 'unconfirmed',
+        ticketId: randomUUID(),
+        holderPid: 2_147_000_000,
+        holderProcessStartIdentity: 'gone-unconfirmed-owner',
+        windowsBootIdentity: processIdentityMock.windowsBootIdentity,
+      }), 'utf8');
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-sdk-unconfirmed-owner-retry-'));
+      tempRoots.push(root);
+      const run = () => runKodaXSandboxed({
+        command: process.execPath,
+        args: ['--version'],
+        cwd: root,
+        filesystem: { allowRead: [], allowWrite: [] },
+      });
+
+      await expect(run()).rejects.toThrow(/sandbox owner|recovery/i);
+      await expect(stat(marker)).resolves.toBeDefined();
+
+      windowsSandboxMock.sidProcessesActive = false;
+      await expect(run()).resolves.toMatchObject({ status: 'completed', exitCode: 0 });
+      await expect(stat(marker)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(capturedBrokerRequests).toHaveLength(1);
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'reports a failed sandbox-user SID probe while keeping ACL recovery fenced',
+    async () => {
+      const poisonDirectory = path.join(
+        path.resolve(process.env.KODAX_HOME!),
+        'sandbox-runtime',
+        'acl-poison',
+      );
+      const marker = path.join(poisonDirectory, 'recovery-owner-sid-probe-failed.json');
+      await mkdir(poisonDirectory, { recursive: true });
+      await writeFile(marker, JSON.stringify({
+        version: 3,
+        state: 'recovery_pending',
+        ticketId: randomUUID(),
+        holderPid: 2_147_000_000,
+        holderProcessStartIdentity: 'gone-recovery-owner',
+        windowsBootIdentity: processIdentityMock.windowsBootIdentity,
+      }), 'utf8');
+      windowsSandboxMock.sidInspectionFailure = 'injected sandbox-user SID probe failure';
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-sdk-sid-probe-failed-'));
+      tempRoots.push(root);
+
+      await expect(runKodaXSandboxed({
+        command: process.execPath,
+        args: ['--version'],
+        cwd: root,
+        filesystem: { allowRead: [], allowWrite: [] },
+      })).rejects.toThrow(/sandbox owner|recovery/i);
+      await expect(stat(marker)).resolves.toBeDefined();
+      expect(capturedDiagnostics).toContainEqual(expect.objectContaining({
+        source: 'runtime:sandbox-acl-recovery',
+        level: 'warn',
+        detail: expect.objectContaining({
+          message: 'injected sandbox-user SID probe failure',
+        }),
+      }));
     },
   );
 
@@ -7734,10 +7969,12 @@ describe('Windows git safe.directory argv takeover', () => {
     },
   );
 
-  it('reports the v4 capability with the authorized-repo-roots marker', () => {
+  it('reports the v5 capability with automatic drain and same-boot ACL recovery', () => {
     const capability = sandboxRuntimeCapability();
-    expect(capability.version).toBe(4);
+    expect(capability.version).toBe(5);
     expect(capability.gitSafeDirectory).toBe('authorized-repo-roots');
+    expect(capability.delayedEffectDrainRecovery).toBe('automatic');
+    expect(capability.sameBootAclRecovery).toBe('sandbox-user-process-probe');
     expect(capability.controls).toEqual([
       'filesystem', 'network', 'environment', 'timeout', 'output',
     ]);

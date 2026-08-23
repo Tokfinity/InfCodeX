@@ -114,6 +114,30 @@ describe('direct skill slash invocation', () => {
     });
   });
 
+  it.each([
+    '/first-skill one /second-skill two',
+    '/skill:first-skill one /second-skill two',
+  ])('rejects multiple known Skills at the shared slash-command dispatch boundary: %s', async (input) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-direct-multiple-skills-'));
+    tempDirs.push(root);
+    await writeProjectSkill(root, 'first-skill', 'First Skill.');
+    await writeProjectSkill(root, 'second-skill', 'Second Skill.');
+    const parsed = parseCommand(input);
+    if (parsed === null) throw new Error('expected a slash command');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await expect(executeCommand(
+      parsed,
+      buildContext(root) as never,
+      {} as CommandCallbacks,
+      {} as never,
+      input,
+    )).resolves.toBe(false);
+    expect(logSpy.mock.calls.flat().join('\n')).toContain(
+      'Only one Skill can be active per request; found: first-skill, second-skill.',
+    );
+  });
+
   it('keeps built-in commands ahead of same-named skills', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-direct-skill-collision-'));
     tempDirs.push(root);

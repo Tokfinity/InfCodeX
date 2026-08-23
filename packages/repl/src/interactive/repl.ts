@@ -112,7 +112,10 @@ import {
   CommandCallbacks,
   CurrentConfig,
 } from './commands.js';
-import { resolveUserSkillInvocation } from './user-skill-invocation.js';
+import {
+  MultipleUserSkillReferencesError,
+  resolveUserSkillInvocation,
+} from './user-skill-invocation.js';
 import type {
   CommandWorkflowInvocationRequest,
   RuntimeSurfaceStatus,
@@ -1786,6 +1789,26 @@ Keyboard Shortcuts:
     }
   };
 
+  const resolveInlineSkillInvocation = async (input: string) => {
+    try {
+      return {
+        invocation: await resolveUserSkillInvocation(input, {
+          workingDirectory: currentOptions.context?.executionCwd ?? process.cwd(),
+          projectRoot: context.gitRoot ?? undefined,
+          sessionId: context.sessionId,
+          environment: {},
+          executeDynamicContext: context.skillDynamicContext?.execute,
+          disableDynamicContext: context.skillDynamicContext?.disable,
+        }),
+        rejected: false,
+      } as const;
+    } catch (error: unknown) {
+      if (!(error instanceof MultipleUserSkillReferencesError)) throw error;
+      console.log(chalk.yellow(`\n${error.message}\n`));
+      return { invocation: undefined, rejected: true } as const;
+    }
+  };
+
   // Main loop - 主循环
   while (isRunning) {
     // Check if need to edit last message (Esc+Esc triggered) - 检查是否需要编辑上一条消息 (Esc+Esc 触发)
@@ -1804,7 +1827,13 @@ Keyboard Shortcuts:
         // Process command - 处理命令
         const parsed = parseCommand(trimmed);
         if (parsed) {
-          const commandResult = await executeCommand(parsed, context, callbacks, currentConfig);
+          const commandResult = await executeCommand(
+            parsed,
+            context,
+            callbacks,
+            currentConfig,
+            trimmed,
+          );
           await handleCommandResult(commandResult, trimmed);
           continue;
         }
@@ -1816,16 +1845,10 @@ Keyboard Shortcuts:
         if (trimmed.startsWith('!') && isShellCommandHandled(processed)) {
           continue;
         }
-        const inlineSkillInvocation = await resolveUserSkillInvocation(trimmed, {
-          workingDirectory: currentOptions.context?.executionCwd ?? process.cwd(),
-          projectRoot: context.gitRoot ?? undefined,
-          sessionId: context.sessionId,
-          environment: {},
-          executeDynamicContext: context.skillDynamicContext?.execute,
-          disableDynamicContext: context.skillDynamicContext?.disable,
-        });
-        if (inlineSkillInvocation) {
-          await handleCommandResult({ invocation: inlineSkillInvocation }, trimmed);
+        const inlineSkill = await resolveInlineSkillInvocation(trimmed);
+        if (inlineSkill.rejected) continue;
+        if (inlineSkill.invocation) {
+          await handleCommandResult({ invocation: inlineSkill.invocation }, trimmed);
           continue;
         }
         // FEATURE_246 A5 (ADR-047): natural language is never intercepted into a
@@ -1987,7 +2010,13 @@ Keyboard Shortcuts:
     // Process command - 处理命令
     const parsed = parseCommand(trimmed);
     if (parsed) {
-      const commandResult = await executeCommand(parsed, context, callbacks, currentConfig);
+      const commandResult = await executeCommand(
+        parsed,
+        context,
+        callbacks,
+        currentConfig,
+        trimmed,
+      );
       await handleCommandResult(commandResult, trimmed);
       continue;
     }
@@ -2006,16 +2035,10 @@ Keyboard Shortcuts:
         continue;
       }
     }
-    const inlineSkillInvocation = await resolveUserSkillInvocation(trimmed, {
-      workingDirectory: currentOptions.context?.executionCwd ?? process.cwd(),
-      projectRoot: context.gitRoot ?? undefined,
-      sessionId: context.sessionId,
-      environment: {},
-      executeDynamicContext: context.skillDynamicContext?.execute,
-      disableDynamicContext: context.skillDynamicContext?.disable,
-    });
-    if (inlineSkillInvocation) {
-      await handleCommandResult({ invocation: inlineSkillInvocation }, trimmed);
+    const inlineSkill = await resolveInlineSkillInvocation(trimmed);
+    if (inlineSkill.rejected) continue;
+    if (inlineSkill.invocation) {
+      await handleCommandResult({ invocation: inlineSkill.invocation }, trimmed);
       continue;
     }
 

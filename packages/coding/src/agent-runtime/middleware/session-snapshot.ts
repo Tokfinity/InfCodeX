@@ -83,11 +83,18 @@ function normalizeSnapshotPath(value: string | null | undefined): string | undef
   return path.resolve(value).replace(/\\/g, '/');
 }
 
-function buildSnapshotRuntimeInfo(gitRoot: string, executionCwd: string): KodaXSessionRuntimeInfo {
+function buildSnapshotRuntimeInfo(
+  gitRoot: string,
+  executionCwd: string,
+  sandboxWorktreeRoots: readonly string[] = [],
+): KodaXSessionRuntimeInfo {
   return {
     ...(gitRoot ? { canonicalRepoRoot: gitRoot, workspaceRoot: gitRoot } : {}),
     executionCwd,
     workspaceKind: 'detected',
+    ...(sandboxWorktreeRoots.length > 0
+      ? { sandboxWorktreeRoots: [...sandboxWorktreeRoots] }
+      : {}),
   };
 }
 
@@ -289,7 +296,11 @@ async function saveSessionSnapshotWithPolicy(
     ?? options.context?.gitRoot
     ?? (await getGitRoot(executionCwd))
     ?? '';
-  const runtimeInfo = buildSnapshotRuntimeInfo(gitRoot, executionCwd);
+  const runtimeInfo = buildSnapshotRuntimeInfo(
+    gitRoot,
+    executionCwd,
+    options.context?.workspaceSandboxRoots?.list(),
+  );
   const runtimeSessionSnapshot = data.runtimeSessionState
     ? snapshotRuntimeSessionState(data.runtimeSessionState)
     : undefined;

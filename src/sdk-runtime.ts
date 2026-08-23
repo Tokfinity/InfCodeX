@@ -11,6 +11,7 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 import {
   getActiveExtensionRuntime,
@@ -79,6 +80,7 @@ import type {
   KodaXSessionData,
   KodaXSessionRuntimeInfo,
   KodaXShellSandbox,
+  KodaXWorkspaceSandboxRootRegistry,
   KodaXToolEventMeta,
   KodaXToolSandboxObservationUpdate,
   KodaXTurnCompletedEvent,
@@ -757,8 +759,8 @@ export const KODAX_RUNTIME_SDK_CAPABILITIES = Object.freeze({
   daemonOrphanExit: 1,
   daemonShutdownVerification: 1,
   managedRunDurability: 1,
-  runtimeExitSettlement: 1,
-  sandboxRuntime: 4,
+  runtimeExitSettlement: 2,
+  sandboxRuntime: 5,
   sessionEventJournal: 1,
   runtimeEventCoalescing: 1,
   liveOutputSegments: 1,
@@ -821,7 +823,7 @@ export interface RuntimeCapabilityRequirements {
   readonly integrationConfigResilience?: 1;
   readonly actorControlPlane?: 1;
   /** Require the sandbox-first execution chain and permission fallback revision. */
-  readonly sandboxRuntime?: 1 | 2 | 3 | 4;
+  readonly sandboxRuntime?: 1 | 2 | 3 | 4 | 5;
   /** Runtime owns Auto LLM/rules classification before shared permission brokering. */
   readonly runtimeAutoModeGuardrail?: 1 | 2 | 3 | 4;
 }
@@ -3229,7 +3231,7 @@ function createRuntimeSessionDiagnosticsRecord(
 
 interface RuntimeAdmittedSessionContext {
   readonly gitRoot: string;
-  readonly runtimeInfo?: KodaXSessionData["runtimeInfo"];
+  runtimeInfo?: KodaXSessionData["runtimeInfo"];
 }
 
 interface RuntimeRunRecord {
@@ -3737,7 +3739,7 @@ export async function createKodaXRuntime(
             ...(process.platform === "win32"
               ? {
                   daemonShutdownVerification: 1 as const,
-                  sandboxRuntime: 4 as const,
+                  sandboxRuntime: 5 as const,
                 }
               : {}),
             runtimeAutoModeGuardrail: 4 as const,
@@ -4895,7 +4897,7 @@ function daemonCapabilityRequirements(
           crashOutcomeModel: 2,
           managedRunDurability: 1,
           ...(process.platform === "win32"
-            ? { daemonShutdownVerification: 1, sandboxRuntime: 4 }
+            ? { daemonShutdownVerification: 1, sandboxRuntime: 5 }
             : {}),
           runtimeAutoModeGuardrail: 4,
           runtimeEventCoalescing: 1,
@@ -7267,6 +7269,7 @@ function createRuntimeSessionService(
         | ((value: RuntimeObservationInvalidation) => void)
         | undefined;
       let runtimeCloseSubscription: RuntimeSubscription | undefined;
+      let runtimeInvalidationSubscription: RuntimeSubscription | undefined;
       const invalidation = new Promise<RuntimeObservationInvalidation>(
         (resolve) => {
           resolveInvalidated = resolve;
@@ -7280,6 +7283,7 @@ function createRuntimeSessionService(
         invalidated = true;
         subscription.close();
         runtimeCloseSubscription?.close();
+        runtimeInvalidationSubscription?.close();
         resolveInvalidated?.({
           code: "observation_invalidated",
           reason,
@@ -7348,6 +7352,10 @@ function createRuntimeSessionService(
           "Runtime closed; discard the observation and resync after reconnecting.",
         );
       });
+      runtimeInvalidationSubscription = bus.subscribeSessionInvalidation(
+        sessionId,
+        (message) => invalidate("delivery_failed", message),
+      );
       try {
         const snapshot = await captureObservationSnapshot(sessionId, options);
         if (overflowed) {
@@ -7365,6 +7373,7 @@ function createRuntimeSessionService(
             pending.length = 0;
             subscription.close();
             runtimeCloseSubscription?.close();
+            runtimeInvalidationSubscription?.close();
           },
         };
         queueMicrotask(() => queueMicrotask(() => {
@@ -7382,6 +7391,7 @@ function createRuntimeSessionService(
         closed = true;
         subscription.close();
         runtimeCloseSubscription?.close();
+        runtimeInvalidationSubscription?.close();
         throw error;
       }
     },
@@ -8020,10 +8030,31 @@ function createRuntimeRunService(deps: {
     }
   };
 
+  const publishUnconfirmedRunUpdate = (record: RuntimeRunRecord): void => {
+    let published = false;
+    runSettlementCleanupStep(record, "unknown state publication", () => {
+      if (publishRunUpdate(record)) {
+        published = true;
+        return;
+      }
+      deps.bus.emitDurable("run.updated", statusFromRecord(record), {
+        sessionId: record.sessionId,
+        runId: record.runId,
+        ...(record.turnId !== undefined ? { turnId: record.turnId } : {}),
+      });
+      published = true;
+    });
+    if (!published) {
+      deps.bus.invalidateSessionObservations(
+        record.sessionId,
+        "Run settlement could not be persisted; discard local state and resync.",
+      );
+    }
+  };
+
   const finishUnconfirmedRun = (
     record: RuntimeRunRecord,
     result: RuntimeRunResult,
-    publish = true,
   ): RuntimeRunResult => {
     if (record.settlementFinished === true && record.start === undefined) {
       // A terminal callback may have resolved the public Run result while the
@@ -8031,6 +8062,9 @@ function createRuntimeRunService(deps: {
       // the authoritative replay fact without resolving or publishing twice.
       if (result.phase === "unknown" && result.result !== undefined) {
         record.unconfirmedResult = result;
+      }
+      if (record.lifecycleError?.code === "run_settlement_not_persisted") {
+        publishUnconfirmedRunUpdate(record);
       }
       return result;
     }
@@ -8041,7 +8075,7 @@ function createRuntimeRunService(deps: {
       record.stage = "unknown";
       record.stageChangedAt = new Date().toISOString();
       record.error = result.error?.message ?? "Actor settlement persistence is unknown.";
-      if (publish) publishRunUpdate(record);
+      publishUnconfirmedRunUpdate(record);
     }
     releaseAbortSignalSubscription(record);
     runSettlementCleanupStep(record, "unknown permission cleanup", () => {
@@ -8124,7 +8158,7 @@ function createRuntimeRunService(deps: {
       phase: "unknown",
       error: settlementError,
       ...(record.stop !== undefined ? { stop: record.stop } : {}),
-    }, false);
+    });
   };
 
   const activeManagedActorTurnIds = (
@@ -8817,13 +8851,18 @@ function createRuntimeRunService(deps: {
                 : {}),
             }
           : undefined;
-      markRunTerminal(
-        deps.bus,
-        deps.persistence,
-        record,
-        phase,
-        blockedTerminal,
-      );
+      try {
+        markRunTerminal(
+          deps.bus,
+          deps.persistence,
+          record,
+          phase,
+          blockedTerminal,
+        );
+      } catch (error: unknown) {
+        finishRunSettlementFailure(record, error);
+        return;
+      }
       finishRun(record, {
         runId: record.runId,
         sessionId: record.sessionId,
@@ -9302,7 +9341,7 @@ function createRuntimeRunService(deps: {
     });
   };
 
-  const publishRunUpdate = (record: RuntimeRunRecord): void => {
+  const publishRunUpdate = (record: RuntimeRunRecord): boolean => {
     const status = statusFromRecord(record);
     const authoritative = saveRunStatusSafely(
       deps.bus,
@@ -9310,16 +9349,17 @@ function createRuntimeRunService(deps: {
       record,
       status,
     );
-    if (authoritative === undefined) return;
+    if (authoritative === undefined) return false;
     if (authoritative !== status) {
       applyAuthoritativeRunStatus(record, authoritative);
-      return;
+      return false;
     }
     deps.bus.emit("run.updated", status, {
       sessionId: record.sessionId,
       runId: record.runId,
       ...(record.turnId !== undefined ? { turnId: record.turnId } : {}),
     });
+    return true;
   };
 
   const deliverInterruptInputs = (
@@ -9494,6 +9534,11 @@ function createRuntimeRunService(deps: {
       const session = await deps.sessionAdmission.loadExecutable(
         input.sessionId,
       );
+      await migrateLegacyWorkspaceSandboxRoots({
+        session,
+        sessionId: input.sessionId,
+        sessionManager: deps.sessionManager,
+      });
       admittedSessionContext = {
         gitRoot: session.gitRoot,
         ...(session.runtimeInfo !== undefined
@@ -10570,6 +10615,469 @@ function createRuntimeArtifactStore() {
   };
 }
 
+const WORKTREE_GIT_METADATA_MAX_BYTES = 4_096;
+const GIT_CONFIG_MAX_BYTES = 65_536;
+
+function readBoundedGitMetadata(
+  filePath: string,
+  maxBytes = WORKTREE_GIT_METADATA_MAX_BYTES,
+): string {
+  const descriptor = fs.openSync(filePath, "r");
+  try {
+    if (!fs.fstatSync(descriptor).isFile()) {
+      throw new Error(`Git worktree metadata is invalid: ${filePath}`);
+    }
+    const buffer = Buffer.allocUnsafe(maxBytes + 1);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const count = fs.readSync(
+        descriptor,
+        buffer,
+        bytesRead,
+        buffer.length - bytesRead,
+        bytesRead,
+      );
+      if (count === 0) break;
+      bytesRead += count;
+    }
+    if (bytesRead > maxBytes) {
+      throw new Error(`Git worktree metadata exceeds the byte limit: ${filePath}`);
+    }
+    const value = buffer.toString("utf8", 0, bytesRead);
+    if (value.includes("\0")) {
+      throw new Error(`Git worktree metadata contains NUL: ${filePath}`);
+    }
+    return value.trim();
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+const LEGACY_WORKTREE_RESULT_MAX_BYTES = 16_384;
+
+interface LegacyWorktreeResult {
+  readonly root: string;
+}
+
+function legacyWorktreeResult(content: string): LegacyWorktreeResult | undefined {
+  if (Buffer.byteLength(content, "utf8") > LEGACY_WORKTREE_RESULT_MAX_BYTES) {
+    return undefined;
+  }
+  try {
+    const parsed: unknown = JSON.parse(content);
+    if (
+      typeof parsed !== "object"
+      || parsed === null
+      || !("path" in parsed)
+      || typeof parsed.path !== "string"
+      || !path.isAbsolute(parsed.path)
+      || !("branch" in parsed)
+      || typeof parsed.branch !== "string"
+      || !/^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,62}[a-zA-Z0-9]$|^[a-zA-Z0-9]$/.test(
+        parsed.branch,
+      )
+      || /(?:^|[/\\])\.\.(?:[/\\]|$)/.test(parsed.branch)
+    ) return undefined;
+    const resolved = path.normalize(path.resolve(parsed.path));
+    const expectedTail = path.normalize(`.kodax-worktree-${parsed.branch}`);
+    const comparable = (value: string): string => (
+      process.platform === "win32" ? value.toLowerCase() : value
+    );
+    if (!comparable(resolved).endsWith(comparable(`${path.sep}${expectedTail}`))) {
+      return undefined;
+    }
+    return { root: parsed.path };
+  } catch {
+    return undefined;
+  }
+}
+
+interface LegacyWorktreeEvidence {
+  readonly createdRoots: readonly string[];
+  readonly removedRoots: readonly string[];
+  readonly witnessedCreate: boolean;
+}
+
+function legacyWorktreePathIdentities(requestedRoot: string): string[] {
+  const candidates = [path.resolve(requestedRoot)];
+  try {
+    candidates.push(fs.realpathSync.native(requestedRoot));
+  } catch {
+    // A removed worktree normally no longer has a canonical filesystem path.
+  }
+  return candidates;
+}
+
+function deleteMatchingLegacyRoots(
+  roots: Set<string>,
+  identities: readonly string[],
+): void {
+  for (const root of roots) {
+    if (identities.some((candidate) => sameHostPath(candidate, root))) roots.delete(root);
+  }
+}
+
+function legacyMessageWorktreeEvidence(session: KodaXSessionData): LegacyWorktreeEvidence {
+  const calls = new Map<string, {
+    readonly input: Record<string, unknown>;
+    readonly name: string;
+  }>();
+  const createdRoots = new Set<string>();
+  const removedRoots = new Set<string>();
+  let witnessedCreate = false;
+  for (const message of session.messages) {
+    if (!Array.isArray(message.content)) continue;
+    for (const block of message.content) {
+      if (message.role === "assistant" && block.type === "tool_use") {
+        calls.set(block.id, { input: block.input, name: block.name });
+        continue;
+      }
+      if (
+        message.role !== "user"
+        || block.type !== "tool_result"
+        || block.is_error === true
+      ) continue;
+      const call = calls.get(block.tool_use_id);
+      if (call?.name === "worktree_create" && typeof block.content === "string") {
+        const result = legacyWorktreeResult(block.content);
+        if (result !== undefined) {
+          witnessedCreate = true;
+          deleteMatchingLegacyRoots(
+            removedRoots,
+            legacyWorktreePathIdentities(result.root),
+          );
+          createdRoots.add(result.root);
+        }
+      } else if (
+        call?.name === "worktree_remove"
+        && call.input.action === "remove"
+        && typeof call.input.worktree_path === "string"
+        && path.isAbsolute(call.input.worktree_path)
+      ) {
+        const identities = legacyWorktreePathIdentities(call.input.worktree_path);
+        deleteMatchingLegacyRoots(createdRoots, identities);
+        for (const root of identities) {
+          removedRoots.add(root);
+        }
+      }
+    }
+  }
+  return {
+    createdRoots: [...createdRoots],
+    removedRoots: [...removedRoots],
+    witnessedCreate,
+  };
+}
+
+function legacyUiWorktreeEvidence(session: KodaXSessionData): LegacyWorktreeEvidence {
+  const createdRoots = new Set<string>();
+  const removedRoots = new Set<string>();
+  let witnessedCreate = false;
+  for (const item of session.uiHistory ?? []) {
+    if (item.type !== "tool_group") continue;
+    for (const tool of item.tools) {
+      if (tool.status !== "success") continue;
+      if (
+        tool.name !== "worktree_create"
+        || tool.output === undefined
+      ) {
+        if (
+          tool.name === "worktree_remove"
+          && tool.input?.action === "remove"
+          && typeof tool.input.worktree_path === "string"
+          && path.isAbsolute(tool.input.worktree_path)
+        ) {
+          const identities = legacyWorktreePathIdentities(tool.input.worktree_path);
+          deleteMatchingLegacyRoots(createdRoots, identities);
+          for (const root of identities) {
+            removedRoots.add(root);
+          }
+        }
+        continue;
+      }
+      const result = legacyWorktreeResult(tool.output);
+      if (result !== undefined) {
+        witnessedCreate = true;
+        deleteMatchingLegacyRoots(
+          removedRoots,
+          legacyWorktreePathIdentities(result.root),
+        );
+        createdRoots.add(result.root);
+      }
+    }
+  }
+  return {
+    createdRoots: [...createdRoots],
+    removedRoots: [...removedRoots],
+    witnessedCreate,
+  };
+}
+
+function legacySessionWorktreeEvidence(session: KodaXSessionData): LegacyWorktreeEvidence {
+  const messages = legacyMessageWorktreeEvidence(session);
+  const ui = legacyUiWorktreeEvidence(session);
+  const removedRoots = [...messages.removedRoots, ...ui.removedRoots];
+  const createdRoots = [...messages.createdRoots, ...ui.createdRoots].filter(
+    (root) => !removedRoots.some((removed) => sameHostPath(root, removed)),
+  );
+  return {
+    createdRoots,
+    removedRoots,
+    witnessedCreate: messages.witnessedCreate || ui.witnessedCreate,
+  };
+}
+
+function submoduleGitCommonDirectory(
+  gitDirectory: string,
+  workspaceRoot: string,
+): string | undefined {
+  if (!/[/\\]\.git[/\\]modules[/\\]/i.test(gitDirectory)) return undefined;
+  const config = readBoundedGitMetadata(
+    path.join(gitDirectory, "config"),
+    GIT_CONFIG_MAX_BYTES,
+  );
+  let inCore = false;
+  let worktree: string | undefined;
+  for (const line of config.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("[")) {
+      inCore = /^\[\s*core\s*\]$/i.test(trimmed);
+      continue;
+    }
+    if (!inCore) continue;
+    const match = /^worktree\s*=\s*(.+?)\s*$/i.exec(trimmed);
+    if (match === null) continue;
+    const candidate = match[1]!;
+    if (
+      worktree !== undefined
+      || candidate.startsWith('"')
+      || candidate.endsWith('"')
+    ) return undefined;
+    worktree = candidate;
+  }
+  if (worktree === undefined) return undefined;
+  const boundWorktree = fs.realpathSync.native(path.resolve(gitDirectory, worktree));
+  return sameHostPath(boundWorktree, workspaceRoot) ? gitDirectory : undefined;
+}
+
+function gitCommonDirectoryForWorkspace(
+  workspaceRoot: string,
+  requireLinkedWorktree: boolean,
+): string {
+  const root = fs.realpathSync.native(path.resolve(workspaceRoot));
+  if (!fs.statSync(root).isDirectory()) {
+    throw new Error(`Workspace root is not a directory: ${workspaceRoot}`);
+  }
+  const gitEntry = path.join(root, ".git");
+  const gitEntryStat = fs.lstatSync(gitEntry);
+  if (gitEntryStat.isDirectory()) {
+    if (requireLinkedWorktree) {
+      throw new Error(`Workspace is not a linked worktree: ${workspaceRoot}`);
+    }
+    return fs.realpathSync.native(gitEntry);
+  }
+  if (!gitEntryStat.isFile()) {
+    throw new Error(`Workspace .git entry is not a file: ${workspaceRoot}`);
+  }
+  const match = /^gitdir:\s*(.+?)\s*$/i.exec(readBoundedGitMetadata(gitEntry));
+  if (match === null) {
+    throw new Error(`Workspace .git file is invalid: ${workspaceRoot}`);
+  }
+  const gitDirectory = fs.realpathSync.native(path.resolve(root, match[1]!));
+  if (!fs.statSync(path.join(gitDirectory, "HEAD")).isFile()) {
+    throw new Error(`Linked worktree HEAD is unavailable: ${workspaceRoot}`);
+  }
+  if (!requireLinkedWorktree) {
+    const submoduleCommonDirectory = submoduleGitCommonDirectory(gitDirectory, root);
+    if (submoduleCommonDirectory !== undefined) return submoduleCommonDirectory;
+  }
+  const gitEntryBacklink = path.resolve(
+    gitDirectory,
+    readBoundedGitMetadata(path.join(gitDirectory, "gitdir")),
+  );
+  if (!sameHostPath(gitEntryBacklink, gitEntry)) {
+    throw new Error(`Linked worktree backlink does not match its workspace: ${workspaceRoot}`);
+  }
+  const commonDirectory = fs.realpathSync.native(path.resolve(
+    gitDirectory,
+    readBoundedGitMetadata(path.join(gitDirectory, "commondir")),
+  ));
+  if (!fs.statSync(path.join(commonDirectory, "HEAD")).isFile()) {
+    throw new Error(`Common Git HEAD is unavailable: ${workspaceRoot}`);
+  }
+  if (!isPathInsideDirectory(gitDirectory, path.join(commonDirectory, "worktrees"))) {
+    throw new Error(`Workspace is not structurally linked to its common Git directory: ${workspaceRoot}`);
+  }
+  return commonDirectory;
+}
+
+function sameHostPath(left: string, right: string): boolean {
+  const comparable = (value: string): string => {
+    const resolved = path.normalize(path.resolve(value));
+    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  };
+  return comparable(left) === comparable(right);
+}
+
+function canonicalLinkedWorktreeOfWorkspace(
+  candidate: string,
+  workspaceRoot: string,
+): string | undefined {
+  try {
+    const canonicalCandidate = fs.realpathSync.native(path.resolve(candidate));
+    if (!sameHostPath(
+      gitCommonDirectoryForWorkspace(canonicalCandidate, true),
+      gitCommonDirectoryForWorkspace(workspaceRoot, false),
+    )) return undefined;
+    return canonicalCandidate;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizedWorkspaceSandboxRoots(
+  roots: readonly string[] | undefined,
+  workspaceRoot: string,
+): string[] {
+  const normalized = new Map<string, string>();
+  for (const root of roots ?? []) {
+    if (typeof root !== "string" || !path.isAbsolute(root)) continue;
+    const canonical = canonicalLinkedWorktreeOfWorkspace(root, workspaceRoot);
+    if (canonical === undefined) continue;
+    const key = process.platform === "win32" ? canonical.toLowerCase() : canonical;
+    normalized.set(key, canonical);
+  }
+  return [...normalized.values()].sort((left, right) => left.localeCompare(right));
+}
+
+async function migrateLegacyWorkspaceSandboxRoots(input: {
+  readonly session: KodaXSessionData;
+  readonly sessionId: string;
+  readonly sessionManager: SessionManager;
+}): Promise<void> {
+  if (input.session.runtimeInfo?.sandboxWorktreeRoots !== undefined) return;
+  const evidence = legacySessionWorktreeEvidence(input.session);
+  if (!evidence.witnessedCreate) return;
+  const roots = normalizedWorkspaceSandboxRoots(
+    evidence.createdRoots,
+    input.session.gitRoot,
+  );
+  const mutateRuntimeInfo = input.sessionManager.storage.mutateRuntimeInfo;
+  if (mutateRuntimeInfo === undefined) {
+    throw new Error("Session storage cannot migrate workspace sandbox roots.");
+  }
+  let persistedRuntimeInfo: KodaXSessionRuntimeInfo | undefined;
+  const found = await mutateRuntimeInfo.call(
+    input.sessionManager.storage,
+    input.sessionId,
+    (current) => {
+      const runtimeInfo = current?.sandboxWorktreeRoots !== undefined
+        ? current
+        : { ...(current ?? {}), sandboxWorktreeRoots: roots };
+      persistedRuntimeInfo = runtimeInfo;
+      return runtimeInfo;
+    },
+  );
+  if (!found || persistedRuntimeInfo === undefined) {
+    throw new Error(
+      `Session not found while migrating workspace sandbox roots: ${input.sessionId}`,
+    );
+  }
+  input.session.runtimeInfo = persistedRuntimeInfo;
+}
+
+function createWorkspaceSandboxRootRegistry(input: {
+  readonly admittedSessionContext: RuntimeAdmittedSessionContext | undefined;
+  readonly sessionId: string;
+  readonly sessionManager: SessionManager;
+  readonly workspaceRoot: string;
+}): KodaXWorkspaceSandboxRootRegistry {
+  let roots = normalizedWorkspaceSandboxRoots(
+    input.admittedSessionContext?.runtimeInfo?.sandboxWorktreeRoots,
+    input.workspaceRoot,
+  );
+  let previousUpdate = Promise.resolve();
+
+  const runtimeInfoWithRoots = (
+    current: KodaXSessionRuntimeInfo | undefined,
+    next: readonly string[],
+  ): KodaXSessionRuntimeInfo => {
+    const runtimeInfo: KodaXSessionRuntimeInfo = { ...(current ?? {}) };
+    runtimeInfo.sandboxWorktreeRoots = [...next];
+    return runtimeInfo;
+  };
+
+  const update = async (
+    mutation: (current: readonly string[]) => readonly string[],
+    revokeLocallyOnFailure = false,
+  ): Promise<void> => {
+    const waitForPrevious = previousUpdate;
+    let releaseUpdate: (() => void) | undefined;
+    previousUpdate = new Promise<void>((resolve) => {
+      releaseUpdate = resolve;
+    });
+    await waitForPrevious;
+    try {
+      const next = [...mutation(roots)].sort((left, right) => left.localeCompare(right));
+      if (revokeLocallyOnFailure) {
+        roots = next;
+        if (input.admittedSessionContext !== undefined) {
+          input.admittedSessionContext.runtimeInfo = runtimeInfoWithRoots(
+            input.admittedSessionContext.runtimeInfo,
+            next,
+          );
+        }
+      }
+      const mutateRuntimeInfo = input.sessionManager.storage.mutateRuntimeInfo;
+      if (mutateRuntimeInfo === undefined) {
+        throw new Error("Session storage cannot persist workspace sandbox roots.");
+      }
+      let persistedRuntimeInfo: KodaXSessionRuntimeInfo | undefined;
+      const found = await mutateRuntimeInfo.call(
+        input.sessionManager.storage,
+        input.sessionId,
+        (current) => {
+          const runtimeInfo = runtimeInfoWithRoots(current, next);
+          persistedRuntimeInfo = runtimeInfo;
+          return runtimeInfo;
+        },
+      );
+      if (!found || persistedRuntimeInfo === undefined) {
+        throw new Error(`Session not found while updating workspace sandbox roots: ${input.sessionId}`);
+      }
+      roots = next;
+      if (input.admittedSessionContext !== undefined) {
+        input.admittedSessionContext.runtimeInfo = persistedRuntimeInfo;
+      }
+    } finally {
+      releaseUpdate?.();
+    }
+  };
+
+  return {
+    list: () => normalizedWorkspaceSandboxRoots(roots, input.workspaceRoot),
+    async register(root) {
+      const canonical = canonicalLinkedWorktreeOfWorkspace(root, input.workspaceRoot);
+      if (canonical === undefined) {
+        throw new Error(
+          `Workspace sandbox root must be a linked worktree of the Session repository: ${path.resolve(root)}`,
+        );
+      }
+      await update((current) => {
+        if (current.some((candidate) => sameHostPath(candidate, canonical))) return current;
+        return [...current, canonical];
+      });
+    },
+    async unregister(root) {
+      const resolved = canonicalLinkedWorktreeOfWorkspace(root, input.workspaceRoot)
+        ?? path.resolve(root);
+      await update((current) => current.filter(
+        (candidate) => !sameHostPath(candidate, resolved),
+      ), true);
+    },
+  };
+}
+
 function buildRunOptions(input: {
   readonly agentPlane?: AgentExecutorPlane;
   readonly defaultConfigHome: string;
@@ -10600,6 +11108,12 @@ function buildRunOptions(input: {
   const workspaceRoot =
     options.context?.gitRoot ?? options.context?.executionCwd ?? process.cwd();
   const executionCwd = options.context?.executionCwd ?? workspaceRoot;
+  const workspaceSandboxRoots = createWorkspaceSandboxRootRegistry({
+    admittedSessionContext: record.admittedSessionContext,
+    sessionId: record.sessionId,
+    sessionManager,
+    workspaceRoot,
+  });
   const selectWorkspaceSandbox = async (call: RunnerToolCall) => {
     const autoMode =
       replApi.normalizePermissionMode(record.permissionMode) === "auto";
@@ -10629,12 +11143,14 @@ function buildRunOptions(input: {
   };
   const runtimeWorkspaceShellSandbox = createAsrtShellSandbox({
     workspaceRoot,
+    additionalWorkspaceRoots: workspaceSandboxRoots.list,
     shouldSandbox: selectWorkspaceSandbox,
   });
   let textFileMutationSandbox: ReturnType<typeof createAsrtTextFileMutationSandbox> | undefined;
   try {
     textFileMutationSandbox = createAsrtTextFileMutationSandbox({
       workspaceRoot,
+      additionalWorkspaceRoots: workspaceSandboxRoots.list,
       shouldSandbox: selectWorkspaceSandbox,
     });
   } catch (error: unknown) {
@@ -10726,6 +11242,7 @@ function buildRunOptions(input: {
       configHome: input.defaultConfigHome,
       ...(shellSandbox !== undefined ? { shellSandbox } : {}),
       ...(textFileMutationSandbox === undefined ? {} : { textFileMutationSandbox }),
+      workspaceSandboxRoots,
       ...(hideUnwiredExitPlanMode
         ? {
             // Runtime daemon options cannot transport callback functions. Do
@@ -11611,6 +12128,10 @@ function createRuntimeEventBus(persistence: RuntimePersistence) {
   const notificationQueue: RuntimeEvent[] = [];
   const preservedLatestKeysByRun = new Map<string, Set<string>>();
   const closeListeners = new Set<() => void>();
+  const invalidationListenersBySession = new Map<
+    string,
+    Set<(message: string) => void>
+  >();
   const subscribers = new Set<{
     readonly filter: RuntimeInternalEventFilter;
     readonly listener: RuntimeEventListener;
@@ -12261,6 +12782,34 @@ function createRuntimeEventBus(persistence: RuntimePersistence) {
         },
       };
     },
+    subscribeSessionInvalidation(
+      sessionId: string,
+      listener: (message: string) => void,
+    ): RuntimeSubscription {
+      const listeners = invalidationListenersBySession.get(sessionId) ?? new Set();
+      listeners.add(listener);
+      invalidationListenersBySession.set(sessionId, listeners);
+      return {
+        close() {
+          listeners.delete(listener);
+          if (listeners.size === 0) invalidationListenersBySession.delete(sessionId);
+        },
+      };
+    },
+    invalidateSessionObservations(sessionId: string, message: string): void {
+      for (const listener of [...(invalidationListenersBySession.get(sessionId) ?? [])]) {
+        try {
+          listener(message);
+        } catch (error: unknown) {
+          emitKodaXDiagnostic({
+            source: "runtime.sessions.observe",
+            level: "error",
+            message: "Session observation invalidation listener failed.",
+            detail: normalizeError(error),
+          });
+        }
+      }
+    },
     emit(
       type: RuntimeEventType,
       payload: unknown,
@@ -12338,6 +12887,7 @@ function createRuntimeEventBus(persistence: RuntimePersistence) {
           }
         }
         closeListeners.clear();
+        invalidationListenersBySession.clear();
         try {
           persistence.close();
         } catch (error: unknown) {
@@ -20352,10 +20902,23 @@ function markRunTerminal(
           ? "run.interrupted"
           : "run.failed";
   const proposed = statusFromRecord(run);
-  let statusPersisted = false;
-  const authoritative = saveRunStatusSafely(bus, persistence, run, proposed);
-  statusPersisted = authoritative !== undefined;
-  if (authoritative !== undefined && authoritative !== proposed) {
+  let authoritative = saveRunStatusSafely(bus, persistence, run, proposed);
+  if (authoritative === undefined) {
+    // A status write can fail after an earlier unknown Stop was durably
+    // recorded. Re-read and retry once so a transient atomic-replace failure
+    // cannot regress the stronger local executor terminal fact.
+    authoritative = saveRunStatusSafely(bus, persistence, run, proposed);
+  }
+  const statusPersisted = authoritative !== undefined;
+  if (authoritative === undefined) {
+    run.terminalEmitted = false;
+    throw new Error(`Failed to persist terminal Runtime run: ${run.runId}`);
+  }
+  if (
+    authoritative !== undefined
+    && authoritative !== proposed
+    && !isDeepStrictEqual(authoritative, proposed)
+  ) {
     applyAuthoritativeRunStatus(run, authoritative);
     return;
   }

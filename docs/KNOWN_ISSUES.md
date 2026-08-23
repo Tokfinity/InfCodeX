@@ -7,6 +7,28 @@ _Last Updated: 2026-08-23_
 > **Archive Notice**: Historical issue records are maintained in `docs/ISSUES_ARCHIVED.md`.
 > This file tracks the active issue backlog plus recently resolved issue records that have not yet been archived.
 
+## Unreleased maintenance corrections
+
+- Stale zero-byte, malformed, and truncated learning authority locks now
+  recover automatically only after the stale boundary and an unchanged
+  bytes/mtime/size comparison. A valid live owner or replacement record is
+  never removed.
+- Windows same-boot `unconfirmed-owner` ACL tickets no longer require manual
+  deletion. Recovery retries in the background and clears the ticket only when
+  an exact sandbox-user SID probe proves the account idle. Probe failure is
+  diagnosable and remains fail-closed for sandbox work without blocking other
+  KodaX work.
+- Fullscreen terminal teardown has an idempotent exit fallback for mouse and
+  alternate-screen modes. Explicit Skill execution preserves exact user input
+  in canonical history, rejects multiple active references, and treats failed
+  or malformed `PreToolUse` hooks as denial.
+- A failed terminal Run status write now produces
+  `run_settlement_not_persisted` / `unknown`. If the Session event journal is
+  also fenced, live observations are invalidated and must resnapshot rather
+  than retaining stale state. Current source advertises
+  `runtimeExitSettlement:2` and Windows `sandboxRuntime:5`; release assignment
+  remains with the maintainer.
+
 ## v0.7.94 Release Corrections
 
 The v0.7.94 maintenance release closes Issue 300 and the post-v0.7.93
@@ -32,6 +54,20 @@ replay `runs.start()`. Capability versions `sandboxRuntime:4` /
 [ISSUE_300_v0.7.94_REGRESSION_GUIDE.md](test-guides/ISSUE_300_v0.7.94_REGRESSION_GUIDE.md)
 and
 [ISSUE_RUNTIME_DAEMON_RECOVERY_v0.7.94_REGRESSION_GUIDE.md](test-guides/ISSUE_RUNTIME_DAEMON_RECOVERY_v0.7.94_REGRESSION_GUIDE.md).
+
+A post-release correction closes the uncovered dynamic-worktree case: roots
+created by the KodaX worktree tool are persisted in the Session's exact shell
+and text sandbox policy, validated against the repository's Git common-dir on
+later Runs, and revoked on removal. Unregistered siblings remain fenced. The
+durable filesystem-effect record may explain an independently crashed owner,
+but users should not delete ProgramData coordination files to work around this
+worktree-policy gap. A worktree created before this correction has no durable
+registration. An exact successful `worktree_create` result retained by the
+same Session is migrated only after full Git revalidation; directory naming is
+never enough, and a retained successful remove prevents stale re-adoption. If
+the create evidence is unavailable, stop its background process and
+remove/recreate it through KodaX once; the cleanup does not require prior
+registration.
 
 ---
 
@@ -104,7 +140,7 @@ by the focused sandbox, lineage, REPL, and coding-runtime tests.
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
 | 302 | High | Resolved | Runtime completion fallback could publish an empty A2A answer before the coding result settled | v0.7.79 Runtime completion fallback | Unreleased | 2026-08-23 | 2026-08-23 |
-| 301 | High | Resolved | Stale empty learning lock could stall interactive work and TUI teardown lacked a direct terminal restore fallback | shared learning lock / fullscreen TUI | v0.7.95 | 2026-08-23 | 2026-08-23 |
+| 301 | High | Resolved | Stale invalid learning lock could stall interactive work and TUI teardown lacked a direct terminal restore fallback | shared learning lock / fullscreen TUI | Unreleased | 2026-08-23 | 2026-08-23 |
 | 300 | Medium | Resolved | Sandboxed git `safe.directory` trust set misaligned with authorized roots | v0.7.93 ASRT 0.0.65 git trust | v0.7.94 | 2026-08-20 | 2026-08-21 |
 | 299 | High | Resolved | Previous-boot foreign Windows ACL markers blocked SDK-owned Runtime exit settlement | v0.7.91 Runtime exit settlement | v0.7.93 | 2026-08-19 | 2026-08-19 |
 | 298 | High | Resolved | Provider SDK abort wrapper bypasses managed Stop classification and becomes a credential failure | v0.7.69 managed run-scoped credentials | v0.7.93 | 2026-08-19 | 2026-08-19 |
@@ -356,12 +392,12 @@ already authoritative result or its persisted Memory/learning outcome.
 See
 [`ISSUE_302_UNRELEASED_REGRESSION_GUIDE.md`](test-guides/ISSUE_302_UNRELEASED_REGRESSION_GUIDE.md).
 
-### 301: Stale empty learning lock could stall interactive work and TUI teardown lacked a direct terminal restore fallback
+### 301: Stale invalid learning lock could stall interactive work and TUI teardown lacked a direct terminal restore fallback
 
 - **Priority**: High
 - **Status**: Resolved
 - **Introduced**: shared learning lock / fullscreen TUI
-- **Fixed**: v0.7.95
+- **Fixed**: Unreleased
 - **Created**: 2026-08-23
 - **Resolved**: 2026-08-23
 
@@ -391,9 +427,9 @@ path returned without arming cleanup.
 
 #### Resolution
 
-An unchanged zero-byte owner file older than 30 seconds is now reclaimable.
-Removal remains fenced by a second stat and byte comparison, valid live owners
-are never stolen, and non-empty malformed records remain fail-closed. The
+An unchanged zero-byte, malformed, or truncated owner file older than 30 seconds
+is now reclaimable. Removal remains fenced by a second stat and byte comparison,
+and valid live owners or replacement records are never stolen. The
 alternate-screen component registers one idempotent restore guard with both
 the renderer and the process-exit fallback before entering fullscreen. The
 renderer invokes that shared guard from its guaranteed `unmount()` boundary,
@@ -404,7 +440,7 @@ mouse tracking and leaves the alternate screen before it propagates. Stream
 backpressure no longer bypasses guard registration.
 
 See
-[`ISSUE_301_v0.7.95_REGRESSION_GUIDE.md`](test-guides/ISSUE_301_v0.7.95_REGRESSION_GUIDE.md).
+[`ISSUE_301_UNRELEASED_REGRESSION_GUIDE.md`](test-guides/ISSUE_301_UNRELEASED_REGRESSION_GUIDE.md).
 
 ### 300: Sandboxed git `safe.directory` trust set misaligned with authorized roots
 

@@ -439,7 +439,9 @@ export {
   containWindowsEffectProcess,
   terminateWindowsEffectJob,
   windowsSandboxSidHasActiveProcesses,
+  windowsSandboxSidHasOtherProcesses,
   type WindowsEffectJob,
+  type WindowsSandboxSidProbeLauncher,
 } from './runtime/windows-effect-job.js';
 
 // FEATURE_222 — user-interaction primitive (shared by coding ask_user_* tools

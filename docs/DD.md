@@ -1,10 +1,12 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-08-21
+> Last updated: 2026-08-23
 >
 > Current published baseline: `v0.7.94`
 > (`@kodax-ai/kodax@0.7.94`; `sandboxRuntime:4`, `crashOutcomeModel:2`;
 > npm publication remains manual)
+> Current Unreleased source advertises Windows `sandboxRuntime:5` and local
+> `runtimeExitSettlement:2`; release/version assignment remains manual.
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -33,7 +35,15 @@ omits the concurrent text sandbox at Run start. Runtime advertises
 discovery. Invalid `allowed-tools` and malformed hook JSON are diagnosed;
 `PostToolUse` still runs if an embedder result observer throws. Run settlement
 observes finalization rejections and recovers an admitted `runId` without
-replaying `runs.start()`. The v0.7.93 maintenance
+replaying `runs.start()`. The current Unreleased maintenance layer
+automatically retries same-boot Windows `unconfirmed-owner` recovery and clears
+it only after an exact sandbox-user SID-idle proof. Learning locks with stale
+zero-byte, malformed, or truncated owner data are reclaimed through unchanged
+bytes/stat verification. Explicit Skill execution separates exact canonical
+user input from execution overlays, rejects multiple active references, and
+makes `PreToolUse` failure a denial. Terminal Run persistence failure publishes
+`unknown`, or invalidates live Session observations when no durable event can be
+committed. The v0.7.93 maintenance
 slice observes a durable Windows `failed` shutdown outcome during orderly
 exit wait, recovers previous-boot shared ACL markers only after a verified
 boot change, and classifies Anthropic/OpenAI abort wrappers by isolated SDK
@@ -76,7 +86,12 @@ The v0.7.94 source hardening keeps Run convergence inside
 `src/sdk-runtime.ts`: successful and failed executor callbacks feed one
 observed settlement chain, durable status outranks event-publication failure,
 and total terminal persistence failure records
-`run_settlement_not_persisted` while retaining the Session fence.
+`run_settlement_not_persisted` while retaining the Session fence. Current
+Unreleased source additionally handles a terminal status rename that commits
+before later status-lock cleanup throws: one retry may treat the reread record
+as the local commit only when the complete public status is deeply equal; it
+then emits the terminal event exactly once. A different terminal record
+remains authoritative and is not republished.
 `src/sandbox-runtime.ts` and Agent managed-child event handlers terminate
 through rejection-observed cleanup paths. `src/runtime-daemon/transport.ts`
 publishes the same typed disconnect facts to pending RPCs and lifecycle
@@ -153,6 +168,32 @@ Sandbox backups use a canonical path minted from the opened helper identity;
 undo rejects a subsequently changed canonical identity. Worktree create/remove additionally keep a per-target queue
 around their namespace lease until the managed Git process tree is proven
 drained.
+Delayed text drain recovery is phase-idempotent. It caches a successfully read
+execution attestation before deleting the broker file, retries a transient
+workspace cleanup or policy reset, and does not repeat finished process-drain,
+effect-process, or outer lease-release phases.
+After `git worktree add` succeeds, the worktree tool validates and canonicalizes
+the exact root, atomically persists it through the Runtime-owned Session
+registry, and only then returns it. A persistence failure rolls the Git
+worktree and branch back instead of exposing an uncovered path. Both shell and
+text sandbox construction read that same live registry, so their filesystem
+policy keys remain compatible in the creating Run and later Runs. On load, each
+root must again prove bounded `.git`, `gitdir`, `commondir`, `HEAD`, and backlink
+records that resolve to the Session repository's common Git directory. Removal
+captures the canonical root before Git deletes the directory, then removes and
+atomically revokes it; an unregister failure makes the tool fail rather than
+reporting a successful policy transition. When the Session root is a Git
+submodule, its main common directory is accepted only if the canonical gitdir
+is under `.git/modules/` and a byte-bounded `core.worktree` value points back to
+that exact Session root; the newly registered candidate must still satisfy the
+ordinary linked-worktree backlink checks. For a pre-correction Session with no
+registry field, migration considers only an exact successful `worktree_create`
+tool result retained in canonical messages or UI history and repeats the full
+Git validation before persisting it. A successful retained `worktree_remove`
+acts as a conservative tombstone across both evidence sources. Roots are never
+inferred from directory names. If the create evidence is unavailable, the
+background process must be stopped and the worktree removed/recreated through
+KodaX once; an unregistered pre-correction root remains removable.
 
 The same release implements Session-scoped event journals and cursor-bound
 replay, the F289/F290 Memory review and lesson pipelines, and F292's

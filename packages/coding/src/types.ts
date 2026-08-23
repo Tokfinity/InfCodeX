@@ -1742,6 +1742,13 @@ export interface KodaXTextFileMutationSandbox {
   >;
 }
 
+/** Runtime-owned exact workspace roots shared by shell and direct text tools. */
+export interface KodaXWorkspaceSandboxRootRegistry {
+  list(): readonly string[];
+  register(root: string): Promise<void>;
+  unregister(root: string): Promise<void>;
+}
+
 export interface KodaXContextOptions {
   /**
    * Runtime-authenticated authority for permission review. Child runtimes must
@@ -1812,6 +1819,8 @@ export interface KodaXContextOptions {
   shellSandbox?: KodaXShellSandbox;
   /** Runtime-owned OS-sandboxed optimistic compare-and-write path for direct text mutations. */
   textFileMutationSandbox?: KodaXTextFileMutationSandbox;
+  /** Runtime-owned linked-worktree roots; never accepted from model input. */
+  workspaceSandboxRoots?: KodaXWorkspaceSandboxRootRegistry;
   /** Fail-closed host policy applied to every concrete file a read tool opens. */
   assertReadablePath?: (candidate: string) => void;
   /**
@@ -2658,6 +2667,8 @@ export interface KodaXToolExecutionContext {
   shellSandbox?: KodaXShellSandbox;
   /** Runtime-owned OS-sandboxed read/compare/write path for direct text mutations. */
   textFileMutationSandbox?: KodaXTextFileMutationSandbox;
+  /** Runtime-owned linked-worktree roots shared by shell and direct text tools. */
+  workspaceSandboxRoots?: KodaXWorkspaceSandboxRootRegistry;
   /** Structured containment metadata; never model-visible or persisted as conversation text. */
   reportToolSandboxObservation?: (observation: KodaXShellSandboxObservation) => void;
   /**

@@ -298,11 +298,13 @@ describe("createKodaXRuntime", () => {
       rollback: true,
     });
     expect(runtime.capabilities.sandboxRuntime).toMatchObject({
-      version: 4,
+      version: 5,
       genericCommandExecution: true,
       ordinaryCallsTriggerSetup: false,
       unavailableBehavior: "structured-no-execution",
       permissionFallback: "normal-permission-policy",
+      delayedEffectDrainRecovery: "automatic",
+      sameBootAclRecovery: "sandbox-user-process-probe",
     });
     expect(runtime.capabilities.runtimeAutoModeGuardrail).toMatchObject({
       version: 4,
@@ -8962,6 +8964,7 @@ describe("createKodaXRuntime", () => {
       sessionId: session.id,
       prompt: "fail after the Session journal is fenced",
     });
+    const observation = await runtime.sessions.observe(session.id, () => undefined);
     startTestOutputSegment(activeEvents, "request-run-settlement-fence");
     const eventFile = runtimeEventLogPath(tempRoot, run.runId);
     const appendFileSync = mutableNodeFs.appendFileSync;
@@ -9028,10 +9031,72 @@ describe("createKodaXRuntime", () => {
         retryable: false,
       },
     });
+    await expect(observation.invalidated).resolves.toMatchObject({
+      code: "observation_invalidated",
+      reason: "delivery_failed",
+      runtimeId: expect.any(String),
+    });
     await expect(runtime.status.preflight()).resolves.toMatchObject({
       canStop: false,
       blockers: expect.arrayContaining(["active_runs"]),
       activeRuns: [expect.objectContaining({ runId: run.runId, phase: "unknown" })],
+    });
+    await runtime.close().catch(() => undefined);
+  });
+
+  it("publishes unknown when terminal status persistence fails before its event commit", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "run-settlement-update-sessions"),
+      defaultProvider: "mock-provider",
+    });
+    const session = await runtime.sessions.create({ title: "Unknown Run Update" });
+    let rejectRun: ((error: Error) => void) | undefined;
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions) =>
+      fakeRunningSession(options, new Promise<KodaXResult>((_resolve, reject) => {
+        rejectRun = reject;
+      })),
+    );
+    const run = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "publish unknown after the terminal status write fails",
+    });
+    const runUpdates: RuntimeEvent[] = [];
+    runtime.events.subscribe(
+      { sessionId: session.id, type: "run.updated" },
+      (event) => runUpdates.push(event),
+    );
+    const statusFile = path.join(
+      tempRoot,
+      ".kodax",
+      "runtime",
+      "runs",
+      run.runId,
+      "status.json",
+    );
+    const renameSync = mutableNodeFs.renameSync;
+    mutableNodeFs.renameSync = ((source, destination) => {
+      if (
+        path.basename(String(destination)) === path.basename(statusFile)
+        && String(destination).includes(run.runId)
+      ) {
+        throw Object.assign(new Error("terminal status persistence failure"), { code: "EIO" });
+      }
+      return renameSync(source, destination);
+    }) as typeof nodeFs.renameSync;
+    syncBuiltinESMExports();
+    try {
+      rejectRun?.(new Error("provider failure before terminal persistence"));
+      await expect(run.result).resolves.toMatchObject({ phase: "unknown" });
+    } finally {
+      mutableNodeFs.renameSync = renameSync;
+      syncBuiltinESMExports();
+    }
+    expect(runUpdates.at(-1)?.payload).toMatchObject({
+      runId: run.runId,
+      phase: "unknown",
+      lifecycleError: { code: "run_settlement_not_persisted" },
     });
     await runtime.close().catch(() => undefined);
   });
@@ -9142,6 +9207,93 @@ describe("createKodaXRuntime", () => {
       phase: "completed",
       terminal: { kind: "completed", code: "completed" },
     });
+    await runtime.close();
+  });
+
+  it("emits one terminal event when status-lock cleanup fails after commit", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "terminal-status-cleanup-sessions"),
+      defaultProvider: "mock-provider",
+    });
+    const session = await runtime.sessions.create({
+      title: "Terminal status committed before cleanup failure",
+    });
+    let resolveRun: ((result: KodaXResult) => void) | undefined;
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions) =>
+      fakeRunningSession(options, new Promise<KodaXResult>((resolve) => {
+        resolveRun = resolve;
+      })),
+    );
+    const run = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "complete while status-lock cleanup fails once",
+    });
+    const delivered: RuntimeEvent[] = [];
+    runtime.events.subscribe(
+      { sessionId: session.id, type: "run.completed" },
+      (event) => delivered.push(event),
+    );
+    const statusLockFile = path.join(
+      tempRoot,
+      ".kodax",
+      "runtime",
+      "runs",
+      run.runId,
+      "status.json.lock",
+    );
+    const rmSync = mutableNodeFs.rmSync;
+    let cleanupFailed = false;
+    const terminalStatusCommitted = (): boolean => {
+      const statusFile = path.join(path.dirname(statusLockFile), "status.json");
+      if (!nodeFs.existsSync(statusFile)) return false;
+      const persisted: unknown = JSON.parse(nodeFs.readFileSync(statusFile, "utf8"));
+      return typeof persisted === "object"
+        && persisted !== null
+        && "terminal" in persisted
+        && typeof persisted.terminal === "object"
+        && persisted.terminal !== null
+        && "kind" in persisted.terminal
+        && persisted.terminal.kind === "completed";
+    };
+    mutableNodeFs.rmSync = ((file, options) => {
+      if (
+        !cleanupFailed
+        && String(file) === statusLockFile
+        && terminalStatusCommitted()
+      ) {
+        cleanupFailed = true;
+        throw new Error("synthetic terminal status-lock cleanup failure");
+      }
+      return rmSync(file, options);
+    }) as typeof nodeFs.rmSync;
+    syncBuiltinESMExports();
+    try {
+      resolveRun?.({
+        success: true,
+        lastText: "completed",
+        messages: [],
+        sessionId: session.id,
+      });
+      await expect(run.result).resolves.toMatchObject({
+        phase: "completed",
+      });
+    } finally {
+      mutableNodeFs.rmSync = rmSync;
+      syncBuiltinESMExports();
+    }
+    expect(cleanupFailed).toBe(true);
+    await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+      phase: "completed",
+      terminal: { kind: "completed", code: "completed" },
+    });
+    expect(delivered).toHaveLength(1);
+    const replay = await runtime.events.replay({
+      runId: run.runId,
+      type: "run.completed",
+    });
+    expect(replay).toHaveLength(1);
     await runtime.close();
   });
 
@@ -11733,6 +11885,88 @@ describe("createKodaXRuntime", () => {
         syncBuiltinESMExports();
       }
       await runtime.close();
+    }
+  });
+
+  it("contains persistent terminal write failure during automatic Stop recovery", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "persistent-stop-terminal-failure-sessions"),
+      defaultProvider: "mock-provider",
+    });
+    const renameSync = mutableNodeFs.renameSync;
+    let restoreRename = false;
+    try {
+      let finishRoot: ((value: KodaXResult) => void) | undefined;
+      codingMock.startKodaX.mockImplementation(
+        (options: KodaXOptions): RunningSession => fakeRunningSession(
+          options,
+          new Promise<KodaXResult>((resolve) => {
+            finishRoot = resolve;
+          }),
+        ),
+      );
+      const session = await runtime.sessions.create({
+        title: "Persistent Stop terminal failure",
+      });
+      const run = await runtime.runs.start({
+        sessionId: session.id,
+        prompt: "remain unknown after terminal writes stay fenced",
+      });
+      await expect(runtime.runs.abort(run.runId)).resolves.toMatchObject({
+        accepted: true,
+        phase: "unknown",
+      });
+      const statusFile = path.join(
+        tempRoot,
+        ".kodax",
+        "runtime",
+        "runs",
+        run.runId,
+        "status.json",
+      );
+      mutableNodeFs.renameSync = ((source, destination) => {
+        if (String(destination) === statusFile) {
+          throw Object.assign(new Error("persistent terminal status write failure"), {
+            code: "EIO",
+          });
+        }
+        return renameSync(source, destination);
+      }) as typeof nodeFs.renameSync;
+      syncBuiltinESMExports();
+      restoreRename = true;
+
+      finishRoot?.({
+        success: true,
+        lastText: "completed only in the executor",
+        messages: [],
+        sessionId: session.id,
+      });
+      await expect(run.result).resolves.toMatchObject({ phase: "unknown" });
+
+      mutableNodeFs.renameSync = renameSync;
+      syncBuiltinESMExports();
+      restoreRename = false;
+      await expect(runtime.events.replay({
+        runId: run.runId,
+        type: "run.updated",
+      })).resolves.toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            phase: "unknown",
+            lifecycleError: expect.objectContaining({
+              code: "run_settlement_not_persisted",
+            }),
+          }),
+        }),
+      ]));
+    } finally {
+      if (restoreRename) {
+        mutableNodeFs.renameSync = renameSync;
+        syncBuiltinESMExports();
+      }
+      await runtime.close().catch(() => undefined);
     }
   });
 
@@ -17201,6 +17435,424 @@ describe("createKodaXRuntime", () => {
     } finally {
       await runtime.close();
     }
+  });
+
+  it("registers a linked worktree created from a submodule Session root", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const sessionsDir = path.join(tempRoot, "submodule-worktree-sessions");
+    const parentRoot = path.join(tempRoot, "submodule-worktree-parent");
+    const childSource = path.join(tempRoot, "submodule-worktree-source");
+    const submoduleRoot = path.join(parentRoot, "modules", "child");
+    const linkedWorktree = path.join(tempRoot, ".kodax-worktree-submodule-linked");
+    await fs.mkdir(childSource, { recursive: true });
+    execFileSync("git", ["init"], { cwd: childSource, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "kodax-test@example.invalid"], {
+      cwd: childSource,
+    });
+    execFileSync("git", ["config", "user.name", "KodaX Test"], { cwd: childSource });
+    await fs.writeFile(path.join(childSource, "tracked.txt"), "tracked", "utf8");
+    execFileSync("git", ["add", "tracked.txt"], { cwd: childSource });
+    execFileSync("git", ["commit", "-m", "submodule fixture"], {
+      cwd: childSource,
+      stdio: "ignore",
+    });
+    await fs.mkdir(parentRoot, { recursive: true });
+    execFileSync("git", ["init"], { cwd: parentRoot, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "kodax-test@example.invalid"], {
+      cwd: parentRoot,
+    });
+    execFileSync("git", ["config", "user.name", "KodaX Test"], { cwd: parentRoot });
+    execFileSync(
+      "git",
+      ["-c", "protocol.file.allow=always", "submodule", "add", childSource, "modules/child"],
+      { cwd: parentRoot, stdio: "ignore" },
+    );
+    execFileSync("git", ["commit", "-m", "add submodule"], {
+      cwd: parentRoot,
+      stdio: "ignore",
+    });
+    execFileSync("git", ["worktree", "add", "-b", "submodule-linked", linkedWorktree], {
+      cwd: submoduleRoot,
+      stdio: "ignore",
+    });
+    const linkedTarget = path.join(linkedWorktree, "target.txt");
+    await fs.writeFile(linkedTarget, "linked", "utf8");
+
+    let runOptions: KodaXOptions | undefined;
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => {
+      runOptions = options;
+      return fakeRunningSession(options, new Promise<KodaXResult>(() => undefined));
+    });
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir,
+      defaultProvider: "mock-provider",
+      sharedDaemonHost: true,
+    });
+    const session = await runtime.sessions.create({
+      title: "Submodule dynamic worktree root",
+      projectPath: submoduleRoot,
+    });
+    const run = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "register a worktree created from the submodule",
+    });
+    try {
+      await runOptions?.context?.workspaceSandboxRoots?.register(linkedWorktree);
+      expect(runOptions?.context?.textFileMutationSandbox?.canHandlePath?.(linkedTarget))
+        .toBe(true);
+    } finally {
+      await runtime.runs.abort(run.runId);
+      await runtime.close();
+    }
+  });
+
+  it("restores registered roots and migrates only Session-proven legacy worktrees", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const sessionsDir = path.join(tempRoot, "dynamic-worktree-sessions");
+    const projectRoot = path.join(tempRoot, "dynamic-worktree-project");
+    const linkedWorktree = path.join(tempRoot, ".kodax-worktree-dynamic-linked");
+    const uiLinkedWorktree = path.join(tempRoot, ".kodax-worktree-ui-linked");
+    const linkedWorktreeAlias = path.join(tempRoot, "dynamic-worktree-alias");
+    const arbitrarySibling = path.join(tempRoot, ".kodax-worktree-forged");
+    await fs.mkdir(projectRoot, { recursive: true });
+    execFileSync("git", ["init"], { cwd: projectRoot, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "kodax-test@example.invalid"], {
+      cwd: projectRoot,
+    });
+    execFileSync("git", ["config", "user.name", "KodaX Test"], { cwd: projectRoot });
+    await fs.writeFile(path.join(projectRoot, "tracked.txt"), "tracked", "utf8");
+    execFileSync("git", ["add", "tracked.txt"], { cwd: projectRoot });
+    execFileSync("git", ["commit", "-m", "test fixture"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    execFileSync("git", ["worktree", "add", "-b", "dynamic-linked", linkedWorktree], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    execFileSync("git", ["worktree", "add", "-b", "ui-linked", uiLinkedWorktree], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    await fs.symlink(
+      linkedWorktree,
+      linkedWorktreeAlias,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    await fs.mkdir(arbitrarySibling, { recursive: true });
+    await fs.copyFile(
+      path.join(linkedWorktree, ".git"),
+      path.join(arbitrarySibling, ".git"),
+    );
+    const linkedTarget = path.join(linkedWorktree, "target.txt");
+    const uiLinkedTarget = path.join(uiLinkedWorktree, "target.txt");
+    const linkedAliasTarget = path.join(linkedWorktreeAlias, "target.txt");
+    const missingLinkedAliasTarget = path.join(linkedWorktreeAlias, "new", "target.txt");
+    const arbitraryTarget = path.join(arbitrarySibling, "target.txt");
+    await fs.writeFile(linkedTarget, "linked", "utf8");
+    await fs.writeFile(uiLinkedTarget, "ui linked", "utf8");
+    await fs.writeFile(arbitraryTarget, "arbitrary", "utf8");
+
+    const captured: KodaXOptions[] = [];
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => {
+      captured.push(options);
+      return fakeRunningSession(options, new Promise<KodaXResult>(() => undefined));
+    });
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir,
+      defaultProvider: "mock-provider",
+      sharedDaemonHost: true,
+    });
+    const session = await runtime.sessions.create({
+      title: "Dynamic worktree roots",
+      projectPath: projectRoot,
+    });
+    const firstRun = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "register a linked worktree",
+    });
+    const firstRegistry = captured[0]?.context?.workspaceSandboxRoots;
+    expect(firstRegistry).toBeDefined();
+    const originalReadFileSync = mutableNodeFs.readFileSync;
+    mutableNodeFs.readFileSync = ((file, options) => {
+      const resolved = path.resolve(String(file));
+      if (
+        resolved === path.resolve(linkedWorktree, ".git")
+        || resolved.endsWith(`${path.sep}commondir`)
+        || resolved.endsWith(`${path.sep}gitdir`)
+      ) {
+        throw new Error("Git metadata must use a bounded descriptor read");
+      }
+      return originalReadFileSync(file, options);
+    }) as typeof mutableNodeFs.readFileSync;
+    syncBuiltinESMExports();
+    try {
+      await firstRegistry?.register(linkedWorktreeAlias);
+    } finally {
+      mutableNodeFs.readFileSync = originalReadFileSync;
+      syncBuiltinESMExports();
+    }
+    expect(firstRegistry?.list()).toEqual([await fs.realpath(linkedWorktree)]);
+    await expect(firstRegistry?.register(arbitrarySibling)).rejects.toThrow(/linked worktree/i);
+    await runtime.runs.abort(firstRun.runId);
+    await runtime.close();
+
+    captured.length = 0;
+    const resumedRuntime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir,
+      defaultProvider: "mock-provider",
+      sharedDaemonHost: true,
+    });
+    const secondRun = await resumedRuntime.runs.start({
+      sessionId: session.id,
+      prompt: "edit inside the existing linked worktree",
+    });
+    const secondOptions = captured[0];
+    expect(secondOptions?.context?.textFileMutationSandbox?.canHandlePath?.(linkedTarget))
+      .toBe(true);
+    expect(secondOptions?.context?.textFileMutationSandbox?.canHandlePath?.(linkedAliasTarget))
+      .toBe(true);
+    expect(secondOptions?.context?.textFileMutationSandbox?.canHandlePath?.(missingLinkedAliasTarget))
+      .toBe(true);
+    expect(secondOptions?.context?.textFileMutationSandbox?.canHandlePath?.(arbitraryTarget))
+      .toBe(false);
+    await secondOptions?.context?.workspaceSandboxRoots?.unregister(linkedWorktreeAlias);
+    expect(secondOptions?.context?.textFileMutationSandbox?.canHandlePath?.(linkedTarget))
+      .toBe(false);
+    expect(secondOptions?.context?.textFileMutationSandbox?.canHandlePath?.(linkedAliasTarget))
+      .toBe(false);
+    const persisted = await new FileSessionStorage({ sessionsDir }).load(session.id);
+    expect(persisted?.runtimeInfo?.sandboxWorktreeRoots).toEqual([]);
+    await resumedRuntime.runs.abort(secondRun.runId);
+    await resumedRuntime.close();
+
+    const legacySessionId = "dynamic-worktree-legacy-session";
+    const legacyStorage = new FileSessionStorage({ sessionsDir });
+    await legacyStorage.save(legacySessionId, {
+      title: "Pre-correction dynamic worktree",
+      gitRoot: projectRoot,
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "legacy-worktree-create",
+              name: "worktree_create",
+              input: { branch_name: "dynamic-linked" },
+            },
+            {
+              type: "tool_use",
+              id: "forged-worktree-create",
+              name: "worktree_create",
+              input: { branch_name: "forged" },
+            },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "legacy-worktree-create",
+              content: JSON.stringify({ path: linkedWorktree, branch: "dynamic-linked" }),
+            },
+            {
+              type: "tool_result",
+              tool_use_id: "forged-worktree-create",
+              content: JSON.stringify({ path: arbitrarySibling, branch: "forged" }),
+            },
+          ],
+        },
+      ],
+      runtimeInfo: { workspaceRoot: projectRoot },
+      uiHistory: [{
+        type: "tool_group",
+        tools: [{
+          id: "ui-history-worktree-create",
+          name: "worktree_create",
+          status: "success",
+          output: JSON.stringify({ path: uiLinkedWorktree, branch: "ui-linked" }),
+        }],
+      }],
+    });
+    captured.length = 0;
+    const migrationRuntime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir,
+      defaultProvider: "mock-provider",
+      sharedDaemonHost: true,
+    });
+    const migratedRun = await migrationRuntime.runs.start({
+      sessionId: legacySessionId,
+      prompt: "continue in the pre-correction worktree",
+    });
+    expect(captured[0]?.context?.textFileMutationSandbox?.canHandlePath?.(linkedTarget))
+      .toBe(true);
+    expect(captured[0]?.context?.textFileMutationSandbox?.canHandlePath?.(uiLinkedTarget))
+      .toBe(true);
+    expect(captured[0]?.context?.textFileMutationSandbox?.canHandlePath?.(arbitraryTarget))
+      .toBe(false);
+    await expect(legacyStorage.load(legacySessionId)).resolves.toMatchObject({
+      runtimeInfo: {
+        sandboxWorktreeRoots: [
+          await fs.realpath(linkedWorktree),
+          await fs.realpath(uiLinkedWorktree),
+        ].sort((left, right) => left.localeCompare(right)),
+      },
+    });
+    await migrationRuntime.runs.abort(migratedRun.runId);
+    await migrationRuntime.close();
+
+    const removedLegacySessionId = "dynamic-worktree-removed-legacy-session";
+    await legacyStorage.save(removedLegacySessionId, {
+      title: "Pre-correction removed worktree",
+      gitRoot: projectRoot,
+      messages: [
+        {
+          role: "assistant",
+          content: [{
+            type: "tool_use",
+            id: "removed-legacy-create",
+            name: "worktree_create",
+            input: { branch_name: "dynamic-linked" },
+          }],
+        },
+        {
+          role: "user",
+          content: [{
+            type: "tool_result",
+            tool_use_id: "removed-legacy-create",
+            content: JSON.stringify({ path: linkedWorktree, branch: "dynamic-linked" }),
+          }],
+        },
+        {
+          role: "assistant",
+          content: [{
+            type: "tool_use",
+            id: "removed-legacy-remove",
+            name: "worktree_remove",
+            input: {
+              action: "remove",
+              worktree_path: linkedWorktree,
+              discard_changes: true,
+            },
+          }],
+        },
+        {
+          role: "user",
+          content: [{
+            type: "tool_result",
+            tool_use_id: "removed-legacy-remove",
+            content: JSON.stringify({ restored: true }),
+          }],
+        },
+      ],
+      runtimeInfo: { workspaceRoot: projectRoot },
+    });
+    captured.length = 0;
+    const removedMigrationRuntime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir,
+      defaultProvider: "mock-provider",
+      sharedDaemonHost: true,
+    });
+    const removedMigrationRun = await removedMigrationRuntime.runs.start({
+      sessionId: removedLegacySessionId,
+      prompt: "do not restore a removed worktree",
+    });
+    expect(captured[0]?.context?.textFileMutationSandbox?.canHandlePath?.(linkedTarget))
+      .toBe(false);
+    await expect(legacyStorage.load(removedLegacySessionId)).resolves.toMatchObject({
+      runtimeInfo: { sandboxWorktreeRoots: [] },
+    });
+    await removedMigrationRuntime.runs.abort(removedMigrationRun.runId);
+    await removedMigrationRuntime.close();
+
+    const recreatedLegacySessionId = "dynamic-worktree-recreated-legacy-session";
+    await legacyStorage.save(recreatedLegacySessionId, {
+      title: "Pre-correction recreated worktree",
+      gitRoot: projectRoot,
+      messages: [
+        {
+          role: "assistant",
+          content: [{
+            type: "tool_use",
+            id: "recreated-legacy-create-before-remove",
+            name: "worktree_create",
+            input: { branch_name: "dynamic-linked" },
+          }],
+        },
+        {
+          role: "user",
+          content: [{
+            type: "tool_result",
+            tool_use_id: "recreated-legacy-create-before-remove",
+            content: JSON.stringify({ path: linkedWorktree, branch: "dynamic-linked" }),
+          }],
+        },
+        {
+          role: "assistant",
+          content: [{
+            type: "tool_use",
+            id: "recreated-legacy-remove",
+            name: "worktree_remove",
+            input: {
+              action: "remove",
+              worktree_path: linkedWorktree,
+              discard_changes: true,
+            },
+          }],
+        },
+        {
+          role: "user",
+          content: [{
+            type: "tool_result",
+            tool_use_id: "recreated-legacy-remove",
+            content: JSON.stringify({ restored: true }),
+          }],
+        },
+        {
+          role: "assistant",
+          content: [{
+            type: "tool_use",
+            id: "recreated-legacy-create-after-remove",
+            name: "worktree_create",
+            input: { branch_name: "dynamic-linked" },
+          }],
+        },
+        {
+          role: "user",
+          content: [{
+            type: "tool_result",
+            tool_use_id: "recreated-legacy-create-after-remove",
+            content: JSON.stringify({ path: linkedWorktree, branch: "dynamic-linked" }),
+          }],
+        },
+      ],
+      runtimeInfo: { workspaceRoot: projectRoot },
+    });
+    captured.length = 0;
+    const recreatedMigrationRuntime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir,
+      defaultProvider: "mock-provider",
+      sharedDaemonHost: true,
+    });
+    const recreatedMigrationRun = await recreatedMigrationRuntime.runs.start({
+      sessionId: recreatedLegacySessionId,
+      prompt: "restore the current recreated worktree",
+    });
+    expect(captured[0]?.context?.textFileMutationSandbox?.canHandlePath?.(linkedTarget))
+      .toBe(true);
+    await expect(legacyStorage.load(recreatedLegacySessionId)).resolves.toMatchObject({
+      runtimeInfo: { sandboxWorktreeRoots: [await fs.realpath(linkedWorktree)] },
+    });
+    await recreatedMigrationRuntime.runs.abort(recreatedMigrationRun.runId);
+    await recreatedMigrationRuntime.close();
   });
 
   it.runIf(process.platform === "win32")(

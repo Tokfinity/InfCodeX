@@ -22,14 +22,22 @@ export interface TextFileMutationSnapshot extends KodaXTextFileSnapshot {
   readonly request: KodaXTextFileMutationRequest;
 }
 
-function revision(content: string, device: bigint, inode: bigint): string {
+function revision(content: string, device: bigint, inode: bigint, linkCount: bigint): string {
   return `present:${createHash('sha256')
     .update(device.toString())
     .update(':')
     .update(inode.toString())
+    .update(':')
+    .update(linkCount.toString())
     .update('\0')
     .update(content)
     .digest('hex')}`;
+}
+
+function assertSingleLink(filePath: string, linkCount: bigint): void {
+  if (linkCount > 1n) {
+    throw new Error(`Runtime host mutation target is a hard link: ${filePath}`);
+  }
 }
 
 async function readHostSnapshot(filePath: string): Promise<KodaXTextFileSnapshot> {
@@ -52,10 +60,11 @@ async function readHostSnapshot(filePath: string): Promise<KodaXTextFileSnapshot
       handle.readFile('utf8'),
       handle.stat({ bigint: true }),
     ]);
+    assertSingleLink(filePath, stat.nlink);
     return {
       state: 'present',
       content,
-      revision: revision(content, stat.dev, stat.ino),
+      revision: revision(content, stat.dev, stat.ino, stat.nlink),
       backupPath: await fs.realpath(filePath),
     };
   } finally {
@@ -258,7 +267,8 @@ async function writeHostTextFile(
         handle.readFile('utf8'),
         handle.stat({ bigint: true }),
       ]);
-      if (revision(currentContent, stat.dev, stat.ino) !== snapshot.revision) {
+      assertSingleLink(snapshot.request.path, stat.nlink);
+      if (revision(currentContent, stat.dev, stat.ino, stat.nlink) !== snapshot.revision) {
         throw new Error(`File changed during mutation: ${snapshot.request.path}. Re-read and retry.`);
       }
     }

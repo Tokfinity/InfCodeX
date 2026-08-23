@@ -187,7 +187,7 @@ describe('applyRuntimeSkillInvocationPolicy', () => {
     }
   });
 
-  it('diagnoses malformed hook output without treating it as an allow decision', async () => {
+  it('fails closed when a PreToolUse hook returns malformed output', async () => {
     const diagnostics: KodaXDiagnostic[] = [];
     const restore = setKodaXDiagnosticSink((diagnostic) => diagnostics.push(diagnostic));
     try {
@@ -196,7 +196,9 @@ describe('applyRuntimeSkillInvocationPolicy', () => {
       });
       const options = await applyRuntimeSkillInvocationPolicy(fixture.options);
 
-      await expect(options.events?.beforeToolExecute?.('read', {})).resolves.toBe(true);
+      await expect(options.events?.beforeToolExecute?.('read', {})).resolves.toContain(
+        "PreToolUse hook blocked 'read'",
+      );
       expect(diagnostics).toContainEqual(expect.objectContaining({
         level: 'warn',
         message: expect.stringContaining('invalid JSON'),
@@ -204,6 +206,17 @@ describe('applyRuntimeSkillInvocationPolicy', () => {
     } finally {
       restore();
     }
+  });
+
+  it('fails closed when a PreToolUse hook command exits unsuccessfully', async () => {
+    const fixture = await optionsWithSkill({
+      preToolUse: nodeCommand('process.exit(7)'),
+    });
+    const options = await applyRuntimeSkillInvocationPolicy(fixture.options);
+
+    await expect(options.events?.beforeToolExecute?.('read', {})).resolves.toContain(
+      "PreToolUse hook blocked 'read'",
+    );
   });
 
   it('treats a bound registry as authoritative when it excludes the named Skill', async () => {

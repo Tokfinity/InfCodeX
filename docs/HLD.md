@@ -1,10 +1,12 @@
 # KodaX High-Level Design
 
-> Last updated: 2026-08-21
+> Last updated: 2026-08-23
 >
 > Current published baseline: `v0.7.94`
 > (`@kodax-ai/kodax@0.7.94`; `sandboxRuntime:4`, `crashOutcomeModel:2`;
 > npm publication remains manual)
+> Current Unreleased source advertises Windows `sandboxRuntime:5` and local
+> `runtimeExitSettlement:2`; release/version assignment remains manual.
 >
 > This HLD is intentionally current-state only. The old pre-v0.7.43
 > chain/harness model has been removed from this active design document because
@@ -104,6 +106,15 @@ Linked-worktree and submodule relationship files are read through strict byte
 bounds before git trust. Shell policy owners and namespace owners remain in the
 coordinator so incompatible Windows ACL transitions and worktree path-alias
 changes are still fenced.
+KodaX-created linked worktrees are added to the owning Session's exact sandbox
+policy before their paths are returned to the model. The roots persist across
+Runs, must still prove the same Git common-directory backlink when restored,
+and are revoked after removal; unrelated sibling directories never inherit the
+workspace policy from a naming convention alone. A Session rooted in a real
+submodule derives that common directory only from a byte-bounded
+`.git/modules/.../config` `core.worktree` backlink to the exact workspace;
+candidate roots still have to prove linked-worktree `gitdir` and `commondir`
+backlinks.
 
 The v0.7.94 Runtime recovery boundary does not change
 capability versions. Run finalization owns and observes
@@ -113,7 +124,10 @@ event append; failure to persist either authority produces an explicit
 managed-child cleanup errors are observed and recorded instead of escaping as
 process-global Promise rejections. Invalid Skill `allowed-tools` entries and
 malformed hook JSON are diagnosed; `PostToolUse` still runs if an embedder
-result observer throws.
+result observer throws. Current Unreleased source additionally reconciles a
+status-lock cleanup error after a terminal commit only when the reread status
+exactly equals the local proposal; that path still emits one terminal event,
+while any different authority wins.
 
 Daemon transport reports connection facts independently from Run outcome.
 Clients receive a close code, `connectionId`, and `reconnectable` marker, while

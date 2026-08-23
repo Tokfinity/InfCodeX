@@ -221,6 +221,7 @@ import {
 } from "../interactive/commands.js";
 import {
   findQueueableUserSkillReference,
+  MultipleUserSkillReferencesError,
   preserveQueuedSkillContextSnapshot,
   resolveUserSkillInvocation,
 } from "../interactive/user-skill-invocation.js";
@@ -8573,14 +8574,29 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     rawInput: string,
   ): Promise<KodaXResult | undefined> => {
     const mainContextTokenSnapshot = context.contextTokenSnapshot;
-    const invocation = await resolveUserSkillInvocation(rawInput, {
-      workingDirectory: currentOptionsRef.current.context?.executionCwd ?? process.cwd(),
-      projectRoot: context.gitRoot ?? undefined,
-      sessionId: context.sessionId,
-      environment: {},
-      executeDynamicContext: context.skillDynamicContext?.execute,
-      disableDynamicContext: context.skillDynamicContext?.disable,
-    });
+    let invocation;
+    try {
+      invocation = await resolveUserSkillInvocation(rawInput, {
+        workingDirectory: currentOptionsRef.current.context?.executionCwd ?? process.cwd(),
+        projectRoot: context.gitRoot ?? undefined,
+        sessionId: context.sessionId,
+        environment: {},
+        executeDynamicContext: context.skillDynamicContext?.execute,
+        disableDynamicContext: context.skillDynamicContext?.disable,
+      });
+    } catch (error) {
+      if (!(error instanceof MultipleUserSkillReferencesError)) throw error;
+      const message = `[${error.message}]`;
+      addHistoryItem({ type: "info", text: message });
+      return preserveQueuedSkillContextSnapshot({
+        success: false,
+        lastText: message,
+        signal: "BLOCKED",
+        signalReason: error.message,
+        messages: [...context.messages],
+        sessionId: context.sessionId,
+      }, mainContextTokenSnapshot);
+    }
     if (!invocation) {
       const parsed = isSlashCommandText(rawInput) ? parseCommand(rawInput.trim()) : null;
       if (!parsed) return undefined;
@@ -9101,13 +9117,24 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         // Dynamic expansion still happens only after the active round yields,
         // avoiding both an async enqueue race and unknown-slash interception.
         const queuedSkillRegistry = getSkillRegistry(context.gitRoot);
-        const queuedSkillReference = targetsRegisteredCommand
-          ? undefined
-          : findQueueableUserSkillReference(
-              fullText,
-              (name) => queuedSkillRegistry.has(name),
-              skillRegistryReadyRef.current,
-            );
+        let queuedSkillReference;
+        try {
+          queuedSkillReference = targetsRegisteredCommand
+            ? undefined
+            : findQueueableUserSkillReference(
+                fullText,
+                (name) => queuedSkillRegistry.has(name),
+                skillRegistryReadyRef.current,
+              );
+        } catch (error) {
+          if (!(error instanceof MultipleUserSkillReferencesError)) throw error;
+          emitInfoItemToCorrectLayer({
+            type: "info",
+            icon: "\u26A0",
+            text: error.message,
+          }, "multiple-user-skill-references");
+          return;
+        }
 
         // Builtin/extension slash commands still require the immediate command
         // pipeline. Known Skills are different: keep their raw user text in a
@@ -9392,16 +9419,23 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       };
 
       const parsed = parseCommand(fullText.trim());
-      const inlineSkillInvocation = parsed || fullText.trim().startsWith('!')
-        ? undefined
-        : await resolveUserSkillInvocation(fullText.trim(), {
-            workingDirectory: currentOptionsRef.current.context?.executionCwd ?? process.cwd(),
-            projectRoot: context.gitRoot ?? undefined,
-            sessionId: context.sessionId,
-            environment: {},
-            executeDynamicContext: context.skillDynamicContext?.execute,
-            disableDynamicContext: context.skillDynamicContext?.disable,
-          });
+      let inlineSkillInvocation;
+      try {
+        inlineSkillInvocation = parsed || fullText.trim().startsWith('!')
+          ? undefined
+          : await resolveUserSkillInvocation(fullText.trim(), {
+              workingDirectory: currentOptionsRef.current.context?.executionCwd ?? process.cwd(),
+              projectRoot: context.gitRoot ?? undefined,
+              sessionId: context.sessionId,
+              environment: {},
+              executeDynamicContext: context.skillDynamicContext?.execute,
+              disableDynamicContext: context.skillDynamicContext?.disable,
+            });
+      } catch (error) {
+        if (!(error instanceof MultipleUserSkillReferencesError)) throw error;
+        addHistoryItem({ type: "info", text: `[${error.message}]` });
+        return;
+      }
       if (parsed || inlineSkillInvocation) {
         let slashWorkflowUserCommitted = false;
         const commitSlashWorkflowFinalMessage = (text: string): void => {
@@ -9965,7 +9999,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
         try {
           const result = parsed
-            ? await executeCommand(parsed, context, callbacks, currentConfig)
+            ? await executeCommand(parsed, context, callbacks, currentConfig, fullText.trim())
             : undefined;
 
           // Check if result contains invocation metadata to execute

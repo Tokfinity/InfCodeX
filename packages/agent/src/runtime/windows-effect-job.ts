@@ -15,7 +15,6 @@ const WINDOWS_EFFECT_JOB_SOURCE = String.raw`
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
-using System.Security.Principal;
 using System.Threading;
 
 public static class KodaXEffectJob {
@@ -64,14 +63,6 @@ public static class KodaXEffectJob {
     public uint TotalTerminatedProcesses;
   }
 
-  [StructLayout(LayoutKind.Sequential)]
-  private struct WtsProcessInformation {
-    public uint SessionId;
-    public uint ProcessId;
-    public IntPtr ProcessName;
-    public IntPtr UserSid;
-  }
-
   [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
   private static extern IntPtr CreateJobObjectW(IntPtr attributes, string name);
 
@@ -110,17 +101,6 @@ public static class KodaXEffectJob {
 
   [DllImport("kernel32.dll", SetLastError = true)]
   private static extern bool CloseHandle(IntPtr handle);
-
-  [DllImport("wtsapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-  private static extern bool WTSEnumerateProcessesW(
-    IntPtr server,
-    uint reserved,
-    uint version,
-    out IntPtr processInformation,
-    out uint count);
-
-  [DllImport("wtsapi32.dll")]
-  private static extern void WTSFreeMemory(IntPtr memory);
 
   private const uint Synchronize = 0x00100000;
   private const uint ProcessTerminate = 0x0001;
@@ -224,37 +204,143 @@ public static class KodaXEffectJob {
     }
   }
 
-  public static bool HasProcessWithSid(string expectedSid) {
+}`;
+
+const WINDOWS_SID_PROBE_SOURCE = String.raw`
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
+
+public static class KodaXSidProbe {
+  [StructLayout(LayoutKind.Sequential)]
+  private struct WtsProcessInformation {
+    public uint SessionId;
+    public uint ProcessId;
+    public IntPtr ProcessName;
+    public IntPtr UserSid;
+  }
+
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+  private struct ProcessEntry32 {
+    public uint Size;
+    public uint Usage;
+    public uint ProcessId;
+    public UIntPtr DefaultHeapId;
+    public uint ModuleId;
+    public uint Threads;
+    public uint ParentProcessId;
+    public int PriorityClassBase;
+    public uint Flags;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+    public string ExecutableFile;
+  }
+
+  [DllImport("wtsapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  private static extern bool WTSEnumerateProcessesW(
+    IntPtr server,
+    uint reserved,
+    uint version,
+    out IntPtr processInformation,
+    out uint count);
+
+  [DllImport("wtsapi32.dll")]
+  private static extern void WTSFreeMemory(IntPtr memory);
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
+
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  private static extern bool Process32FirstW(IntPtr snapshot, ref ProcessEntry32 entry);
+
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  private static extern bool Process32NextW(IntPtr snapshot, ref ProcessEntry32 entry);
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool CloseHandle(IntPtr handle);
+
+  private static Dictionary<uint, uint> ProcessParents() {
+    var parents = new Dictionary<uint, uint>();
+    var snapshot = CreateToolhelp32Snapshot(0x00000002, 0);
+    if (snapshot == new IntPtr(-1)) throw new InvalidOperationException(
+      "CreateToolhelp32Snapshot failed with Win32 error " + Marshal.GetLastWin32Error());
+    try {
+      var entry = new ProcessEntry32();
+      entry.Size = (uint)Marshal.SizeOf(typeof(ProcessEntry32));
+      if (!Process32FirstW(snapshot, ref entry)) throw new InvalidOperationException(
+        "Process32First failed with Win32 error " + Marshal.GetLastWin32Error());
+      do {
+        parents[entry.ProcessId] = entry.ParentProcessId;
+        entry.Size = (uint)Marshal.SizeOf(typeof(ProcessEntry32));
+      } while (Process32NextW(snapshot, ref entry));
+    } finally {
+      CloseHandle(snapshot);
+    }
+    return parents;
+  }
+
+  private static HashSet<uint> MatchingProcesses(SecurityIdentifier expected) {
+    var matches = new HashSet<uint>();
+    IntPtr processes;
+    uint count;
+    if (!WTSEnumerateProcessesW(IntPtr.Zero, 0, 1, out processes, out count)) {
+      throw new InvalidOperationException(
+        "WTSEnumerateProcesses failed with Win32 error " + Marshal.GetLastWin32Error());
+    }
+    try {
+      var entrySize = Marshal.SizeOf(typeof(WtsProcessInformation));
+      for (uint index = 0; index < count; index++) {
+        var address = new IntPtr(processes.ToInt64() + ((long)index * entrySize));
+        var entry = (WtsProcessInformation)Marshal.PtrToStructure(
+          address,
+          typeof(WtsProcessInformation));
+        if (entry.UserSid == IntPtr.Zero) continue;
+        if (new SecurityIdentifier(entry.UserSid).Equals(expected)) matches.Add(entry.ProcessId);
+      }
+    } finally {
+      WTSFreeMemory(processes);
+    }
+    return matches;
+  }
+
+  private static bool DescendsFrom(
+    uint process,
+    uint root,
+    Dictionary<uint, uint> parents
+  ) {
+    var visited = new HashSet<uint>();
+    while (process != 0 && visited.Add(process)) {
+      if (process == root) return true;
+      if (!parents.ContainsKey(process)) return false;
+      process = parents[process];
+    }
+    return false;
+  }
+
+  public static bool HasOtherProcessWithSid(string expectedSid, bool ignoreProbeTree) {
     var expected = new SecurityIdentifier(expectedSid);
     using (var identity = WindowsIdentity.GetCurrent()) {
-      var current = identity.User;
-      var principal = new WindowsPrincipal(identity);
-      if (
-        (current == null || !current.Equals(expected))
-        && !principal.IsInRole(WindowsBuiltInRole.Administrator)
-      ) {
+      var sameUser = identity.User != null && identity.User.Equals(expected);
+      var administrator = new WindowsPrincipal(identity)
+        .IsInRole(WindowsBuiltInRole.Administrator);
+      if (ignoreProbeTree && !sameUser) {
+        throw new InvalidOperationException("Process-tree SID probe must run as the expected sandbox user");
+      }
+      if (!ignoreProbeTree && !sameUser && !administrator) {
         throw new InvalidOperationException(
           "Machine-wide inspection of a foreign Windows SID requires an elevated administrator token");
       }
     }
-    IntPtr processes;
-    uint count;
-    Require(
-      WTSEnumerateProcessesW(IntPtr.Zero, 0, 1, out processes, out count),
-      "WTSEnumerateProcesses");
-    try {
-      var entrySize = Marshal.SizeOf(typeof(WtsProcessInformation));
-      for (uint index = 0; index < count; index++) {
-        var entryAddress = new IntPtr(processes.ToInt64() + ((long)index * entrySize));
-        var entry = (WtsProcessInformation)Marshal.PtrToStructure(
-          entryAddress,
-          typeof(WtsProcessInformation));
-        if (entry.UserSid == IntPtr.Zero) continue;
-        var candidate = new SecurityIdentifier(entry.UserSid);
-        if (candidate.Equals(expected)) return true;
-      }
-    } finally {
-      WTSFreeMemory(processes);
+    var matches = MatchingProcesses(expected);
+    if (!ignoreProbeTree) return matches.Count > 0;
+    var current = (uint)Process.GetCurrentProcess().Id;
+    if (!matches.Contains(current)) throw new InvalidOperationException(
+      "SID probe could not observe its own process");
+    var parents = ProcessParents();
+    var root = parents.ContainsKey(current) ? parents[current] : current;
+    foreach (var process in matches) {
+      if (!DescendsFrom(process, root, parents)) return true;
     }
     return false;
   }
@@ -274,10 +360,6 @@ ${WINDOWS_EFFECT_JOB_SOURCE}
     $drained = [KodaXEffectJob]::TerminateAndDrain([string]$payload.jobName)
     [Console]::Out.WriteLine($(if ($drained) { 'DRAINED' } else { 'NOT_FOUND' }))
     [Console]::Out.Flush()
-  } elseif ($payload.action -eq 'sid-active') {
-    $active = [KodaXEffectJob]::HasProcessWithSid([string]$payload.sid)
-    [Console]::Out.WriteLine($(if ($active) { 'ACTIVE' } else { 'CLEAR' }))
-    [Console]::Out.Flush()
   } else {
     [KodaXEffectJob]::Run(
       [uint32]$payload.targetPid,
@@ -296,6 +378,33 @@ const WINDOWS_EFFECT_JOB_ENCODED_COMMAND = Buffer.from(
   'utf16le',
 ).toString('base64');
 
+const WINDOWS_SID_PROBE_SCRIPT = String.raw`
+$ErrorActionPreference = 'Stop'
+try {
+  $payload = [Text.Encoding]::UTF8.GetString(
+    [Convert]::FromBase64String($env:${PAYLOAD_ENV})) | ConvertFrom-Json
+  Remove-Item Env:${PAYLOAD_ENV} -ErrorAction SilentlyContinue
+  $source = @'
+${WINDOWS_SID_PROBE_SOURCE}
+'@
+  Add-Type -TypeDefinition $source
+  $active = [KodaXSidProbe]::HasOtherProcessWithSid(
+    [string]$payload.sid,
+    [bool]$payload.ignoreCurrentProcessTree)
+  [Console]::Out.WriteLine($(if ($active) { 'ACTIVE' } else { 'CLEAR' }))
+  [Console]::Out.Flush()
+  exit 0
+} catch {
+  [Console]::Out.WriteLine('ERROR:' + $_.Exception.Message)
+  [Console]::Out.Flush()
+  exit 1
+}`;
+
+const WINDOWS_SID_PROBE_ENCODED_COMMAND = Buffer.from(
+  WINDOWS_SID_PROBE_SCRIPT,
+  'utf16le',
+).toString('base64');
+
 export interface WindowsEffectJob {
   /** Resolves only after the Job reports zero active processes. */
   readonly drained: Promise<void>;
@@ -305,6 +414,11 @@ export interface WindowsEffectJob {
   readonly jobName: string;
   /** Stops the supervisor and its pipes from keeping the Node.js event loop alive. */
   unref?(): void;
+}
+
+export interface WindowsSandboxSidProbeLauncher {
+  readonly executable: string;
+  readonly prependArgs?: readonly string[];
 }
 
 interface WindowsEffectJobActionResult {
@@ -332,17 +446,38 @@ function windowsPowerShellPath(): string {
 
 function spawnWindowsEffectJobAction(
   payloadValue: Readonly<Record<string, unknown>>,
+  launcher?: WindowsSandboxSidProbeLauncher,
 ): ChildProcess {
   const payload = Buffer.from(JSON.stringify(payloadValue), 'utf8').toString('base64');
-  return spawn(windowsPowerShellPath(), [
+  const powershell = windowsPowerShellPath();
+  const encodedCommand = payloadValue.action === 'sid-active'
+    ? WINDOWS_SID_PROBE_ENCODED_COMMAND
+    : WINDOWS_EFFECT_JOB_ENCODED_COMMAND;
+  const powershellArgs = [
     '-NoProfile',
     '-NonInteractive',
     '-ExecutionPolicy',
     'Bypass',
     '-EncodedCommand',
-    WINDOWS_EFFECT_JOB_ENCODED_COMMAND,
-  ], {
-    env: { ...process.env, [PAYLOAD_ENV]: payload },
+    encodedCommand,
+  ];
+  const executable = launcher?.executable ?? powershell;
+  const args = launcher === undefined
+    ? powershellArgs
+    : [
+        ...(launcher.prependArgs ?? []),
+        'exec',
+        '--quiet',
+        '--env',
+        `${PAYLOAD_ENV}=${payload}`,
+        '--',
+        powershell,
+        ...powershellArgs,
+      ];
+  return spawn(executable, args, {
+    env: launcher === undefined
+      ? { ...process.env, [PAYLOAD_ENV]: payload }
+      : process.env,
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   });
@@ -486,10 +621,11 @@ function runWindowsEffectJobAction(
   payloadValue: Readonly<Record<string, unknown>>,
   timeoutMs: number,
   subject: string,
+  launcher?: WindowsSandboxSidProbeLauncher,
 ): Promise<WindowsEffectJobActionResult> {
   let child: ChildProcess;
   try {
-    child = spawnWindowsEffectJobAction(payloadValue);
+    child = spawnWindowsEffectJobAction(payloadValue, launcher);
   } catch (error: unknown) {
     return Promise.reject(new Error(`${subject} failed to start: ${String(error)}`, { cause: error }));
   }
@@ -616,6 +752,34 @@ export async function windowsSandboxSidHasActiveProcesses(
   if (result.exitCode !== 0 || (output !== 'ACTIVE' && output !== 'CLEAR')) {
     throw new Error(
       `Windows sandbox process inspection failed (exit ${String(result.exitCode)}`
+      + `${result.signal === null ? '' : `, signal ${result.signal}`}): `
+      + `${result.stdout.trim() || result.stderr.trim() || '(empty output)'}.`,
+    );
+  }
+  return output === 'ACTIVE';
+}
+
+export async function windowsSandboxSidHasOtherProcesses(
+  sid: string,
+  launcher: WindowsSandboxSidProbeLauncher,
+  timeoutMs = 15_000,
+): Promise<boolean> {
+  if (process.platform !== 'win32') {
+    throw new Error('Windows sandbox process inspection is available only on Windows.');
+  }
+  if (!/^S-1-(?:\d+-)+\d+$/i.test(sid)) {
+    throw new Error('Windows sandbox process inspection received an invalid SID.');
+  }
+  const result = await runWindowsEffectJobAction(
+    { action: 'sid-active', sid, ignoreCurrentProcessTree: true },
+    timeoutMs,
+    'Windows sandbox-user process inspection',
+    launcher,
+  );
+  const output = result.stdout.trim().split(/\r?\n/).at(-1);
+  if (result.exitCode !== 0 || (output !== 'ACTIVE' && output !== 'CLEAR')) {
+    throw new Error(
+      `Windows sandbox-user process inspection failed (exit ${String(result.exitCode)}`
       + `${result.signal === null ? '' : `, signal ${result.signal}`}): `
       + `${result.stdout.trim() || result.stderr.trim() || '(empty output)'}.`,
     );

@@ -2071,6 +2071,13 @@ function isKodaXSessionRuntimeInfo(value: unknown): value is KodaXSessionRuntime
       value.workspaceKind === undefined
       || value.workspaceKind === 'detected'
       || value.workspaceKind === 'managed'
+    )
+    && (
+      value.sandboxWorktreeRoots === undefined
+      || (
+        Array.isArray(value.sandboxWorktreeRoots)
+        && value.sandboxWorktreeRoots.every((root) => typeof root === 'string')
+      )
     );
 }
 
@@ -4069,7 +4076,11 @@ export class FileSessionStorage implements KodaXSessionStorage {
   // etc.), then does a full streamed write. Used by both save() and
   // appendSessionDelta fallback so that partially-populated data from
   // InkREPL.persistContextState never overwrites already-persisted fields.
-  private async mergeAndWriteInternal(id: string, data: SessionData): Promise<void> {
+  private async mergeAndWriteInternal(
+    id: string,
+    data: SessionData,
+    acceptSandboxWorktreeRoots = false,
+  ): Promise<void> {
     const existing = await this.readSession(id);
     const verifiedTopology = existing === null
       ? this.verifiedMissingLocationTopology(id)
@@ -4084,7 +4095,18 @@ export class FileSessionStorage implements KodaXSessionStorage {
       // full Session snapshot must never replace a newer owner/revision.
       actorSnapshot: existing?.data.actorSnapshot ?? data.actorSnapshot,
       extensionRecords: data.extensionRecords ?? existing?.data.extensionRecords,
-      runtimeInfo: data.runtimeInfo ?? existing?.data.runtimeInfo,
+      runtimeInfo: data.runtimeInfo === undefined
+        ? existing?.data.runtimeInfo
+        : {
+            ...data.runtimeInfo,
+            ...(!acceptSandboxWorktreeRoots
+              && existing?.data.runtimeInfo?.sandboxWorktreeRoots !== undefined
+              ? {
+                  sandboxWorktreeRoots:
+                    existing.data.runtimeInfo.sandboxWorktreeRoots,
+                }
+              : {}),
+          },
       // Full snapshots use own-property presence as a three-state contract:
       // omitted preserves a partial writer's value, an object records a
       // failure, and explicit undefined clears stale crash metadata after a
@@ -4450,6 +4472,29 @@ export class FileSessionStorage implements KodaXSessionStorage {
         ...existing.data,
         lineage: nextLineage,
       });
+    });
+    return found;
+  }
+
+  async mutateRuntimeInfo(
+    id: string,
+    mutation: (
+      runtimeInfo: KodaXSessionRuntimeInfo | undefined,
+    ) => KodaXSessionRuntimeInfo | undefined,
+  ): Promise<boolean> {
+    let found = false;
+    await this.serializedWrite(id, async () => {
+      const existing = await this.readSession(id);
+      if (existing === null) return;
+      found = true;
+      const current = existing.data.runtimeInfo === undefined
+        ? undefined
+        : structuredClone(existing.data.runtimeInfo);
+      const runtimeInfo = mutation(current);
+      await this.mergeAndWriteInternal(id, {
+        ...existing.data,
+        runtimeInfo,
+      }, true);
     });
     return found;
   }

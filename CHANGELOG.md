@@ -8,18 +8,56 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- KodaX-created linked worktrees now join the Session's exact sandbox policy
+  before the tool returns them to the model. The Runtime persists that bounded
+  root set, revalidates each Git common-directory backlink on later Runs, and
+  revokes it after worktree removal. A background Bash process in such a
+  worktree can therefore coexist with `write`/`edit` without authorizing
+  arbitrary sibling directories or weakening namespace fences. Atomic root
+  updates remain authoritative over stale full-Session snapshots, so an old
+  non-empty list cannot overwrite a newer registration or resurrect a revoked
+  root. Older Sessions migrate only retained successful `worktree_create`
+  evidence after the same Git relationship is revalidated. Session roots that
+  are real Git submodules use their byte-bounded `core.worktree` backlink as
+  the repository identity, so creating a linked worktree from a submodule does
+  not regress while forged `.git/modules` paths remain rejected.
 - Windows sandbox cleanup now keeps every ACL-mutating helper and command owner
   in a recoverable machine-global Job, persists only self-healing recovery
   tickets, and retries process drain, ACL reset, and filesystem-effect fence
   release in the background without blocking unrelated work. Runtime shutdown
   also verifies exact daemon and supervisor process generations, so PID reuse or
-  an interrupted exit cannot strand a manual-recovery requirement.
+  an interrupted exit cannot strand a manual-recovery requirement. Same-boot
+  `unconfirmed-owner` tickets are retried automatically and cleared only after a
+  sandbox-user SID probe proves the account idle; probe failure remains
+  fail-closed and diagnosable without blocking non-sandbox work. Delayed text
+  drain recovery records each completed cleanup phase and retains a consumed
+  sandbox attestation across retries. Transient workspace cleanup, policy-reset,
+  or outer lease-release failures therefore retry without losing evidence or
+  repeating already completed phases.
 - Learning-store coordination now reclaims a stale zero-byte owner lock left by
-  a crash between exclusive creation and owner-record publication, while valid
-  live owners and non-empty malformed records remain fail-closed. Fullscreen TUI
+  a crash between exclusive creation and owner-record publication, plus stale
+  malformed or truncated owner records, using an unchanged-byte/stat compare
+  before deletion; valid live owners and successor records remain protected.
+  Fullscreen TUI
   teardown also performs an exit-safe terminal restore from the renderer's
   guaranteed unmount boundary, including when final rendering or React cleanup
   throws; terminal write backpressure no longer disables cleanup (Issue 301).
+- Explicit Skill execution now keeps the exact user query as the canonical
+  transcript/title input while carrying expanded instructions and host hook
+  context only in the execution overlay. Multiple known Skill references are
+  rejected consistently in Classic, Ink, immediate, and queued paths, and a
+  failed or malformed `PreToolUse` hook fails closed instead of authorizing the
+  guarded tool. The shared command-dispatch check also covers leading
+  `/<skill>` and legacy `/skill:<name>` forms before either Skill executes.
+- Terminal Run persistence failure now converges to `unknown` before the public
+  result resolves. If neither status nor event journal can publish that state,
+  active `sessions.observe()` consumers are invalidated and must resnapshot,
+  preventing a stale terminal projection. The additive SDK contracts advance to
+  `runtimeExitSettlement:2` and Windows `sandboxRuntime:5`; release/version
+  assignment remains a maintainer step. If terminal status commits but its
+  status-lock cleanup reports failure, the exact committed proposal is reread
+  and its terminal event is still published once; a different authoritative
+  status is never overwritten or republished.
 
 ---
 

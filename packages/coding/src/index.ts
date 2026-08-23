@@ -176,6 +176,7 @@ export type {
   KodaXTextFileMutationRequest,
   KodaXTextFileMutationSandbox,
   KodaXTextFileSnapshot,
+  KodaXWorkspaceSandboxRootRegistry,
   KodaXSkillScriptInputFile,
   KodaXSkillScriptOutputFile,
   KodaXSkillScriptRunInput,

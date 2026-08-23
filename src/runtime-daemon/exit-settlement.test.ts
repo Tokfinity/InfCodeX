@@ -195,6 +195,29 @@ describe('runtime exit settlement', () => {
     expect(readRuntimeExitSettlementIntent(configHome, 'coder')).toBeUndefined();
   });
 
+  it('does not stop or signal a legacy Windows owner without process identity', async () => {
+    const configHome = tempConfigHome();
+    const expectedOwner = owner({ processStartIdentity: undefined });
+    seedDaemon(configHome, expectedOwner);
+    const managedRuntime = runtime(expectedOwner);
+    const killPidTree = vi.fn(async () => 'terminated' as const);
+
+    const result = await settleRuntimeDaemonExitForTest({
+      configHome,
+      profile: 'coder',
+      runtime: managedRuntime,
+    }, dependencies({ killPidTree }));
+
+    expect(result).toMatchObject({
+      status: 'blocked',
+      reason: 'containment_unavailable',
+      nextAction: 'keep-open',
+    });
+    expect(managedRuntime.daemon.stopForInline).not.toHaveBeenCalled();
+    expect(killPidTree).not.toHaveBeenCalled();
+    expect(readRuntimeExitSettlementIntent(configHome, 'coder')).toBeUndefined();
+  });
+
   it('rejects a junctioned durable exit directory instead of following it', async () => {
     const configHome = tempConfigHome();
     const expectedOwner = owner();

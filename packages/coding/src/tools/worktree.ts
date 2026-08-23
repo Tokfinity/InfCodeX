@@ -5,7 +5,7 @@
  */
 
 import { spawn } from 'child_process';
-import { mkdirSync, statSync } from 'fs';
+import { mkdirSync, realpathSync, statSync } from 'fs';
 import path from 'path';
 import {
   containWindowsEffectProcess,
@@ -14,6 +14,7 @@ import {
   killChildProcessTree,
   prepareJavaScriptChildLaunch,
   registerManagedChildProcess,
+  terminateWindowsEffectJob,
   type WindowsEffectJob,
 } from '@kodax-ai/agent';
 import type { KodaXToolExecutionContext } from '../types.js';
@@ -24,6 +25,7 @@ import {
 import {
   withHostFileSystemNamespaceMutation,
   withPathMutation,
+  scheduleUnrefBackgroundRetry,
   type FileSystemMutationLeaseRelease,
 } from './_internal/file-mutation-queue.js';
 
@@ -110,15 +112,49 @@ function execGitFile(
     let stderr = '';
     let spawnError: Error | undefined;
     let windowsEffectJob: WindowsEffectJob | undefined;
+    let drainRecoveryScheduled = false;
+    const scheduleDrainRecovery = (): void => {
+      if (drainRecoveryScheduled) return;
+      drainRecoveryScheduled = true;
+      scheduleUnrefBackgroundRetry(
+        async () => {
+          if (windowsEffectJob !== undefined) {
+            await terminateWindowsEffectJob(windowsEffectJob.jobName);
+          } else {
+            const result = await killChildProcessTree(child);
+            if (result.status === 'unknown') {
+              throw new Error('Git process tree is still not proven drained.');
+            }
+          }
+          await finishEffectProcess();
+          unregister();
+        },
+        () => undefined,
+        (error, attempt) => {
+          if (attempt % 10 !== 0) return;
+          emitKodaXDiagnostic({
+            source: 'coding:worktree-filesystem-effect',
+            level: 'warn',
+            message: 'Automatic Git process-tree drain recovery is still pending; the namespace fence remains closed.',
+            detail: error,
+          });
+        },
+      );
+    };
     const waitForEffectDrain = async (): Promise<void> => {
       if (windowsEffectJob !== undefined) {
         // A rejected Job proof is permanent and cannot be replaced by a root-
         // only process check. Propagate it without marking the namespace effect
         // finished; later effects remain fail-closed until reconciliation.
-        await windowsEffectJob.drained;
-        await finishEffectProcess();
-        unregister();
-        return;
+        try {
+          await windowsEffectJob.drained;
+          await finishEffectProcess();
+          unregister();
+          return;
+        } catch (error: unknown) {
+          scheduleDrainRecovery();
+          throw error;
+        }
       }
       let reportedDrainFailure = false;
       for (let attempt = 1; attempt <= GIT_EFFECT_DRAIN_MAX_ATTEMPTS; attempt += 1) {
@@ -151,6 +187,7 @@ function execGitFile(
           message: 'Git process-tree drain remained unknown; the namespace fence stays active.',
         });
       }
+      scheduleDrainRecovery();
       throw new Error('Git process tree has not been proven drained.');
     };
     const invocation = gatedGitInvocation(args);
@@ -332,6 +369,7 @@ async function createWorktree(
         mkdirSync(explicitBaseDir, { recursive: true });
       }
 
+      let worktreeCreated = false;
       try {
         const configuredFilters = await execGitFile(
           ['config', '--local', '--get-regexp', '^filter\\..*\\.(clean|smudge|process)$'],
@@ -349,9 +387,37 @@ async function createWorktree(
           bindEffectProcess,
           finishEffectProcess,
         );
+        worktreeCreated = true;
+        await ctx.workspaceSandboxRoots?.register(worktreePath);
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        throw new Error(`Failed to create worktree: ${msg}`);
+        const failures: unknown[] = [error];
+        if (worktreeCreated) {
+          try {
+            await execGitFile(
+              ['worktree', 'remove', worktreePath, '--force'],
+              cwd,
+              bindEffectProcess,
+              finishEffectProcess,
+            );
+          } catch (rollbackError: unknown) {
+            failures.push(rollbackError);
+          }
+          try {
+            await execGitFile(
+              ['branch', '-D', branch],
+              cwd,
+              bindEffectProcess,
+              finishEffectProcess,
+            );
+          } catch (rollbackError: unknown) {
+            failures.push(rollbackError);
+          }
+        }
+        const failure = failures.length === 1
+          ? failures[0]
+          : new AggregateError(failures, 'Worktree registration rollback failed.');
+        const message = failure instanceof Error ? failure.message : String(failure);
+        throw new Error(`Failed to create worktree: ${message}`, { cause: failure });
       }
 
       return JSON.stringify({ path: worktreePath, branch });
@@ -482,6 +548,21 @@ async function removeWorktree(
         // If we cannot identify the branch, removal may still safely proceed.
       }
 
+      let sandboxRootToRevoke: string | undefined;
+      if (ctx.workspaceSandboxRoots !== undefined) {
+        const requestedRoot = path.resolve(worktreePath);
+        let canonicalRoot = requestedRoot;
+        try {
+          canonicalRoot = realpathSync.native(requestedRoot);
+        } catch {
+          // A missing pre-correction root may still have stale Git metadata
+          // that `git worktree remove --force` can clean up.
+        }
+        sandboxRootToRevoke = ctx.workspaceSandboxRoots.list().find((root) => (
+          sameHostPath(root, canonicalRoot) || sameHostPath(root, requestedRoot)
+        ));
+      }
+
       try {
         await execGitFile(
           ['worktree', 'remove', worktreePath, '--force'],
@@ -507,6 +588,10 @@ async function removeWorktree(
         }
       }
 
+      if (sandboxRootToRevoke !== undefined) {
+        await ctx.workspaceSandboxRoots?.unregister(sandboxRootToRevoke);
+      }
+
       return JSON.stringify({
         restored: true,
         message: `Worktree removed. Branch ${branch || '(unknown)'} deleted. Restored CWD.`,
@@ -518,4 +603,12 @@ async function removeWorktree(
 function isPathWithin(candidate: string, root: string): boolean {
   const relative = path.relative(root, path.resolve(candidate));
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function sameHostPath(left: string, right: string): boolean {
+  const comparable = (value: string): string => {
+    const resolved = path.normalize(path.resolve(value));
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  };
+  return comparable(left) === comparable(right);
 }

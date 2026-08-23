@@ -47,6 +47,8 @@ describe('prepareInvocationExecution', () => {
     expect(prepared.mode).toBe('inline');
     expect(prepared.prompt).toContain('prompt-hook');
     expect(prepared.prompt).toContain('Base prompt');
+    expect(prepared.options?.context?.promptOverlay).toContain('prompt-hook');
+    expect(prepared.options?.context?.promptOverlay).toContain('Base prompt');
   });
 
   it('blocks shell hooks when the current permission policy denies bash execution', async () => {
@@ -127,6 +129,33 @@ describe('prepareInvocationExecution', () => {
 
     expect(allowRead).toBe(true);
     expect(allowWrite).toBe(false);
+  });
+
+  it.each([
+    ['malformed output', "process.stdout.write('not-json')"],
+    ['an unsuccessful command', 'process.exit(7)'],
+  ])('fails closed when a PreToolUse hook has %s', async (_label, script) => {
+    const prepared = await prepareInvocationExecution(
+      {
+        provider: 'zhipu-coding',
+        events: { beforeToolExecute: async () => true },
+      },
+      {
+        prompt: 'Guard each read',
+        source: 'prompt',
+        displayName: 'guarded-command',
+        hooks: {
+          PreToolUse: [{
+            matcher: 'read',
+            command: `"${process.execPath}" -e "${script}"`,
+          }],
+        },
+      },
+      '/guarded-command',
+      vi.fn(),
+    );
+
+    await expect(prepared.options!.events!.beforeToolExecute!('read', {})).resolves.toBe(false);
   });
 
   it('fails closed when a host lifecycle hook has no permission broker', async () => {
@@ -376,8 +405,10 @@ describe('prepareInvocationExecution', () => {
     expect(prepared.prompt).not.toContain('/skill:review-skill');
     expect(prepared.prompt).toContain('the active Skill "review-skill" --focus coding');
     expect(prepared.options?.context?.rawUserInput).toBe(
-      'the active Skill "review-skill" --focus coding',
+      '/skill:review-skill --focus coding',
     );
+    expect(prepared.options?.context?.promptOverlay).toBe('[base]');
+    expect(prepared.options?.context?.promptOverlay).not.toContain('# Review Skill');
     expect(prepared.options?.context?.skillInvocation).toEqual(
       expect.objectContaining({
         name: 'review-skill',

@@ -731,13 +731,16 @@ export async function runSubstrate(
   // same canonical text. Both helpers live in
   // `agent-runtime/middleware/auto-resume.ts` since FEATURE_100 P2.
   const resumed = await resolveInitialMessages(options, sessionId);
+  const transcriptPrompt = options.context?.rawUserInput?.trim() || prompt;
   let messages = appendPromptIfNotDuplicate(
     resumed.messages,
-    prompt,
+    transcriptPrompt,
     options.context?.inputArtifacts,
     liveTurnScopeRef.current.turnId,
   );
-  let title = resumed.title || (prompt.slice(0, 50) + (prompt.length > 50 ? '...' : ''));
+  let title = resumed.title || (
+    transcriptPrompt.slice(0, 50) + (transcriptPrompt.length > 50 ? '...' : '')
+  );
   const errorMetadata: SessionErrorMetadata | undefined = resumed.errorMetadata;
   const loadedExtensionState: KodaXExtensionSessionState | undefined = resumed.loadedExtensionState;
   const loadedExtensionRecords: KodaXExtensionSessionRecord[] | undefined = resumed.loadedExtensionRecords;

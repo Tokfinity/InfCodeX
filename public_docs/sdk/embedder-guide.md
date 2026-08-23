@@ -5,9 +5,12 @@
 > extensions, custom CLIs. If you are an end-user running the `kodax`
 > command-line tool, see the root [README.md](../../README.md) instead.
 
-This guide reflects the `v0.7.94` SDK contract. npm publication remains a
-manual maintainer step. The release keeps `sandboxRuntime:4` and
-`crashOutcomeModel:2`, and adds concurrent sandboxed text mutations,
+This guide reflects the released `v0.7.94` SDK plus the current Unreleased
+maintenance contract. npm publication and version assignment remain manual
+maintainer steps. Current source advertises Windows `sandboxRuntime:5`,
+`runtimeExitSettlement:2`, and `crashOutcomeModel:2`, and adds concurrent sandboxed text mutations,
+Session-persisted and Git-backlink-validated KodaX worktree roots (including
+strict `core.worktree` identity for a real submodule Session root),
 authorized-root git trust (`gitSafeDirectory: authorized-repo-roots`),
 scheduled shutdown failure reporting, missing-workspace Run start,
 `conversationHistory:2`, independent explicit Skill invocation, diagnosed
@@ -250,7 +253,9 @@ Skill discovery and explicit invocation are intentionally separate:
   same gate before loading full content.
 - Every enabled Skill remains explicitly user-invocable. `/<name>` and
   `/skill:<name>` may appear at the head or middle of a user query; text after
-  the selected token is the argument string.
+  the selected token is the argument string. A request may activate only one
+  known Skill; multiple references return a user-visible diagnostic and do not
+  execute the first one partially.
 - `SkillRegistry.invoke()` is an explicit SDK primitive. It is not blocked by
   `disable-model-invocation: true`; an embedder exposing it to a model must add
   its own model-tool admission instead of treating the registry as that gate.
@@ -277,6 +282,13 @@ Terminal embedders accepting raw user text can reuse
 builds structured `skillInvocation`; the second owns hooks, permission policy,
 fork context, and finalization. Expanded Skill content belongs in structured
 system context exactly once, not in both the user prompt and system prompt.
+`prepareInvocationExecution()` preserves the exact submitted text in
+`context.rawUserInput`; canonical transcripts and titles use that field, while
+generated Skill wording, lifecycle-hook context, and command expansion remain
+execution-only overlays. Hosts must persist/display the raw request, not the
+prepared provider prompt. A malformed or failed `PreToolUse` hook denies the
+guarded tool; `PostToolUse` failures remain diagnostic because the completed
+tool effect cannot be undone.
 
 That structured field is also the delegation provenance boundary. Workflow and
 child runs inherit an active explicit Skill. A slash token written only inside
@@ -1172,6 +1184,13 @@ class MyDbSessionStorage implements KodaXSessionStorage {
 const storage = new MyDbSessionStorage();
 await runKodaX({ session: { id, storage }, ... }, prompt);
 ```
+
+`mutateRuntimeInfo()` is an optional low-level seam used by the Runtime-owned
+`FileSessionStorage`; `createKodaXRuntime()` currently owns that storage. A
+custom storage passed directly to `runKodaX()` remains transcript storage.
+Adding this method alone does not install the Runtime workspace-root registry
+or its shell/text sandbox policy. Use the Runtime service when depending on the
+dynamic linked-worktree correction.
 
 The SA / AMA loops are storage-implementation-agnostic — they just
 call `storage.save(...)` at the terminal sites (success / error /
@@ -2841,8 +2860,15 @@ infrastructure failure returns to the already-authorized normal permission path.
 A missing lifecycle attestation after target start remains fail-closed and is
 never repaired by replaying the command. Runtime sandbox capability v3 first
 fenced older daemon policy revisions in v0.7.86. The current contract is
-`sandboxRuntime:4`: auto-start replaces an idle older daemon and fails closed
-while it is busy.
+`sandboxRuntime:5`: auto-start replaces an idle older daemon and fails closed
+while it is busy. Version 5 adds automatic same-boot Windows ACL recovery: a
+sandbox-user SID probe must prove that no unrelated process remains before an
+uncontained `unconfirmed-owner` ticket is cleared. Probe uncertainty is
+diagnosed and retried automatically; it never becomes permission to reset ACLs.
+Delayed sandboxed text cleanup also retains a consumed execution attestation
+across retries. Transient workspace cleanup, policy reset, and outer effect
+lease release are retried without replaying the text operation or repeating a
+completed cleanup phase.
 
 `homeDir` and `KODAX_HOME` deliberately name different levels. Runtime SDK and
 CLI daemon `--home` accept the **base directory that contains `.kodax`**;
@@ -4415,7 +4441,7 @@ const runtime = await connectKodaXRuntime({
     runBoundHostTools: 1,
     coderOwnerFencing: 1,
     crashOutcomeModel: 2,
-    sandboxRuntime: 4,
+    sandboxRuntime: 5,
     coderFeatureMatrix: 1,
     sessionAdmission: 1,
     completeObservationSnapshot: 1,
@@ -4481,9 +4507,9 @@ Require it before auto-start so an idle daemon that still exposes the legacy
 ordinary-history projection is replaced; a busy or otherwise unsafe owner
 produces the normal capability-upgrade error.
 
-`KODAX_RUNTIME_SDK_CAPABILITIES.sandboxRuntime` is now `4` and
-`crashOutcomeModel` is `2`. Windows auto-start requires `sandboxRuntime:4` so
-an idle v3-or-older daemon is replaced; a busy or multi-client daemon fails
+`KODAX_RUNTIME_SDK_CAPABILITIES.sandboxRuntime` is now `5` and
+`crashOutcomeModel` is `2`. Windows auto-start requires `sandboxRuntime:5` so
+an idle v4-or-older daemon is replaced; a busy or multi-client daemon fails
 closed with restart guidance. Require `crashOutcomeModel:2` when the host
 depends on managed Session persistence preceding completion and on the
 executor Promise — not managed `onComplete` — as terminal authority. Do not
@@ -4516,7 +4542,7 @@ if (outcome.status === 'blocked') {
 }
 ```
 
-`runtimeExitSettlement:1` is a local SDK capability and does not add a daemon
+`runtimeExitSettlement:2` is a local SDK capability and does not add a daemon
 handshake requirement. The SDK writes an exact owner/process-start and platform
 boot identity before cooperative stop, then returns `clean` only after the
 durable shutdown outcome and required exits are verified. `recovered` may repair
@@ -4524,8 +4550,11 @@ only identity-scoped Windows process/Job/ACL residue, or exact POSIX owner/state
 residue after a boot-identity change. Same-boot POSIX uncertainty, active work,
 PID reuse, foreign markers, corrupt tickets, and replacement owners return
 `blocked`; the SDK never exposes a bare-PID kill, raw marker deletion, or forced
-ACL-recovery primitive. The transaction has a fixed bounded deadline and does
-not accept caller-supplied short timeouts.
+ACL-recovery primitive. Version 2 removes the final same-boot Windows manual
+cleanup hole: stale, uncontained recovery tickets are retried through the
+sandbox account's own runner and clear only after an exact SID-idle proof. The
+transaction has a fixed bounded deadline and does not accept caller-supplied
+short timeouts.
 
 After a verified Windows boot change, settlement may also recover shared ACL
 state when a machine-lock recheck proves that every primary and legacy marker
@@ -4678,7 +4707,11 @@ states are monotonic.
 
 Current source treats Run terminal persistence as its own fail-closed
 convergence boundary. If the durable terminal status succeeds but event
-publication fails, the durable status remains authoritative. If neither
+publication fails, the durable status remains authoritative. If status commit
+succeeds but status-lock cleanup reports failure, Runtime rereads the record;
+only an exact deep match with its local terminal proposal continues to one
+terminal event publication. A different authoritative record wins without a
+duplicate event. If neither
 terminal record can be persisted, `handle.result`, `runs.get()`, and
 `runs.await()` converge to `phase:'unknown'` with lifecycle code
 `run_settlement_not_persisted`; the Session execution fence stays closed.
@@ -4687,6 +4720,12 @@ Credential-scoped failures may include a bounded `failureKind` (`auth`,
 `runtime_cleanup`, or `provider`) without exposing raw provider text.
 Sandbox and managed-child termination failures are observed and retained as
 diagnostics rather than escaping as process-global unhandled rejections.
+If terminal status persistence fails but the Session event journal remains
+healthy, Runtime durably publishes `run.updated` with `phase:'unknown'`. If the
+journal is fenced too, active `sessions.observe()` handles resolve
+`invalidated` with `reason:'delivery_failed'`; consumers must discard their
+local projection and acquire a fresh observation instead of retaining a stale
+running/terminal state.
 
 `runtime.status.preflight()` treats `queued`, all active/waiting/recovery
 phases, and `unknown` as stop blockers. A host must never infer completion from

@@ -113,7 +113,7 @@ async function runHook(
   hook: SkillHook,
   payload: Record<string, unknown>,
   cwd: string,
-): Promise<boolean | undefined> {
+): Promise<boolean | undefined | 'failed'> {
   try {
     const { stdout, stderr } = await execAsync(hook.command, {
       cwd,
@@ -149,7 +149,7 @@ async function runHook(
         message: `Skill ${event} hook returned invalid JSON.`,
         detail: error,
       });
-      return undefined;
+      return 'failed';
     }
   } catch (error) {
     emitKodaXDiagnostic({
@@ -158,7 +158,7 @@ async function runHook(
       message: `Skill ${event} hook failed.`,
       detail: error,
     });
-    return undefined;
+    return 'failed';
   }
 }
 
@@ -198,7 +198,8 @@ async function runHooks(
       if (event === 'PreToolUse') return false;
       continue;
     }
-    if (await runHook(event, hook, payload, cwd) === false) return false;
+    const result = await runHook(event, hook, payload, cwd);
+    if (result === false || (event === 'PreToolUse' && result === 'failed')) return false;
   }
   return true;
 }

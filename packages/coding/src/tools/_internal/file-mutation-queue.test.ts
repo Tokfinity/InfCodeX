@@ -25,6 +25,8 @@ import {
   FileSystemCleanupAdmissionTimeoutError,
   finishAndReleaseFileSystemEffectLease,
   normalizePathForKey,
+  withHostFileSystemMutation,
+  withHostFileSystemNamespaceMutation,
   withFileMutation,
   withSandboxedFileMutation,
   withExclusiveFileSystemCleanupLease,
@@ -928,6 +930,25 @@ describe('cross-process filesystem effect lease', () => {
       .toBeUndefined();
     await expect(withFileMutation('/tmp/after-release-retry.txt', async () => 'recovered'))
       .resolves.toBe('recovered');
+  });
+
+  it.each([
+    ['direct', () => withHostFileSystemMutation(async () => {
+      coordinatorFailureMock.remaining = 3;
+      throw new Error('direct operation failed');
+    })],
+    ['namespace', () => withHostFileSystemNamespaceMutation(async () => {
+      coordinatorFailureMock.remaining = 3;
+      throw new Error('namespace operation failed');
+    })],
+  ])('preserves the %s operation failure when lease release also fails', async (_mode, run) => {
+    const failure = await run().catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([
+      expect.objectContaining({ message: expect.stringContaining('operation failed') }),
+      expect.objectContaining({ message: 'injected filesystem-effect coordinator failure' }),
+    ]);
   });
 
   it('releases after a deferred process finish eventually succeeds', async () => {

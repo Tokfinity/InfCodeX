@@ -796,9 +796,8 @@ async function settleAcceptedRuntimeExit(
     }
   }
 
-  if (retainedOwnerAlive) {
-    return blocked('cleanup_unverified', 'manual-recovery', 'Runtime daemon is still active.');
-  }
+  // Every retained-owner path above either blocks or proves the exact process
+  // generation exited before recovery continues.
   if (
     dependencies.platform === 'win32'
     && !previousWindowsBoot

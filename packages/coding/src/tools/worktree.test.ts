@@ -5,7 +5,7 @@
 import path from 'node:path';
 import os from 'node:os';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import {
   containWindowsEffectProcess,
   killChildProcessTree,
@@ -192,6 +192,53 @@ describe('toolWorktreeCreate', () => {
     expect(addPath?.replace(/\\/g, '/')).toMatch(/\/test\/\.kodax-worktree-sibling-wt$/);
   });
 
+  it('registers the exact worktree root before returning it to the model', async () => {
+    const register = vi.fn(async () => undefined);
+    const result = await toolWorktreeCreate(
+      { branch_name: 'registered-root' },
+      {
+        ...mockContext,
+        workspaceSandboxRoots: {
+          list: () => [],
+          register,
+          unregister: async () => undefined,
+        },
+      },
+    );
+    const parsed = JSON.parse(result) as { path: string };
+
+    expect(register).toHaveBeenCalledOnce();
+    expect(register).toHaveBeenCalledWith(parsed.path);
+  });
+
+  it('rolls back the git worktree when its sandbox root cannot be persisted', async () => {
+    const gitCalls: string[][] = [];
+    setMockExecFileImpl((_cmd: string, args: string[], _opts: unknown, cb: Function) => {
+      gitCalls.push(args);
+      cb(null, '', '');
+    });
+
+    await expect(toolWorktreeCreate(
+      { branch_name: 'registration-failure' },
+      {
+        ...mockContext,
+        workspaceSandboxRoots: {
+          list: () => [],
+          register: async () => {
+            throw new Error('session root persistence failed');
+          },
+          unregister: async () => undefined,
+        },
+      },
+    )).rejects.toThrow(/failed to create worktree/i);
+
+    expect(gitCalls).toEqual(expect.arrayContaining([
+      expect.arrayContaining(['worktree', 'add']),
+      expect.arrayContaining(['worktree', 'remove']),
+      ['branch', '-D', 'registration-failure'],
+    ]));
+  });
+
   it('nests the worktree under the trusted workflow context base', async () => {
     let addPath: string | undefined;
     setMockExecFileImpl((_cmd: string, args: string[], _opts: unknown, cb: Function) => {
@@ -314,7 +361,12 @@ describe('toolWorktreeCreate', () => {
 
   it('rejects instead of waiting forever when process-tree drain remains unknown', async () => {
     vi.mocked(containWindowsEffectProcess).mockResolvedValue(undefined as never);
-    vi.mocked(killChildProcessTree).mockResolvedValue({ status: 'unknown' });
+    vi.mocked(killChildProcessTree)
+      .mockResolvedValueOnce({ status: 'unknown' })
+      .mockResolvedValueOnce({ status: 'unknown' })
+      .mockResolvedValueOnce({ status: 'unknown' })
+      .mockResolvedValueOnce({ status: 'unknown' })
+      .mockResolvedValue({ status: 'already-exited' });
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       const deadline = new Promise<never>((_resolve, reject) => {
@@ -324,6 +376,12 @@ describe('toolWorktreeCreate', () => {
         toolWorktreeCreate({ branch_name: 'unknown-process-tree' }, mockContext),
         deadline,
       ])).rejects.toThrow(/process tree has not been proven drained/i);
+      await vi.waitFor(async () => {
+        await expect(withFileMutation(
+          path.join(os.tmpdir(), 'after-delayed-worktree-drain.txt'),
+          async () => 'recovered',
+        )).resolves.toBe('recovered');
+      }, { timeout: 3_000 });
     } finally {
       if (timeout !== undefined) clearTimeout(timeout);
     }
@@ -437,6 +495,73 @@ describe('toolWorktreeRemove', () => {
     const parsed = JSON.parse(result);
     expect(parsed.restored).toBe(true);
     expect(parsed.message).toContain('removed');
+  });
+
+  it('revokes the registered worktree root after git removes it', async () => {
+    const unregister = vi.fn(async () => undefined);
+    await toolWorktreeRemove(
+      { action: 'remove', worktree_path: '/test/worktree', discard_changes: true },
+      {
+        ...mockContext,
+        workspaceSandboxRoots: {
+          list: () => ['/test/worktree'],
+          register: async () => undefined,
+          unregister,
+        },
+      },
+    );
+
+    expect(unregister).toHaveBeenCalledOnce();
+    expect(unregister).toHaveBeenCalledWith('/test/worktree');
+  });
+
+  it('captures an alias canonical root before git removes the alias', async () => {
+    const target = mkdtempSync(path.join(os.tmpdir(), 'kodax-worktree-canonical-'));
+    const alias = `${target}-alias`;
+    symlinkSync(target, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    const canonical = realpathSync.native(target);
+    const unregister = vi.fn(async () => undefined);
+    setMockExecFileImpl((_cmd: string, args: string[], _opts: unknown, cb: Function) => {
+      if (args[0] === 'worktree' && args[1] === 'remove') {
+        rmSync(alias, { recursive: true, force: true });
+      }
+      cb(null, '', '');
+    });
+    try {
+      await toolWorktreeRemove(
+        { action: 'remove', worktree_path: alias, discard_changes: true },
+        {
+          ...mockContext,
+          workspaceSandboxRoots: {
+            list: () => [canonical],
+            register: async () => undefined,
+            unregister,
+          },
+        },
+      );
+      expect(unregister).toHaveBeenCalledOnce();
+      expect(unregister).toHaveBeenCalledWith(canonical);
+    } finally {
+      setMockExecFileImpl(null);
+      rmSync(alias, { recursive: true, force: true });
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  it('removes an unregistered pre-correction worktree without inventing a revocation', async () => {
+    const unregister = vi.fn(async () => undefined);
+    await expect(toolWorktreeRemove(
+      { action: 'remove', worktree_path: '/test/legacy-worktree', discard_changes: true },
+      {
+        ...mockContext,
+        workspaceSandboxRoots: {
+          list: () => [],
+          register: async () => undefined,
+          unregister,
+        },
+      },
+    )).resolves.toContain('removed');
+    expect(unregister).not.toHaveBeenCalled();
   });
 
   it('bypasses safety check with discard_changes=true', async () => {

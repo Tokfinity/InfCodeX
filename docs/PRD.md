@@ -1,9 +1,11 @@
 # KodaX Product Requirements
 
-> Last updated: 2026-08-21
+> Last updated: 2026-08-23
 >
 > Current implementation baseline: `@kodax-ai/kodax@0.7.94`
 > (`v0.7.94` Git tag / GitHub Release; npm publication remains manual)
+> Current Unreleased source advances Windows `sandboxRuntime` to `5` and local
+> `runtimeExitSettlement` to `2`; version assignment remains a maintainer step.
 >
 > This document describes the current product. Historical pre-v0.7.43
 > chain/harness designs have been removed from this current PRD because they no
@@ -146,6 +148,18 @@ durable Run status remains the authority for crash outcome. After a host
 receives `runId`, reconnect recovery must query and await that same Run and
 must never replay `runs.start()` or its provider/tool effects. Safe failure
 categories remain bounded and credential-redacted.
+
+The current Unreleased maintenance source closes the remaining automatic-
+recovery and explicit-Skill gaps without introducing a new feature slot. Stale
+zero-byte, malformed, or truncated learning locks are reclaimed only after the
+stale boundary and an unchanged bytes/stat check. Same-boot Windows
+`unconfirmed-owner` recovery retries until an exact sandbox-user SID probe
+proves the account idle; uncertainty remains fail-closed for sandbox work but
+does not require manual marker deletion. Explicit Skill execution stores the
+exact user query as canonical history, rejects multiple active references, and
+denies tools when `PreToolUse` fails or returns malformed JSON. A terminal Run
+whose status cannot be persisted publishes `unknown`, or invalidates live
+Session observers if the event journal is fenced too.
 
 ## 2. Target Users
 

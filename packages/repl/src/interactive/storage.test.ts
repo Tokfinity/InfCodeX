@@ -2301,6 +2301,72 @@ describe('FileSessionStorage', () => {
     }));
   });
 
+  it('atomically preserves sandbox worktree roots across a stale Session snapshot', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+    const sessionId = 'session-worktree-roots-atomic-runtime-info';
+    const messages = [{ role: 'user' as const, content: 'before worktree registration' }];
+    await storage.save(sessionId, {
+      messages,
+      title: 'atomic runtime info',
+      gitRoot: KODAX_REPO_ROOT,
+      runtimeInfo: {
+        canonicalRepoRoot: KODAX_REPO_ROOT,
+        surface: 'code',
+      },
+    });
+    const stale = await storage.load(sessionId);
+    if (stale === null) throw new Error('expected stale Session snapshot');
+
+    await expect(storage.mutateRuntimeInfo(sessionId, (runtimeInfo) => ({
+      ...(runtimeInfo ?? {}),
+      sandboxWorktreeRoots: ['/repo/.kodax-worktree-one'],
+    }))).resolves.toBe(true);
+    await storage.save(sessionId, {
+      ...stale,
+      messages: [...messages, { role: 'assistant', content: 'stale host update' }],
+      runtimeInfo: {
+        canonicalRepoRoot: KODAX_REPO_ROOT,
+        workspaceRoot: KODAX_REPO_ROOT,
+      },
+    });
+
+    await expect(storage.load(sessionId)).resolves.toMatchObject({
+      runtimeInfo: {
+        canonicalRepoRoot: KODAX_REPO_ROOT,
+        workspaceRoot: KODAX_REPO_ROOT,
+        sandboxWorktreeRoots: ['/repo/.kodax-worktree-one'],
+      },
+    });
+    await expect(storage.mutateRuntimeInfo(sessionId, (runtimeInfo) => ({
+      ...(runtimeInfo ?? {}),
+      sandboxWorktreeRoots: [],
+    }))).resolves.toBe(true);
+    await expect(storage.load(sessionId)).resolves.toMatchObject({
+      runtimeInfo: { sandboxWorktreeRoots: [] },
+    });
+
+    const staleWithRegisteredRoot = await storage.load(sessionId);
+    if (staleWithRegisteredRoot === null) throw new Error('expected registered-root snapshot');
+    await expect(storage.mutateRuntimeInfo(sessionId, (runtimeInfo) => ({
+      ...(runtimeInfo ?? {}),
+      sandboxWorktreeRoots: ['/repo/.kodax-worktree-two'],
+    }))).resolves.toBe(true);
+    const staleBeforeRevocation = await storage.load(sessionId);
+    if (staleBeforeRevocation === null) throw new Error('expected pre-revocation snapshot');
+    await expect(storage.mutateRuntimeInfo(sessionId, (runtimeInfo) => ({
+      ...(runtimeInfo ?? {}),
+      sandboxWorktreeRoots: [],
+    }))).resolves.toBe(true);
+    await storage.save(sessionId, {
+      ...staleBeforeRevocation,
+      messages: [...messages, { role: 'assistant', content: 'stale post-revocation update' }],
+    });
+    await expect(storage.load(sessionId)).resolves.toMatchObject({
+      runtimeInfo: { sandboxWorktreeRoots: [] },
+    });
+  });
+
   it('does not let a pre-rewind host snapshot restore the retired branch', async () => {
     const { FileSessionStorage } = await import('./storage.js');
     const storage = new FileSessionStorage({

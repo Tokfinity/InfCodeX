@@ -21,6 +21,7 @@ const windowsEffectJobMock = vi.hoisted(() => ({
   drainFailure: undefined as Error | undefined,
   containFailure: undefined as Error | undefined,
   containCalls: 0,
+  recoveryCalls: 0,
 }));
 const managedRegistrationMock = vi.hoisted(() => ({
   failure: undefined as Error | undefined,
@@ -48,6 +49,13 @@ vi.mock('@kodax-ai/agent', async (importOriginal) => {
         drained,
         unref: () => undefined,
       };
+    },
+    terminateWindowsEffectJob: async (...args: Parameters<typeof actual.terminateWindowsEffectJob>) => {
+      if (windowsEffectJobMock.drainFailure === undefined) {
+        return actual.terminateWindowsEffectJob(...args);
+      }
+      windowsEffectJobMock.recoveryCalls += 1;
+      return 'drained' as const;
     },
     registerManagedChildProcess: (
       ...args: Parameters<typeof actual.registerManagedChildProcess>
@@ -250,6 +258,7 @@ describe('toolBash', () => {
     windowsEffectJobMock.drainFailure = undefined;
     windowsEffectJobMock.containFailure = undefined;
     windowsEffectJobMock.containCalls = 0;
+    windowsEffectJobMock.recoveryCalls = 0;
   });
 
   it('executes an admitted command through the runtime-owned shell sandbox', async () => {
@@ -416,6 +425,42 @@ describe('toolBash', () => {
       expect(result).not.toContain('Exit: 0');
       expect(cleanupSandbox).not.toHaveBeenCalled();
       expect(releaseEffectLease).not.toHaveBeenCalled();
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'automatically retires a foreground effect lease after a delayed Job drain proof',
+    async () => {
+      windowsEffectJobMock.drainFailure = new Error('injected recoverable Job drain failure');
+      const releaseEffectLease = vi.fn(async () => undefined);
+      const finishEffectProcess = vi.fn(async () => undefined);
+      const cleanupSandbox = vi.fn(async () => undefined);
+
+      const result = await toolBash({ command: 'foreground-delayed-drain' }, {
+        backups: new Map(),
+        toolCallId: 'bash-foreground-delayed-drain',
+        shellSandbox: {
+          prepare: async () => ({
+            executable: process.execPath,
+            args: ['-e', "process.stdout.write('ran-once')"],
+            env: process.env,
+            fileSystemEffectLease: {
+              bindEffectProcess: async () => undefined,
+              finishEffectProcess,
+              release: releaseEffectLease,
+            },
+            cleanup: cleanupSandbox,
+          }),
+        },
+      });
+
+      expect(result).toContain('process tree termination was not confirmed');
+      await vi.waitFor(() => {
+        expect(windowsEffectJobMock.recoveryCalls).toBeGreaterThan(0);
+        expect(finishEffectProcess).toHaveBeenCalledOnce();
+        expect(cleanupSandbox).toHaveBeenCalledWith({ execution: 'started_or_unknown' });
+        expect(releaseEffectLease).toHaveBeenCalledOnce();
+      }, { timeout: 3_000 });
     },
   );
 

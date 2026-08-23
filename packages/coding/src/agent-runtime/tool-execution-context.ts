@@ -164,6 +164,7 @@ export function buildToolExecutionContext(
     sandbox: options.sandbox,
     shellSandbox: options.context?.shellSandbox,
     textFileMutationSandbox: options.context?.textFileMutationSandbox,
+    workspaceSandboxRoots: options.context?.workspaceSandboxRoots,
     providerCredentialEnvironmentNames: getProviderCredentialEnvironmentNames(),
     sessionScratchDir,
     extensionRuntime: runtime,

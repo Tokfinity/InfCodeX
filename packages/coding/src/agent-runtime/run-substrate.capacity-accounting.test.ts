@@ -139,6 +139,31 @@ describe('runSubstrate physical request accounting', { timeout: 30_000 }, () => 
     expect(systemPrompt.match(/SA_SKILL_SENTINEL/g)).toHaveLength(1);
   });
 
+  it('keeps the exact user request in the transcript when the execution prompt is prepared', async () => {
+    const rawUserInput = '/writing-great-skills 请检查刚刚写的技能';
+    const preparedPrompt = 'User request: the active Skill "writing-great-skills" 请检查刚刚写的技能';
+
+    const result = await runSubstrate({
+      provider: PROVIDER_NAME,
+      model: 'capacity-model',
+      maxIter: 1,
+      reasoningMode: 'off',
+      context: {
+        rawUserInput,
+        skillInvocation: {
+          name: 'writing-great-skills',
+          path: 'C:/skills/writing-great-skills/SKILL.md',
+          expandedContent: '<skill name="writing-great-skills">Audit the requested Skill.</skill>',
+        },
+      },
+    }, preparedPrompt);
+
+    expect(JSON.stringify(result.messages)).toContain(rawUserInput);
+    expect(JSON.stringify(result.messages)).not.toContain(preparedPrompt);
+    expect(JSON.stringify(CapacityAccountingProvider.requests[0]?.messages)).toContain(rawUserInput);
+    expect(JSON.stringify(CapacityAccountingProvider.requests[0]?.messages)).not.toContain(preparedPrompt);
+  });
+
   it('rebases a no-usage snapshot from the final request envelope through assistant and tool appends', async () => {
     CapacityAccountingProvider.mode = 'tool';
     const result = await runSubstrate({

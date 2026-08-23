@@ -90,6 +90,8 @@ await runInteractiveMode(options);
 
 Ink、Classic 和非交互 CLI 都由宿主解析用户输入中的 `/<name>` 与
 `/skill:<name>`；token 可位于 query 头部或中间，后缀文本作为参数。
+一个请求只能激活一个已知 Skill；多个引用会得到明确诊断，Immediate 与 queued
+路径都不会静默只执行第一个。
 忙碌时识别出的 Skill 输入以 host-owned queue entry 保存，不能被 Runtime
 mid-turn drain 当成普通自然语言提前送给模型。
 
@@ -109,6 +111,10 @@ const request = await resolveUserSkillInvocation(userInput, {
 结构化来源证明。`disable-model-invocation` 只影响模型 catalog/tool，不影响
 此入口。需要完整 hooks、权限和 finalize 生命周期的宿主应继续使用导出的
 `prepareInvocationExecution`，不要把 `request.prompt` 当普通用户文本重复注入。
+prepared options 的 `context.rawUserInput` 保留用户逐字输入，供 canonical
+transcript/title 使用；生成的 provider prompt、hook additional context 和 Skill
+展开内容只属于执行 overlay。`PreToolUse` 命令失败或返回非法 JSON 时拒绝目标
+工具，`PostToolUse` 失败则只报告诊断。
 
 ## 配置管理
 

@@ -285,6 +285,26 @@ describe('text file mutation capability', () => {
     await expect(fs.readFile(actualTarget, 'utf8')).resolves.toBe('before');
   });
 
+  it('rejects a hard link created after the host snapshot was read', async () => {
+    const filePath = path.join(root, 'hard-link-race-source.txt');
+    const aliasPath = path.join(root, 'hard-link-race-alias.txt');
+    await fs.writeFile(filePath, 'before', 'utf8');
+    const ctx: KodaXToolExecutionContext = { backups: new Map() };
+
+    await expect(withTextFileMutation(
+      filePath,
+      'edit',
+      { path: filePath },
+      ctx,
+      async (snapshot) => {
+        await fs.link(filePath, aliasPath);
+        await writeTextFileForMutation(snapshot, 'must-not-write', false, ctx);
+      },
+    )).rejects.toThrow(/hard link|File changed during mutation/);
+    await expect(fs.readFile(filePath, 'utf8')).resolves.toBe('before');
+    await expect(fs.readFile(aliasPath, 'utf8')).resolves.toBe('before');
+  });
+
   it('rejects a host fallback commit when another writer changed the snapshot', async () => {
     const filePath = path.join(root, 'target.txt');
     await fs.writeFile(filePath, 'before', 'utf8');

@@ -11,12 +11,14 @@ describe('@kodax-ai/kodax/sandbox public surface', () => {
   it('exposes generic containment independently from Auto[LLM]', () => {
     const capability = getKodaXSandboxCapability();
     expect(capability).toMatchObject({
-      version: 4,
+      version: 5,
       asrtVersion: KODAX_ASRT_VERSION,
       genericCommandExecution: true,
       ordinaryCallsTriggerSetup: false,
       unavailableBehavior: 'structured-no-execution',
       permissionFallback: 'normal-permission-policy',
+      delayedEffectDrainRecovery: 'automatic',
+      sameBootAclRecovery: 'sandbox-user-process-probe',
     });
     expect(capability.controls).toEqual([
       'filesystem',

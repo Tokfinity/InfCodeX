@@ -266,6 +266,31 @@ SDK 系统代码契约更新，但没有放宽 shell/sandbox 的 fail-closed 边
 `handleRuntimePermissionRequest()` 管理 SDK 权限 UI，并在 prepared Session 尾部遇到
 `data_changed` 时通过权威 delta 合并恢复；后台持久化失败会显示为诊断，不再静默丢失。
 
+**当前 Unreleased 维护改动**：零字节、畸形或截断 owner 的过期 learning lock
+会在字节与 stat 二次确认未变后自动恢复。同一次 Windows 启动内的
+`unconfirmed-owner` 会持续自动重试，只有精确 sandbox-user SID 探针证明空闲后
+才清理，不要求用户删除 marker。显式 Skill 的 canonical 历史保留用户原始 query，
+多个 Skill 引用会被拒绝，失败或畸形的 `PreToolUse` 会拒绝工具。终态持久化不确定
+时发布 `unknown`，或让 live Session observer 失效并重新取快照。若终态已经提交、
+随后 status-lock 清理失败，只在重读状态与本地 proposal 完全一致时继续且只发布
+一次 terminal event；不同的权威终态仍然优先。当前源码广告
+Windows `sandboxRuntime:5` 与本地 `runtimeExitSettlement:2`；版本分配和发布仍由
+维护者处理。
+
+**当前 Unreleased 动态 worktree 修正**：KodaX 创建的 linked worktree 会在路径
+返回给模型前加入该 Session 的精确 shell/text sandbox 策略，跨后续 Run 持久化，
+并按同一 Git common-dir 关系重新校验。删除 worktree 时立即撤销；未登记的
+sibling 目录仍保持门禁。若 Session 根本身是真实 Git submodule，只接受其有界
+`.git/modules/...` `core.worktree` 对精确工作区的反向绑定；候选仍须通过普通
+linked-worktree backlink 校验。旧版本创建的 worktree 没有持久化登记：Session 若仍
+保留成功的 `worktree_create` 结果，会在同一 Git 关系重新校验通过后
+一次性迁移；若该精确证据已不存在，请先停止后台进程，再通过 KodaX 删除并重新
+创建一次。迁移时不要删除 ProgramData 协调文件。
+
+**当前 Unreleased 自动清理修正**：延迟文本清理会跨重试保留已经读取的执行
+attestation，并对瞬时 workspace cleanup、策略 reset 与 effect lease 释放失败自动
+重试；已经完成的阶段不会重复执行，也不会留下必须人工删除的恢复标记。
+
 **v0.7.94 发布**：Runtime 文本工具可以与兼容的长驻/后台 Bash 并发，因为
 snapshot 与 commit 走同一套 ASRT workspace 策略。硬链接工作区目标会被拒绝。
 Windows 沙箱 git 只信任已授权的仓库根，不再发出 `safe.directory=*`（Issue 300）。

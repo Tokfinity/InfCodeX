@@ -297,11 +297,20 @@ async function executeHookCommand(
             : undefined,
       };
     } catch {
+      if (event === 'PreToolUse') {
+        return {
+          allow: false,
+          message: `Hook ${event} for ${displayName} returned invalid JSON.`,
+        };
+      }
       return { message: trimmedStdout, additionalContext: trimmedStdout };
     }
   } catch (error) {
-    await emit(`[Hook ${event} failed] ${error instanceof Error ? error.message : String(error)}`);
-    return {};
+    const message = error instanceof Error ? error.message : String(error);
+    await emit(`[Hook ${event} failed] ${message}`);
+    return event === 'PreToolUse'
+      ? { allow: false, message: `Hook ${event} for ${displayName} failed.` }
+      : {};
   }
 }
 
@@ -456,6 +465,11 @@ export async function prepareInvocationExecution(
   ].filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
 
   const modelUserInput = buildModelUserInput(rawUserInput, activeSkillInvocation);
+  const invocationOverlay = [
+    baseOptions.context?.promptOverlay,
+    ...contextBlocks,
+    activeSkillInvocation ? undefined : request.prompt,
+  ].filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
   const promptParts = [
     contextBlocks.length > 0 ? contextBlocks.join('\n\n') : undefined,
     activeSkillInvocation ? undefined : request.prompt,
@@ -538,7 +552,8 @@ export async function prepareInvocationExecution(
       context: {
         ...baseOptions.context,
         ...(request.workflowIntent ? { workflowIntent: request.workflowIntent } : {}),
-        rawUserInput: modelUserInput,
+        rawUserInput,
+        ...(invocationOverlay.length > 0 ? { promptOverlay: invocationOverlay.join('\n\n') } : {}),
         skillInvocation: request.source === 'skill'
           ? request.skillInvocation && {
               ...request.skillInvocation,

@@ -179,7 +179,7 @@ describe('Runtime daemon capability upgrade', () => {
         daemonManagement: { version: 1 },
         runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
         runtimeEventCoalescing: { version: 1 },
-        sandboxRuntime: { version: 4 },
+        sandboxRuntime: { version: 5 },
       },
       onRollback: () => upgradeMocks.readLockOwner.mockReturnValue(undefined),
     });
@@ -391,8 +391,8 @@ describe('Runtime daemon capability upgrade', () => {
     expect(upgradeMocks.enableDaemonOwner).not.toHaveBeenCalled();
   });
 
-  it.skipIf(process.platform !== 'win32').each([1, 2, 3])(
-    'keeps a busy sandbox v%i daemon fenced behind the sandbox v4 upgrade requirement',
+  it.skipIf(process.platform !== 'win32').each([1, 2, 3, 4])(
+    'keeps a busy sandbox v%i daemon fenced behind the sandbox v5 upgrade requirement',
     async (sandboxVersion) => {
       const calls: string[] = [];
       const oldTransport = createLegacyTransport({
@@ -659,8 +659,8 @@ describe('Runtime daemon capability upgrade', () => {
       daemonShutdownVerification: 1,
       liveOutputSegments: 1,
       managedRunDurability: 1,
-      runtimeExitSettlement: 1,
-      sandboxRuntime: 4,
+      runtimeExitSettlement: 2,
+      sandboxRuntime: 5,
       runtimeEventCoalescing: 1,
       sessionEventJournal: 1,
     });
@@ -720,7 +720,7 @@ describe('Runtime daemon capability upgrade', () => {
       managedRunDurability: { version: 1 },
       runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
       runtimeEventCoalescing: { version: 1 },
-      sandboxRuntime: { version: 4 },
+      sandboxRuntime: { version: 5 },
       sessionEventJournal: { version: 1 },
       ...(process.platform === 'win32'
         ? { daemonShutdownVerification: { version: 1 } }
@@ -793,7 +793,7 @@ describe('Runtime daemon capability upgrade', () => {
         daemonManagement: undefined,
         runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
         runtimeEventCoalescing: { version: 1 },
-        sandboxRuntime: { version: 4 },
+        sandboxRuntime: { version: 5 },
       },
     });
     upgradeMocks.acquireProcessLease.mockResolvedValueOnce(createLease(oldTransport));
@@ -825,7 +825,7 @@ describe('Runtime daemon capability upgrade', () => {
           daemonShutdownVerification: undefined,
           runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
           runtimeEventCoalescing: { version: 1 },
-          sandboxRuntime: { version: 4 },
+          sandboxRuntime: { version: 5 },
         },
       });
       upgradeMocks.acquireProcessLease.mockResolvedValueOnce(createLease(oldTransport));
@@ -868,7 +868,7 @@ describe('Runtime daemon capability upgrade', () => {
         daemonManagement: { version: 1 },
         runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
         runtimeEventCoalescing: { version: 1 },
-        sandboxRuntime: { version: 4 },
+        sandboxRuntime: { version: 5 },
       },
     });
     upgradeMocks.acquireProcessLease.mockResolvedValueOnce(createLease(oldTransport));
@@ -1137,7 +1137,7 @@ describe('Runtime daemon capability upgrade', () => {
         daemonManagement: { version: 1 },
         runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
         runtimeEventCoalescing: { version: 1 },
-        sandboxRuntime: { version: 4 },
+        sandboxRuntime: { version: 5 },
       },
     });
     upgradeMocks.acquireProcessLease.mockResolvedValueOnce(createLease(oldTransport));
@@ -1405,7 +1405,7 @@ function createCurrentTransport(
         crashOutcomeModel: { version: 2 },
         managedRunDurability: { version: 1 },
         liveOutputSegments: { version: 1 },
-        sandboxRuntime: { version: 4 },
+        sandboxRuntime: { version: 5 },
         sessionEventJournal: { version: 1 },
         runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
         runtimeEventCoalescing: { version: 1 },
