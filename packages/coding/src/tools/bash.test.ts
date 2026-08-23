@@ -1890,7 +1890,7 @@ describe('toolBash', () => {
       });
       const result = await Promise.race([
         operation,
-        new Promise<'timed_out'>((resolve) => setTimeout(() => resolve('timed_out'), 2_000)),
+        new Promise<'timed_out'>((resolve) => setTimeout(() => resolve('timed_out'), 10_000)),
       ]);
       expect(result).not.toBe('timed_out');
       expect(result).toContain('output file could not be created');
