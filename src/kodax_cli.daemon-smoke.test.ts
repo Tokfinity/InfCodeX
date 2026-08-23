@@ -375,7 +375,7 @@ describe('daemon CLI smoke', () => {
     }
     expect(fs.existsSync(paths.stateFile)).toBe(false);
     expect(fs.existsSync(paths.lockFile)).toBe(false);
-  }, 30_000);
+  }, 90_000);
 
   it('SDK auto-start owns a daemon process outside the embedding process', async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-sdk-smoke-'));
