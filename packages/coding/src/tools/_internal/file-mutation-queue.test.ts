@@ -21,6 +21,7 @@ import {
   _resetFileSystemEffectLeasesForTests,
   acquireExclusiveFileSystemEffectLease,
   acquireFileSystemMutationLease,
+  type FileSystemMutationLeaseRelease,
   FileSystemCleanupAdmissionTimeoutError,
   finishAndReleaseFileSystemEffectLease,
   normalizePathForKey,
@@ -720,6 +721,8 @@ describe('cross-process filesystem effect lease', () => {
     let now = performance.now();
     vi.spyOn(performance, 'now').mockImplementation(() => now);
     const cleanupAction = vi.fn(async () => undefined);
+    const acquiredLeases: FileSystemMutationLeaseRelease[] = [];
+    const releasedLeases: FileSystemMutationLeaseRelease[] = [];
     coordinatorFailureMock.beforeEffectAcquireAtCall = coordinatorFailureMock.calls + 2;
     coordinatorFailureMock.beforeEffectAcquire = async () => {
       now += 131_000;
@@ -728,10 +731,16 @@ describe('cross-process filesystem effect lease', () => {
     const cleanup = withExclusiveFileSystemCleanupLease('policy-a', {
       pid: process.pid,
       windowsJobContained: false,
-    }, cleanupAction);
+    }, cleanupAction, undefined, (lease) => {
+      acquiredLeases.push(lease);
+    }, (lease) => {
+      releasedLeases.push(lease);
+    });
 
     await expect(cleanup).rejects.toBeInstanceOf(FileSystemCleanupAdmissionTimeoutError);
     await expect.poll(() => cleanupAction.mock.calls.length).toBe(1);
+    await expect.poll(() => releasedLeases.length).toBe(1);
+    expect(releasedLeases).toEqual(acquiredLeases);
   });
 
   it('keeps converging when managed-effect reconciliation crosses the cleanup deadline', async () => {

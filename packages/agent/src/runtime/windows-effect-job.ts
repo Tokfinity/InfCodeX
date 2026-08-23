@@ -2,14 +2,20 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
+import { killChildProcessTree } from './process-tree.js';
+
 const PAYLOAD_ENV = 'KODAX_EFFECT_JOB_PAYLOAD';
 const STARTUP_TIMEOUT_MS = 15_000;
 const SUPERVISOR_OUTPUT_LIMIT = 8_192;
+// New Jobs are machine-global. Accept the exact pre-global name as a recovery-
+// only compatibility input so an interrupted older SDK can still converge.
+const WINDOWS_EFFECT_JOB_NAME_PATTERN = /^(?:Global\\)?KodaXEffect-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const WINDOWS_EFFECT_JOB_SOURCE = String.raw`
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Security.Principal;
 using System.Threading;
 
 public static class KodaXEffectJob {
@@ -58,8 +64,19 @@ public static class KodaXEffectJob {
     public uint TotalTerminatedProcesses;
   }
 
+  [StructLayout(LayoutKind.Sequential)]
+  private struct WtsProcessInformation {
+    public uint SessionId;
+    public uint ProcessId;
+    public IntPtr ProcessName;
+    public IntPtr UserSid;
+  }
+
   [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
   private static extern IntPtr CreateJobObjectW(IntPtr attributes, string name);
+
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  private static extern IntPtr OpenJobObjectW(uint desiredAccess, bool inheritHandle, string name);
 
   [DllImport("kernel32.dll", SetLastError = true)]
   private static extern bool SetInformationJobObject(
@@ -94,10 +111,23 @@ public static class KodaXEffectJob {
   [DllImport("kernel32.dll", SetLastError = true)]
   private static extern bool CloseHandle(IntPtr handle);
 
+  [DllImport("wtsapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  private static extern bool WTSEnumerateProcessesW(
+    IntPtr server,
+    uint reserved,
+    uint version,
+    out IntPtr processInformation,
+    out uint count);
+
+  [DllImport("wtsapi32.dll")]
+  private static extern void WTSFreeMemory(IntPtr memory);
+
   private const uint Synchronize = 0x00100000;
   private const uint ProcessTerminate = 0x0001;
   private const uint ProcessSetQuota = 0x0100;
   private const uint ProcessQueryLimitedInformation = 0x1000;
+  private const uint JobObjectTerminate = 0x0008;
+  private const uint JobObjectQuery = 0x0004;
   private const uint JobObjectLimitKillOnJobClose = 0x00002000;
   private const uint WaitObject0 = 0;
 
@@ -166,6 +196,68 @@ public static class KodaXEffectJob {
       CloseHandle(job);
     }
   }
+
+  public static bool TerminateAndDrain(string jobName) {
+    var job = OpenJobObjectW(JobObjectTerminate | JobObjectQuery, false, jobName);
+    if (job == IntPtr.Zero) {
+      var error = Marshal.GetLastWin32Error();
+      if (error == 2) return false;
+      throw new InvalidOperationException(
+        "OpenJobObject failed with Win32 error " + error);
+    }
+    try {
+      Require(TerminateJobObject(job, 1), "TerminateJobObject");
+      while (true) {
+        BasicAccountingInformation accounting;
+        Require(QueryInformationJobObject(
+          job,
+          1,
+          out accounting,
+          (uint)Marshal.SizeOf(typeof(BasicAccountingInformation)),
+          IntPtr.Zero),
+          "QueryInformationJobObject");
+        if (accounting.ActiveProcesses == 0) return true;
+        Thread.Sleep(10);
+      }
+    } finally {
+      CloseHandle(job);
+    }
+  }
+
+  public static bool HasProcessWithSid(string expectedSid) {
+    var expected = new SecurityIdentifier(expectedSid);
+    using (var identity = WindowsIdentity.GetCurrent()) {
+      var current = identity.User;
+      var principal = new WindowsPrincipal(identity);
+      if (
+        (current == null || !current.Equals(expected))
+        && !principal.IsInRole(WindowsBuiltInRole.Administrator)
+      ) {
+        throw new InvalidOperationException(
+          "Machine-wide inspection of a foreign Windows SID requires an elevated administrator token");
+      }
+    }
+    IntPtr processes;
+    uint count;
+    Require(
+      WTSEnumerateProcessesW(IntPtr.Zero, 0, 1, out processes, out count),
+      "WTSEnumerateProcesses");
+    try {
+      var entrySize = Marshal.SizeOf(typeof(WtsProcessInformation));
+      for (uint index = 0; index < count; index++) {
+        var entryAddress = new IntPtr(processes.ToInt64() + ((long)index * entrySize));
+        var entry = (WtsProcessInformation)Marshal.PtrToStructure(
+          entryAddress,
+          typeof(WtsProcessInformation));
+        if (entry.UserSid == IntPtr.Zero) continue;
+        var candidate = new SecurityIdentifier(entry.UserSid);
+        if (candidate.Equals(expected)) return true;
+      }
+    } finally {
+      WTSFreeMemory(processes);
+    }
+    return false;
+  }
 }`;
 
 const WINDOWS_EFFECT_JOB_SCRIPT = String.raw`
@@ -178,10 +270,20 @@ try {
 ${WINDOWS_EFFECT_JOB_SOURCE}
 '@
   Add-Type -TypeDefinition $source
-  [KodaXEffectJob]::Run(
-    [uint32]$payload.targetPid,
-    [uint32]$payload.ownerPid,
-    [string]$payload.jobName)
+  if ($payload.action -eq 'recover') {
+    $drained = [KodaXEffectJob]::TerminateAndDrain([string]$payload.jobName)
+    [Console]::Out.WriteLine($(if ($drained) { 'DRAINED' } else { 'NOT_FOUND' }))
+    [Console]::Out.Flush()
+  } elseif ($payload.action -eq 'sid-active') {
+    $active = [KodaXEffectJob]::HasProcessWithSid([string]$payload.sid)
+    [Console]::Out.WriteLine($(if ($active) { 'ACTIVE' } else { 'CLEAR' }))
+    [Console]::Out.Flush()
+  } else {
+    [KodaXEffectJob]::Run(
+      [uint32]$payload.targetPid,
+      [uint32]$payload.ownerPid,
+      [string]$payload.jobName)
+  }
   exit 0
 } catch {
   [Console]::Out.WriteLine('ERROR:' + $_.Exception.Message)
@@ -199,14 +301,201 @@ export interface WindowsEffectJob {
   readonly drained: Promise<void>;
   /** The process that owns the Job handle and proves the effect is still fenced. */
   readonly supervisorPid: number;
+  /** Unique kernel Job name persisted by recovery tickets across host restarts. */
+  readonly jobName: string;
   /** Stops the supervisor and its pipes from keeping the Node.js event loop alive. */
   unref?(): void;
+}
+
+interface WindowsEffectJobActionResult {
+  readonly exitCode: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly stderr: string;
+  readonly stdout: string;
 }
 
 function unrefIfSupported(resource: object | null): void {
   if (resource === null) return;
   const unref = Reflect.get(resource, 'unref');
   if (typeof unref === 'function') unref.call(resource);
+}
+
+function windowsPowerShellPath(): string {
+  return path.join(
+    process.env.SystemRoot ?? 'C:\\Windows',
+    'System32',
+    'WindowsPowerShell',
+    'v1.0',
+    'powershell.exe',
+  );
+}
+
+function spawnWindowsEffectJobAction(
+  payloadValue: Readonly<Record<string, unknown>>,
+): ChildProcess {
+  const payload = Buffer.from(JSON.stringify(payloadValue), 'utf8').toString('base64');
+  return spawn(windowsPowerShellPath(), [
+    '-NoProfile',
+    '-NonInteractive',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-EncodedCommand',
+    WINDOWS_EFFECT_JOB_ENCODED_COMMAND,
+  ], {
+    env: { ...process.env, [PAYLOAD_ENV]: payload },
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+  });
+}
+
+class WindowsEffectJobActionObserver {
+  private readonly stderrChunks: Buffer[] = [];
+  private readonly stdoutChunks: Buffer[] = [];
+  private outputBytes = 0;
+  private settled = false;
+  private stopFailure: Error | undefined;
+  private stopping = false;
+  private timer: NodeJS.Timeout | undefined;
+
+  constructor(
+    private readonly child: ChildProcess,
+    private readonly timeoutMs: number,
+    private readonly subject: string,
+    private readonly resolve: (result: WindowsEffectJobActionResult) => void,
+    private readonly reject: (error: Error) => void,
+  ) {}
+
+  start(): void {
+    this.timer = setTimeout(() => {
+      this.requestStop(new Error(
+        `${this.subject} timed out after ${Math.max(1, this.timeoutMs)} ms.`,
+      ));
+    }, Math.max(1, this.timeoutMs));
+    this.child.stdout?.on('data', this.onStdout);
+    this.child.stderr?.on('data', this.onStderr);
+    this.child.on('error', this.onError);
+    this.child.on('close', this.onClose);
+  }
+
+  private stopObservingOutput(): void {
+    if (this.timer !== undefined) clearTimeout(this.timer);
+    this.child.stdout?.off('data', this.onStdout);
+    this.child.stderr?.off('data', this.onStderr);
+    this.child.stdout?.resume();
+    this.child.stderr?.resume();
+  }
+
+  private cleanup(): void {
+    this.stopObservingOutput();
+    this.child.off('error', this.onError);
+    this.child.off('close', this.onClose);
+  }
+
+  private rejectFailure(error: Error): void {
+    if (this.settled) return;
+    this.settled = true;
+    this.stopObservingOutput();
+    this.child.unref();
+    unrefIfSupported(this.child.stdout);
+    unrefIfSupported(this.child.stderr);
+    this.reject(error);
+  }
+
+  private requestStop(error: Error): void {
+    if (this.stopping || this.settled) return;
+    this.stopping = true;
+    this.stopFailure = error;
+    this.stopObservingOutput();
+    void killChildProcessTree(this.child).then(
+      (result) => this.rejectStopFailure(error, result.status === 'unknown'),
+      (killError: unknown) => this.rejectKillFailure(error, killError),
+    );
+  }
+
+  private rejectStopFailure(error: Error, terminationUnknown: boolean): void {
+    const failure = this.stopFailure ?? error;
+    this.rejectFailure(terminationUnknown
+      ? new AggregateError(
+          [failure],
+          `${failure.message} Helper process-tree termination was not confirmed.`,
+        )
+      : failure);
+  }
+
+  private rejectKillFailure(error: Error, killError: unknown): void {
+    const failure = this.stopFailure ?? error;
+    this.rejectFailure(new AggregateError(
+      [failure, killError],
+      `${failure.message} Its helper could not be terminated.`,
+    ));
+  }
+
+  private append(chunks: Buffer[], chunk: Buffer | string): void {
+    const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    this.outputBytes += value.byteLength;
+    if (this.outputBytes > SUPERVISOR_OUTPUT_LIMIT) {
+      this.requestStop(new Error(
+        `${this.subject} exceeded its ${SUPERVISOR_OUTPUT_LIMIT}-byte output limit.`,
+      ));
+      return;
+    }
+    chunks.push(value);
+  }
+
+  private readonly onStdout = (chunk: Buffer | string): void => {
+    this.append(this.stdoutChunks, chunk);
+  };
+
+  private readonly onStderr = (chunk: Buffer | string): void => {
+    this.append(this.stderrChunks, chunk);
+  };
+
+  private readonly onError = (error: Error): void => {
+    const failure = new Error(`${this.subject} failed to start: ${error.message}`, { cause: error });
+    if (this.stopping && this.stopFailure !== undefined) {
+      this.stopFailure = new AggregateError(
+        [this.stopFailure, failure],
+        `${this.subject} failed while its helper was being terminated.`,
+      );
+      return;
+    }
+    this.rejectFailure(failure);
+  };
+
+  private readonly onClose = (
+    exitCode: number | null,
+    signal: NodeJS.Signals | null,
+  ): void => {
+    this.cleanup();
+    if (this.settled) return;
+    if (this.stopping && this.stopFailure !== undefined) {
+      this.rejectFailure(this.stopFailure);
+      return;
+    }
+    this.settled = true;
+    this.resolve({
+      exitCode,
+      signal,
+      stdout: Buffer.concat(this.stdoutChunks).toString('utf8'),
+      stderr: Buffer.concat(this.stderrChunks).toString('utf8'),
+    });
+  };
+}
+
+function runWindowsEffectJobAction(
+  payloadValue: Readonly<Record<string, unknown>>,
+  timeoutMs: number,
+  subject: string,
+): Promise<WindowsEffectJobActionResult> {
+  let child: ChildProcess;
+  try {
+    child = spawnWindowsEffectJobAction(payloadValue);
+  } catch (error: unknown) {
+    return Promise.reject(new Error(`${subject} failed to start: ${String(error)}`, { cause: error }));
+  }
+  return new Promise<WindowsEffectJobActionResult>((resolve, reject) => {
+    new WindowsEffectJobActionObserver(child, timeoutMs, subject, resolve, reject).start();
+  });
 }
 
 export async function containWindowsEffectProcess(
@@ -216,17 +505,12 @@ export async function containWindowsEffectProcess(
   if (process.platform !== 'win32') {
     throw new Error('Windows effect Job containment is available only on Windows.');
   }
-  const powershell = path.join(
-    process.env.SystemRoot ?? 'C:\\Windows',
-    'System32',
-    'WindowsPowerShell',
-    'v1.0',
-    'powershell.exe',
-  );
+  const powershell = windowsPowerShellPath();
+  const jobName = `Global\\KodaXEffect-${randomUUID()}`;
   const payload = Buffer.from(JSON.stringify({
     targetPid: processPid,
     ownerPid,
-    jobName: `KodaXEffect-${randomUUID()}`,
+    jobName,
   }), 'utf8').toString('base64');
   let supervisor: ChildProcess;
   try {
@@ -277,6 +561,7 @@ export async function containWindowsEffectProcess(
   return {
     drained,
     supervisorPid: supervisor.pid,
+    jobName,
     unref: () => {
       if (unreferenced) return;
       unreferenced = true;
@@ -285,6 +570,57 @@ export async function containWindowsEffectProcess(
       unrefIfSupported(supervisor.stderr);
     },
   };
+}
+
+export async function terminateWindowsEffectJob(
+  jobName: string,
+  timeoutMs = 15_000,
+): Promise<'drained' | 'not_found'> {
+  if (process.platform !== 'win32') {
+    throw new Error('Windows effect Job recovery is available only on Windows.');
+  }
+  if (!WINDOWS_EFFECT_JOB_NAME_PATTERN.test(jobName)) {
+    throw new Error('Windows effect Job recovery received an invalid Job name.');
+  }
+  const result = await runWindowsEffectJobAction({
+    action: 'recover',
+    jobName,
+  }, timeoutMs, 'Windows effect Job recovery');
+  const output = result.stdout.trim().split(/\r?\n/).at(-1);
+  if (result.exitCode !== 0 || (output !== 'DRAINED' && output !== 'NOT_FOUND')) {
+    throw new Error(
+      `Windows effect Job recovery failed (exit ${String(result.exitCode)}`
+      + `${result.signal === null ? '' : `, signal ${result.signal}`}): `
+      + `${result.stdout.trim() || result.stderr.trim() || '(empty output)'}.`,
+    );
+  }
+  return output === 'DRAINED' ? 'drained' : 'not_found';
+}
+
+export async function windowsSandboxSidHasActiveProcesses(
+  sid: string,
+  timeoutMs = 15_000,
+): Promise<boolean> {
+  if (process.platform !== 'win32') {
+    throw new Error('Windows sandbox process inspection is available only on Windows.');
+  }
+  if (!/^S-1-(?:\d+-)+\d+$/i.test(sid)) {
+    throw new Error('Windows sandbox process inspection received an invalid SID.');
+  }
+  const result = await runWindowsEffectJobAction(
+    { action: 'sid-active', sid },
+    timeoutMs,
+    'Windows sandbox process inspection',
+  );
+  const output = result.stdout.trim().split(/\r?\n/).at(-1);
+  if (result.exitCode !== 0 || (output !== 'ACTIVE' && output !== 'CLEAR')) {
+    throw new Error(
+      `Windows sandbox process inspection failed (exit ${String(result.exitCode)}`
+      + `${result.signal === null ? '' : `, signal ${result.signal}`}): `
+      + `${result.stdout.trim() || result.stderr.trim() || '(empty output)'}.`,
+    );
+  }
+  return output === 'ACTIVE';
 }
 
 function waitForEffectJobReady(supervisor: ChildProcess): Promise<void> {

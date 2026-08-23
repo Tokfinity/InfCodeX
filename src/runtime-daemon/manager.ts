@@ -81,6 +81,14 @@ export async function acquireRuntimeDaemonLease(
     && Number.isSafeInteger(supervisorPid)
     && supervisorPid > 0;
   const processStartIdentity = readRuntimeOwnerProcessStartIdentity(process.pid);
+  const supervisorProcessStartIdentity = jobContained
+    ? readRuntimeOwnerProcessStartIdentity(supervisorPid)
+    : undefined;
+  if (jobContained && supervisorProcessStartIdentity === undefined) {
+    throw new Error(
+      'Could not read the Windows Job supervisor process identity; refusing PID-only ownership.',
+    );
+  }
   const owner = {
     runtimeId: `rt_${randomUUID().replace(/-/g, '').slice(0, 12)}`,
     pid: process.pid,
@@ -90,6 +98,7 @@ export async function acquireRuntimeDaemonLease(
     ...(jobContained ? {
       processContainment: 'windows-job' as const,
       supervisorPid,
+      supervisorProcessStartIdentity: supervisorProcessStartIdentity!,
     } : {}),
   };
 

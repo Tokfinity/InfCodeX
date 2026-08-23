@@ -30,6 +30,7 @@ vi.mock('@kodax-ai/agent', async (importOriginal) => ({
   containWindowsEffectProcess: vi.fn(async (pid: number) => ({
     drained: Promise.resolve(),
     supervisorPid: pid,
+    jobName: 'Global\\KodaXEffect-00000000-0000-4000-8000-000000000001',
     unref: () => undefined,
   })),
   killChildProcessTree: vi.fn(async () => ({ status: 'already-exited' as const })),
@@ -121,6 +122,7 @@ afterEach(async () => {
   vi.mocked(containWindowsEffectProcess).mockImplementation(async (pid: number) => ({
     drained: Promise.resolve(),
     supervisorPid: pid,
+    jobName: 'Global\\KodaXEffect-00000000-0000-4000-8000-000000000001',
     unref: () => undefined,
   }));
   vi.mocked(killChildProcessTree).mockResolvedValue({ status: 'already-exited' });

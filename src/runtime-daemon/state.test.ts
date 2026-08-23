@@ -248,6 +248,38 @@ describe('runtime daemon state paths', () => {
 });
 
 describe('runtime daemon lock ownership', () => {
+  it('round-trips the exact Windows supervisor generation and accepts legacy owners', () => {
+    const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
+    const exactOwner = {
+      runtimeId: 'runtime-contained',
+      pid: 111,
+      createdAt: '2026-07-14T00:00:00.000Z',
+      kind: 'daemon' as const,
+      processContainment: 'windows-job' as const,
+      supervisorPid: 222,
+      supervisorProcessStartIdentity: 'windows:134158464000000000',
+    };
+    const exactLock = tryAcquireRuntimeDaemonLock(paths, exactOwner);
+
+    expect(exactLock).toBeDefined();
+    expect(readRuntimeDaemonLockOwner(paths.lockFile)).toEqual(exactOwner);
+    expect(exactLock ? releaseRuntimeDaemonLock(exactLock) : false).toBe(true);
+
+    const legacyOwner = {
+      runtimeId: 'runtime-contained-legacy',
+      pid: 333,
+      createdAt: '2026-07-14T00:00:01.000Z',
+      kind: 'daemon' as const,
+      processContainment: 'windows-job' as const,
+      supervisorPid: 444,
+    };
+    const legacyLock = tryAcquireRuntimeDaemonLock(paths, legacyOwner);
+
+    expect(legacyLock).toBeDefined();
+    expect(readRuntimeDaemonLockOwner(paths.lockFile)).toEqual(legacyOwner);
+    expect(legacyLock ? releaseRuntimeDaemonLock(legacyLock) : false).toBe(true);
+  });
+
   it('fsyncs a user-only owner lock before returning ownership', () => {
     const paths = resolveRuntimeDaemonPaths(tempHome(), 'default');
     let lock: ReturnType<typeof tryAcquireRuntimeDaemonLock> = undefined;

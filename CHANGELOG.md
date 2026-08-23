@@ -6,6 +6,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Windows sandbox cleanup now keeps every ACL-mutating helper and command owner
+  in a recoverable machine-global Job, persists only self-healing recovery
+  tickets, and retries process drain, ACL reset, and filesystem-effect fence
+  release in the background without blocking unrelated work. Runtime shutdown
+  also verifies exact daemon and supervisor process generations, so PID reuse or
+  an interrupted exit cannot strand a manual-recovery requirement.
+
 ---
 
 ## [0.7.94] - 2026-08-21

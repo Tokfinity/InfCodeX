@@ -47,6 +47,7 @@ export type RuntimeExitSettlement =
       readonly nextAction:
         | 'keep-open'
         | 'relaunch-space'
+        | 'retry-automatically'
         | 'restart-system'
         | 'manual-recovery';
       readonly message: string;
@@ -163,6 +164,7 @@ const PUBLIC_EXIT_TRANSACTION_TIMEOUT_MS = 480_000;
 const MANAGEMENT_PHASE_TIMEOUT_MS = 10_000;
 const RUNTIME_CLOSE_TIMEOUT_MS = 5_000;
 const WINDOWS_JOB_EXIT_RESERVE_MS = 10_000;
+const WINDOWS_SUPERVISOR_GENERATION_POLL_MS = 250;
 const WINDOWS_PROCESS_TREE_RECOVERY_TIMEOUT_MS = 80_000;
 const WINDOWS_ACL_RECOVERY_TIMEOUT_MS = 70_000;
 const WINDOWS_MARKER_CLEAR_TIMEOUT_MS = 40_000;
@@ -643,7 +645,7 @@ function resumeRuntimeExitIntent(
     updatedAt: now,
   };
   if (dependencies.platform === 'win32') {
-    const validation = validateWindowsOwner(candidate, 'restart-system');
+    const validation = validateWindowsOwner(candidate, 'retry-automatically');
     if (validation !== undefined) return validation;
   }
   if (
@@ -674,7 +676,7 @@ async function settleAcceptedRuntimeExit(
         'A Windows Runtime recovery ticket cannot authorize POSIX owner cleanup.',
       );
     }
-    const ownerValidation = validateWindowsOwner(intent, 'restart-system');
+    const ownerValidation = validateWindowsOwner(intent, 'retry-automatically');
     if (ownerValidation !== undefined) return ownerValidation;
     const refreshed = await refreshPreviousBootAclRecovery(
       paths,
@@ -687,7 +689,7 @@ async function settleAcceptedRuntimeExit(
   }
 
   if (dependencies.platform === 'win32') {
-    const ownerValidation = validateWindowsOwner(intent, 'restart-system');
+    const ownerValidation = validateWindowsOwner(intent, 'retry-automatically');
     if (ownerValidation !== undefined) return ownerValidation;
   }
   const currentOwner = readRuntimeDaemonLockOwner(paths.lockFile);
@@ -701,7 +703,7 @@ async function settleAcceptedRuntimeExit(
   if (dependencies.platform === 'win32' && currentBootIdentity === undefined) {
     return blocked(
       'containment_unavailable',
-      'restart-system',
+      'retry-automatically',
       'The current Windows boot identity could not be verified.',
     );
   }
@@ -757,7 +759,7 @@ async function settleAcceptedRuntimeExit(
       if (dependencies.isPidAlive(owner.pid)) {
         return blocked(
           'owner_identity_mismatch',
-          'restart-system',
+          'retry-automatically',
           'The retained daemon PID process identity could not be verified.',
         );
       }
@@ -785,7 +787,7 @@ async function settleAcceptedRuntimeExit(
       ) {
         return blocked(
           'cleanup_unverified',
-          'restart-system',
+          'retry-automatically',
           'The exact Windows daemon process tree did not prove that it exited.',
         );
       }
@@ -800,14 +802,15 @@ async function settleAcceptedRuntimeExit(
   if (
     dependencies.platform === 'win32'
     && !previousWindowsBoot
-    && !await dependencies.waitForProcessExit(
-      owner.supervisorPid!,
+    && !await waitForWindowsSupervisorGenerationExit(
+      owner,
       Math.min(WINDOWS_JOB_EXIT_RESERVE_MS, remainingTimeoutMs(deadline)),
+      dependencies,
     )
   ) {
     return blocked(
       'containment_active',
-      'restart-system',
+      'retry-automatically',
       'Windows Job containment has not proved that the Runtime process tree is empty.',
     );
   }
@@ -881,6 +884,38 @@ async function settleAcceptedRuntimeExit(
   return finalizeRecoveredExit(paths, recovered, deadline, dependencies, repairs);
 }
 
+async function waitForWindowsSupervisorGenerationExit(
+  owner: RuntimeDaemonLockOwner,
+  timeoutMs: number,
+  dependencies: RuntimeExitSettlementDependencies,
+): Promise<boolean> {
+  const supervisorPid = owner.supervisorPid!;
+  const expectedIdentity = owner.supervisorProcessStartIdentity;
+  if (expectedIdentity === undefined) {
+    // Legacy owner/ticket compatibility: PID-only evidence may delay recovery,
+    // but it never authorizes signalling or assumes that a replacement exited.
+    return dependencies.waitForProcessExit(supervisorPid, timeoutMs);
+  }
+  let remainingMs = timeoutMs;
+  while (remainingMs > 0) {
+    if (supervisorGenerationExited(supervisorPid, expectedIdentity, dependencies)) return true;
+    const pollMs = Math.min(WINDOWS_SUPERVISOR_GENERATION_POLL_MS, remainingMs);
+    if (await dependencies.waitForProcessExit(supervisorPid, pollMs)) return true;
+    remainingMs -= pollMs;
+  }
+  return supervisorGenerationExited(supervisorPid, expectedIdentity, dependencies);
+}
+
+function supervisorGenerationExited(
+  supervisorPid: number,
+  expectedIdentity: string,
+  dependencies: RuntimeExitSettlementDependencies,
+): boolean {
+  const currentIdentity = dependencies.readProcessStartIdentity(supervisorPid);
+  if (currentIdentity !== undefined) return currentIdentity !== expectedIdentity;
+  return !dependencies.isPidAlive(supervisorPid);
+}
+
 function posixManualRecoveryMessage(paths: RuntimeDaemonPaths): string {
   return 'The retained POSIX process tree cannot be settled safely without its original '
     + 'kernel-backed supervisor. Keep the retained settlement ticket, restart the operating '
@@ -913,7 +948,7 @@ async function refreshPreviousBootAclRecovery(
   if (currentBootIdentity === undefined) {
     return blocked(
       'containment_unavailable',
-      'restart-system',
+      'retry-automatically',
       'The current Windows boot identity could not be verified.',
     );
   }
@@ -993,10 +1028,10 @@ async function finalizeRecoveredExit(
 
 function windowsAclRecoveryNextAction(
   error: unknown,
-): 'restart-system' | 'manual-recovery' {
-  if (error === null || typeof error !== 'object') return 'restart-system';
+): 'retry-automatically' | 'manual-recovery' {
+  if (error === null || typeof error !== 'object') return 'retry-automatically';
   const recoveryAction = Reflect.get(error, 'recoveryAction');
-  return recoveryAction === 'manual-recovery' ? 'manual-recovery' : 'restart-system';
+  return recoveryAction === 'manual-recovery' ? 'manual-recovery' : 'retry-automatically';
 }
 
 function removeExactOwnership(paths: RuntimeDaemonPaths, owner: RuntimeDaemonLockOwner): boolean {
@@ -1240,7 +1275,12 @@ function isRuntimeDaemonOwner(value: unknown): value is RuntimeDaemonLockOwner {
     && (owner.processContainment === undefined || owner.processContainment === 'windows-job')
     && (owner.supervisorPid === undefined || (
       Number.isSafeInteger(owner.supervisorPid) && Number(owner.supervisorPid) > 0
-    ));
+    ))
+    && (owner.supervisorProcessStartIdentity === undefined
+      || (typeof owner.supervisorProcessStartIdentity === 'string'
+        && owner.supervisorProcessStartIdentity.length > 0))
+    && (owner.processContainment === 'windows-job'
+      || owner.supervisorProcessStartIdentity === undefined);
 }
 
 function sameOwner(
@@ -1254,7 +1294,8 @@ function sameOwner(
     && left.kind === right.kind
     && left.processStartIdentity === right.processStartIdentity
     && left.processContainment === right.processContainment
-    && left.supervisorPid === right.supervisorPid;
+    && left.supervisorPid === right.supervisorPid
+    && left.supervisorProcessStartIdentity === right.supervisorProcessStartIdentity;
 }
 
 function blocked(
@@ -1268,7 +1309,7 @@ function blocked(
 function settlementDeadlineBlocked(platform: NodeJS.Platform): RuntimeExitSettlement {
   return blocked(
     'cleanup_unverified',
-    platform === 'win32' ? 'restart-system' : 'manual-recovery',
+    platform === 'win32' ? 'retry-automatically' : 'manual-recovery',
     'Runtime exit settlement reached its fixed transaction deadline before cleanup was proved.',
   );
 }

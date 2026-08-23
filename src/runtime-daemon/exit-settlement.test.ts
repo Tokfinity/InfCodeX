@@ -455,6 +455,167 @@ describe('runtime exit settlement', () => {
     expect(readRuntimeExitSettlementIntent(configHome, 'coder')).toBeUndefined();
   });
 
+  it('settles when the Windows Job supervisor PID belongs to a replacement generation', async () => {
+    const configHome = tempConfigHome();
+    const expectedOwner = {
+      ...owner(),
+      supervisorProcessStartIdentity: 'supervisor-start-4102',
+    };
+    seedDaemon(configHome, expectedOwner);
+    const waitForProcessExit = vi.fn(async () => false);
+    const kill = vi.fn(async () => 'terminated' as const);
+
+    const result = await settleRuntimeDaemonExitForTest({
+      configHome,
+      profile: 'coder',
+      runtime: runtime(expectedOwner),
+      timeoutMs: TEST_TRANSACTION_TIMEOUT_MS,
+    }, dependencies({
+      isPidAlive: vi.fn((pid) => pid === expectedOwner.supervisorPid),
+      readProcessStartIdentity: vi.fn((pid) => (
+        pid === expectedOwner.supervisorPid ? 'replacement-supervisor-generation' : undefined
+      )),
+      waitForProcessExit,
+      killPidTree: kill,
+    }));
+
+    expect(result).toEqual({
+      status: 'recovered',
+      repairs: ['windows_sandbox_acl'],
+    });
+    expect(kill).not.toHaveBeenCalled();
+    expect(waitForProcessExit).not.toHaveBeenCalledWith(
+      expectedOwner.supervisorPid,
+      expect.any(Number),
+    );
+    expect(readRuntimeExitSettlementIntent(configHome, 'coder')).toBeUndefined();
+  });
+
+  it('settles when the Windows Job supervisor PID is reused during the bounded wait', async () => {
+    const configHome = tempConfigHome();
+    const expectedOwner = {
+      ...owner(),
+      supervisorProcessStartIdentity: 'supervisor-start-4102',
+    };
+    seedDaemon(configHome, expectedOwner);
+    let supervisorIdentityReads = 0;
+    const waitForProcessExit = vi.fn(async () => false);
+    const kill = vi.fn(async () => 'terminated' as const);
+
+    const result = await settleRuntimeDaemonExitForTest({
+      configHome,
+      profile: 'coder',
+      runtime: runtime(expectedOwner),
+      timeoutMs: TEST_TRANSACTION_TIMEOUT_MS,
+    }, dependencies({
+      isPidAlive: vi.fn((pid) => pid === expectedOwner.supervisorPid),
+      readProcessStartIdentity: vi.fn((pid) => {
+        if (pid !== expectedOwner.supervisorPid) return undefined;
+        supervisorIdentityReads += 1;
+        return supervisorIdentityReads === 1
+          ? expectedOwner.supervisorProcessStartIdentity
+          : 'replacement-supervisor-generation';
+      }),
+      waitForProcessExit,
+      killPidTree: kill,
+    }));
+
+    expect(result).toEqual({
+      status: 'recovered',
+      repairs: ['windows_sandbox_acl'],
+    });
+    expect(waitForProcessExit).toHaveBeenCalledWith(
+      expectedOwner.supervisorPid,
+      expect.toSatisfy((timeoutMs: number) => timeoutMs <= 250),
+    );
+    expect(kill).not.toHaveBeenCalled();
+  });
+
+  it('persists the exact supervisor generation in the restart-safe settlement intent', async () => {
+    const configHome = tempConfigHome();
+    const expectedOwner = {
+      ...owner(),
+      supervisorProcessStartIdentity: 'supervisor-start-4102',
+    };
+    seedDaemon(configHome, expectedOwner);
+
+    const result = await settleRuntimeDaemonExitForTest({
+      configHome,
+      profile: 'coder',
+      runtime: runtime(expectedOwner),
+      timeoutMs: TEST_TRANSACTION_TIMEOUT_MS,
+    }, dependencies({
+      isPidAlive: vi.fn((pid) => pid === expectedOwner.supervisorPid),
+      readProcessStartIdentity: vi.fn((pid) => (
+        pid === expectedOwner.supervisorPid
+          ? expectedOwner.supervisorProcessStartIdentity
+          : undefined
+      )),
+      waitForProcessExit: vi.fn(async () => false),
+    }));
+
+    expect(result).toMatchObject({
+      status: 'blocked',
+      reason: 'containment_active',
+      nextAction: 'retry-automatically',
+    });
+    expect(readRuntimeExitSettlementIntent(configHome, 'coder')).toMatchObject({
+      owner: {
+        runtimeId: expectedOwner.runtimeId,
+        supervisorPid: expectedOwner.supervisorPid,
+        supervisorProcessStartIdentity: expectedOwner.supervisorProcessStartIdentity,
+      },
+    });
+  });
+
+  it('keeps legacy PID-only containment safe and converges after the supervisor exits', async () => {
+    const configHome = tempConfigHome();
+    const expectedOwner = owner();
+    seedDaemon(configHome, expectedOwner);
+    const firstWait = vi.fn(async () => false);
+
+    const first = await settleRuntimeDaemonExitForTest({
+      configHome,
+      profile: 'coder',
+      runtime: runtime(expectedOwner),
+      timeoutMs: TEST_TRANSACTION_TIMEOUT_MS,
+    }, dependencies({
+      isPidAlive: vi.fn((pid) => pid === expectedOwner.supervisorPid),
+      readProcessStartIdentity: vi.fn(() => 'untrusted-current-generation'),
+      waitForProcessExit: firstWait,
+    }));
+
+    expect(first).toMatchObject({
+      status: 'blocked',
+      reason: 'containment_active',
+      nextAction: 'retry-automatically',
+    });
+    expect(firstWait).toHaveBeenCalledWith(expectedOwner.supervisorPid, expect.any(Number));
+    expect(readRuntimeExitSettlementIntent(configHome, 'coder')).toMatchObject({
+      owner: {
+        runtimeId: expectedOwner.runtimeId,
+        supervisorPid: expectedOwner.supervisorPid,
+      },
+    });
+    expect(readRuntimeExitSettlementIntent(configHome, 'coder')?.owner)
+      .not.toHaveProperty('supervisorProcessStartIdentity');
+
+    const resumed = await settleRuntimeDaemonExitForTest({
+      configHome,
+      profile: 'coder',
+      timeoutMs: TEST_TRANSACTION_TIMEOUT_MS,
+    }, dependencies({
+      isPidAlive: vi.fn(() => false),
+      waitForProcessExit: vi.fn(async () => true),
+    }));
+
+    expect(resumed).toEqual({
+      status: 'recovered',
+      repairs: ['windows_sandbox_acl'],
+    });
+    expect(readRuntimeExitSettlementIntent(configHome, 'coder')).toBeUndefined();
+  });
+
   it('continues settlement when the retained Windows PID exits before identity verification', async () => {
     const configHome = tempConfigHome();
     const expectedOwner = owner();
@@ -662,7 +823,11 @@ describe('runtime exit settlement', () => {
         throw new Error('pause after acceptance proof');
       }),
     }));
-    expect(first).toMatchObject({ status: 'blocked', reason: 'cleanup_failed' });
+    expect(first).toMatchObject({
+      status: 'blocked',
+      reason: 'cleanup_failed',
+      nextAction: 'retry-automatically',
+    });
     const accepted = readRuntimeExitSettlementIntent(configHome, 'coder');
     expect(accepted?.phase).toBe('stop_accepted');
     expect(managedRuntime.daemon.stopForInline).toHaveBeenCalledWith(expect.objectContaining({
@@ -1215,7 +1380,11 @@ describe('runtime exit settlement', () => {
       }),
     }));
 
-    expect(first).toMatchObject({ status: 'blocked', reason: 'cleanup_failed' });
+    expect(first).toMatchObject({
+      status: 'blocked',
+      reason: 'cleanup_failed',
+      nextAction: 'retry-automatically',
+    });
     expect(readRuntimeExitSettlementIntent(configHome, 'coder')).toMatchObject({
       phase: 'recovered',
       repairs: ['windows_sandbox_acl'],
@@ -1300,7 +1469,11 @@ describe('runtime exit settlement', () => {
         throw new Error('crash before marker clear');
       }),
     }));
-    expect(first).toMatchObject({ status: 'blocked', reason: 'cleanup_failed' });
+    expect(first).toMatchObject({
+      status: 'blocked',
+      reason: 'cleanup_failed',
+      nextAction: 'retry-automatically',
+    });
     expect(readRuntimeExitSettlementIntent(configHome, 'coder')?.phase).toBe('recovered');
 
     const resumed = await settleRuntimeDaemonExitForTest({

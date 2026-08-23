@@ -76,6 +76,8 @@ export interface RuntimeDaemonLockOwner {
   readonly processContainment?: 'windows-job';
   /** Process outside the Job whose exit proves that the Job became empty. */
   readonly supervisorPid?: number;
+  /** OS-issued identity that distinguishes the original supervisor from PID reuse. */
+  readonly supervisorProcessStartIdentity?: string;
 }
 
 export interface RuntimeOwnerPolicy {
@@ -954,7 +956,8 @@ function sameRuntimeLockOwner(
     && left.kind === right.kind
     && left.processStartIdentity === right.processStartIdentity
     && left.processContainment === right.processContainment
-    && left.supervisorPid === right.supervisorPid;
+    && left.supervisorPid === right.supervisorPid
+    && left.supervisorProcessStartIdentity === right.supervisorProcessStartIdentity;
 }
 
 function sameRuntimeDaemonState(
@@ -1093,9 +1096,16 @@ function isRuntimeDaemonLockOwner(value: unknown): value is RuntimeDaemonLockOwn
       || (typeof owner.processStartIdentity === 'string' && owner.processStartIdentity.length > 0)
     )
     && (owner.processContainment === undefined || owner.processContainment === 'windows-job')
+    && (
+      owner.supervisorProcessStartIdentity === undefined
+      || (
+        typeof owner.supervisorProcessStartIdentity === 'string'
+        && owner.supervisorProcessStartIdentity.length > 0
+      )
+    )
     && (owner.processContainment === 'windows-job'
       ? Number.isSafeInteger(owner.supervisorPid) && (owner.supervisorPid as number) > 0
-      : owner.supervisorPid === undefined);
+      : owner.supervisorPid === undefined && owner.supervisorProcessStartIdentity === undefined);
 }
 
 function isRuntimeDaemonStatus(value: unknown): value is RuntimeDaemonStatus {

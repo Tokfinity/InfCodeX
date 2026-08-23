@@ -2,6 +2,7 @@ import { isRuntimeDaemonPidAlive } from './lifecycle.js';
 import {
   readRuntimeDaemonLockOwner,
   readRuntimeDaemonShutdownOutcome,
+  readRuntimeOwnerProcessStartIdentity,
   resolveRuntimeDaemonPathsFromConfigHome,
   type RuntimeDaemonShutdownOutcome,
 } from './state.js';
@@ -10,8 +11,10 @@ export interface RuntimeDaemonShutdownVerificationOwner {
   readonly runtimeId: string;
   readonly pid: number;
   readonly kind?: 'daemon' | 'inline';
+  readonly processStartIdentity?: string;
   readonly processContainment?: 'windows-job';
   readonly supervisorPid?: number;
+  readonly supervisorProcessStartIdentity?: string;
 }
 
 export interface RuntimeDaemonShutdownVerificationInput {
@@ -63,10 +66,31 @@ export async function waitForRuntimeDaemonShutdown(
     throw new Error('Runtime daemon shutdown verification poll interval must be positive.');
   }
   if (
+    input.owner.processStartIdentity !== undefined
+    && (
+      typeof input.owner.processStartIdentity !== 'string'
+      || input.owner.processStartIdentity.length === 0
+    )
+  ) {
+    throw new Error('Runtime daemon process identity must be non-empty when provided.');
+  }
+  if (
     input.owner.processContainment === 'windows-job'
     && (!Number.isSafeInteger(input.owner.supervisorPid) || input.owner.supervisorPid! <= 0)
   ) {
     throw new Error('Windows Job containment requires a positive supervisor PID.');
+  }
+  if (
+    input.owner.supervisorProcessStartIdentity !== undefined
+    && (
+      input.owner.processContainment !== 'windows-job'
+      || typeof input.owner.supervisorProcessStartIdentity !== 'string'
+      || input.owner.supervisorProcessStartIdentity.length === 0
+    )
+  ) {
+    throw new Error(
+      'A supervisor process identity requires Windows Job containment and must be non-empty.',
+    );
   }
 
   const paths = resolveRuntimeDaemonPathsFromConfigHome(
@@ -86,9 +110,12 @@ export async function waitForRuntimeDaemonShutdown(
     ) ? currentOwner : undefined;
 
     const outcome = readRuntimeDaemonShutdownOutcome(paths, input.owner);
-    const daemonActive = isRuntimeDaemonPidAlive(input.owner.pid);
+    const daemonActive = isOriginalProcessGenerationActive(
+      input.owner.pid,
+      input.owner.processStartIdentity,
+    );
     const containmentActive = input.owner.processContainment === 'windows-job'
-      && isRuntimeDaemonPidAlive(input.owner.supervisorPid!);
+      && isOriginalSupervisorGenerationActive(input.owner);
     if (outcome?.status === 'failed') return { status: 'failed', outcome };
     if (process.platform === 'win32' && input.owner.processContainment !== 'windows-job') {
       return { status: 'unverified', reason: 'containment_unavailable' };
@@ -111,6 +138,25 @@ export async function waitForRuntimeDaemonShutdown(
     if (Date.now() >= deadline) return { status: 'unverified', reason };
     await delay(Math.min(pollIntervalMs, Math.max(1, deadline - Date.now())));
   }
+}
+
+function isOriginalSupervisorGenerationActive(
+  owner: RuntimeDaemonShutdownVerificationOwner,
+): boolean {
+  return isOriginalProcessGenerationActive(
+    owner.supervisorPid!,
+    owner.supervisorProcessStartIdentity,
+  );
+}
+
+function isOriginalProcessGenerationActive(
+  pid: number,
+  expectedIdentity: string | undefined,
+): boolean {
+  if (!isRuntimeDaemonPidAlive(pid)) return false;
+  if (expectedIdentity === undefined) return true;
+  const currentIdentity = readRuntimeOwnerProcessStartIdentity(pid);
+  return currentIdentity === undefined || currentIdentity === expectedIdentity;
 }
 
 function delay(timeoutMs: number): Promise<void> {

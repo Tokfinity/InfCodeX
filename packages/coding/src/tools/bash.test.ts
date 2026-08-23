@@ -42,7 +42,12 @@ vi.mock('@kodax-ai/agent', async (importOriginal) => {
       }
       const drained = Promise.reject(windowsEffectJobMock.drainFailure);
       void drained.catch(() => undefined);
-      return { supervisorPid: pid, drained, unref: () => undefined };
+      return {
+        supervisorPid: pid,
+        jobName: 'Global\\KodaXEffect-00000000-0000-4000-8000-000000000001',
+        drained,
+        unref: () => undefined,
+      };
     },
     registerManagedChildProcess: (
       ...args: Parameters<typeof actual.registerManagedChildProcess>

@@ -102,7 +102,7 @@ describe('runtime daemon protocol schema', () => {
     })).toEqual([]);
   });
 
-  it('accepts the daemon owner process-start identity returned by management inspection', () => {
+  it('accepts daemon and supervisor process-start identities returned by management inspection', () => {
     const schema = RUNTIME_DAEMON_METHOD_SCHEMAS['daemon.management.get'].result;
 
     expect(validateRuntimeDaemonJsonSchema(schema, {
@@ -119,6 +119,9 @@ describe('runtime daemon protocol schema', () => {
         createdAt: '2026-08-12T00:00:00.000Z',
         kind: 'daemon',
         processStartIdentity: 'windows:134158464000000000',
+        processContainment: 'windows-job',
+        supervisorPid: 43,
+        supervisorProcessStartIdentity: 'windows:134158463000000000',
       },
       preflight: {},
     })).toEqual([]);

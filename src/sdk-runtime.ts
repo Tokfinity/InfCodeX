@@ -406,6 +406,8 @@ export interface RuntimeOwnerIdentity {
   readonly processStartIdentity?: string;
   readonly processContainment?: "windows-job";
   readonly supervisorPid?: number;
+  /** OS-issued identity used to distinguish the original supervisor from PID reuse. */
+  readonly supervisorProcessStartIdentity?: string;
 }
 
 export interface RuntimeOwnerState {
@@ -533,6 +535,9 @@ export function getKodaXRuntimeOwnerState(
             ? {}
             : { processContainment: owner.processContainment }),
           ...(owner.supervisorPid === undefined ? {} : { supervisorPid: owner.supervisorPid }),
+          ...(owner.supervisorProcessStartIdentity === undefined
+            ? {}
+            : { supervisorProcessStartIdentity: owner.supervisorProcessStartIdentity }),
         },
   };
 }
@@ -5023,7 +5028,9 @@ function samePreparedExitOwner(
     && owner.kind === intent.owner.kind
     && owner.processStartIdentity === intent.owner.processStartIdentity
     && owner.processContainment === intent.owner.processContainment
-    && owner.supervisorPid === intent.owner.supervisorPid;
+    && owner.supervisorPid === intent.owner.supervisorPid
+    && owner.supervisorProcessStartIdentity
+      === intent.owner.supervisorProcessStartIdentity;
 }
 
 function preparedExitTicketStillExact(

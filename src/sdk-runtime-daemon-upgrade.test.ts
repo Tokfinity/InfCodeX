@@ -998,6 +998,7 @@ describe('Runtime daemon capability upgrade', () => {
     ['kind', { kind: 'inline' as const }],
     ['process containment', { processContainment: undefined }],
     ['supervisor PID', { supervisorPid: 202 }],
+    ['supervisor process identity', { supervisorProcessStartIdentity: 'replacement-102' }],
   ])('rejects a prepared exit ticket whose %s identity changed before attach', async (
     _label,
     changedOwner,
@@ -1011,6 +1012,7 @@ describe('Runtime daemon capability upgrade', () => {
       processStartIdentity: 'process-start-101',
       processContainment: 'windows-job' as const,
       supervisorPid: 102,
+      supervisorProcessStartIdentity: 'process-start-102',
     };
     upgradeMocks.readExitIntent.mockReturnValue({
       version: 1,

@@ -544,18 +544,28 @@ async function executeToolBash(
   const preparedEffectLease = sandboxInvocation?.fileSystemEffectLease;
   let releaseMutationLease: FileSystemMutationLeaseRelease;
   try {
-    releaseMutationLease = preparedEffectLease !== undefined
-      ? Object.assign(
-          () => preparedEffectLease.release(),
+    if (preparedEffectLease !== undefined) {
+      let reportReleased!: () => void;
+      const released = new Promise<void>((resolve) => { reportReleased = resolve; });
+      releaseMutationLease = Object.assign(
+          async () => {
+            await preparedEffectLease.release();
+            reportReleased();
+          },
           {
             bindEffectProcess: (
               pid: number,
               windowsJobContained: boolean,
             ) => preparedEffectLease.bindEffectProcess(pid, windowsJobContained),
             finishEffectProcess: () => preparedEffectLease.finishEffectProcess(),
+            released,
           },
-        )
-      : await acquireFileSystemMutationLease(sandboxInvocation?.fileSystemEffectPolicyKey);
+        );
+    } else {
+      releaseMutationLease = await acquireFileSystemMutationLease(
+        sandboxInvocation?.fileSystemEffectPolicyKey,
+      );
+    }
   } catch (error) {
     await cleanupSandbox();
     const message = error instanceof Error ? error.message : String(error);

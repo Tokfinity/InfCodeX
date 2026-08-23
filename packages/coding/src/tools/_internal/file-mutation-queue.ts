@@ -68,7 +68,6 @@ const FILE_SYSTEM_EFFECT_POLICY_TRANSITION_TIMEOUT_MS = 30_000;
 const FILE_SYSTEM_EFFECT_CLEANUP_TIMEOUT_MS = 130_000;
 const FILE_SYSTEM_EFFECT_POLL_MAX_MS = 500;
 const FILE_SYSTEM_EFFECT_RELEASE_ATTEMPTS = 3;
-const FILE_SYSTEM_EFFECT_BACKGROUND_RETRY_ATTEMPTS = 10;
 const FILE_SYSTEM_EFFECT_BACKGROUND_RETRY_MAX_MS = 5_000;
 const FILE_SYSTEM_EFFECT_BACKGROUND_LOCK_TIMEOUT_MS = 0;
 const EFFECT_STATE_FILE = 'model-filesystem-effects.json';
@@ -117,6 +116,7 @@ export interface FileSystemMutationLeaseRelease {
   (): Promise<void>;
   bindEffectProcess(pid: number, windowsJobContained: boolean): Promise<void>;
   finishEffectProcess(): Promise<void>;
+  readonly released: Promise<void>;
 }
 
 export class FileSystemCleanupAdmissionTimeoutError extends Error {
@@ -136,9 +136,12 @@ function effectRuntimePath(agentHome: string, name: string): string {
 }
 
 function captureEffectLeaseStorage(): EffectLeaseStorage {
+  const programData = Object.entries(process.env).find(
+    ([name, value]) => name.toUpperCase() === 'PROGRAMDATA' && value !== undefined,
+  )?.[1];
   const agentHome = process.platform === 'win32'
     ? path.join(
-        path.resolve(process.env.PROGRAMDATA ?? 'C:\\ProgramData'),
+        path.resolve(programData ?? 'C:\\ProgramData'),
         'KodaX',
         'sandbox-runtime',
       )
@@ -419,6 +422,7 @@ interface EffectLeaseLifecycle {
   releaseRecorded: boolean;
   releaseRequested: boolean;
   released: boolean;
+  reportReleased: () => void;
   stateUpdateAttempted: boolean;
 }
 
@@ -849,21 +853,20 @@ async function retryEffectLeaseUpdate(operation: () => Promise<void>): Promise<v
 function scheduleUnrefRetry(
   operation: () => Promise<void>,
   onSuccess: () => void,
-  onExhausted: (error: unknown) => void,
+  onRetryFailure: (error: unknown, attempt: number) => void,
 ): void {
   let attempt = 0;
-  const retry = (lastError?: unknown): void => {
-    if (attempt >= FILE_SYSTEM_EFFECT_BACKGROUND_RETRY_ATTEMPTS) {
-      onExhausted(lastError);
-      return;
-    }
+  const retry = (): void => {
     const delayMs = Math.min(
       250 * (2 ** attempt),
       FILE_SYSTEM_EFFECT_BACKGROUND_RETRY_MAX_MS,
     );
     attempt += 1;
     const timer = setTimeout(() => {
-      void operation().then(onSuccess).catch(retry);
+      void operation().then(onSuccess).catch((error: unknown) => {
+        onRetryFailure(error, attempt);
+        retry();
+      });
     }, delayMs);
     timer.unref?.();
   };
@@ -890,12 +893,12 @@ function scheduleBackgroundFinish(
       lifecycle.effectFinished = true;
       if (lifecycle.releaseRequested) scheduleBackgroundRelease(context, lifecycle);
     },
-    (error) => {
-      lifecycle.backgroundFinishScheduled = false;
+    (error, attempt) => {
+      if (attempt % 10 !== 0) return;
       emitKodaXDiagnostic({
         source: 'coding.filesystem-effect-coordinator',
         level: 'warn',
-        message: 'Filesystem-effect completion retries were exhausted; the durable fence remains closed.',
+        message: 'Automatic filesystem-effect completion retry is still pending; the durable fence remains closed.',
         detail: error,
       });
     },
@@ -997,19 +1000,25 @@ function scheduleBackgroundRelease(
       FILE_SYSTEM_EFFECT_BACKGROUND_LOCK_TIMEOUT_MS,
     ),
     () => {
-      lifecycle.released = true;
       lifecycle.backgroundReleaseScheduled = false;
+      markEffectLeaseReleased(lifecycle);
     },
-    (error) => {
-      lifecycle.backgroundReleaseScheduled = false;
+    (error, attempt) => {
+      if (attempt % 10 !== 0) return;
       emitKodaXDiagnostic({
         source: 'coding.filesystem-effect-coordinator',
         level: 'warn',
-        message: 'Filesystem-effect release retries were exhausted; the durable fence remains closed.',
+        message: 'Automatic filesystem-effect release retry is still pending; the durable fence remains closed.',
         detail: error,
       });
     },
   );
+}
+
+function markEffectLeaseReleased(lifecycle: EffectLeaseLifecycle): void {
+  if (lifecycle.released) return;
+  lifecycle.released = true;
+  lifecycle.reportReleased();
 }
 
 async function releaseEffectLeaseReliably(
@@ -1050,7 +1059,7 @@ function createEffectLeaseRelease(
   return async () => {
     if (lifecycle.released) return;
     releaseAttempt ??= releaseEffectLeaseReliably(context, lifecycle).then(() => {
-      lifecycle.released = true;
+      markEffectLeaseReleased(lifecycle);
     }).finally(() => {
       releaseAttempt = undefined;
     });
@@ -1065,6 +1074,8 @@ async function acquireEffectLease(
 ): Promise<FileSystemMutationLeaseRelease> {
   const context = createEffectLeaseContext(mode, sandboxPolicyKey);
   await waitForEffectLeaseAdmission(context, onCleanupWaitExpired);
+  let reportReleased!: () => void;
+  const released = new Promise<void>((resolve) => { reportReleased = resolve; });
   const lifecycle: EffectLeaseLifecycle = {
     backgroundFinishScheduled: false,
     backgroundReleaseScheduled: false,
@@ -1073,10 +1084,11 @@ async function acquireEffectLease(
     releaseRecorded: false,
     releaseRequested: false,
     released: false,
+    reportReleased,
     stateUpdateAttempted: false,
   };
   const release = createEffectLeaseRelease(context, lifecycle);
-  return Object.assign(release, createEffectProcessControls(context, lifecycle));
+  return Object.assign(release, createEffectProcessControls(context, lifecycle), { released });
 }
 
 /**
@@ -1123,52 +1135,88 @@ export async function finishAndReleaseFileSystemEffectLease(
  * Internal cleanup transaction. The action must prove its process tree and ACL
  * reset before resolving; admission may time out for its caller but keeps converging.
  */
-export function withExclusiveFileSystemCleanupLease<T>(
-  sandboxPolicyKey: string,
-  cleanupProcess: {
-    readonly pid: number;
-    readonly windowsJobContained: boolean;
-  },
-  action: () => Promise<T>,
-  onDeferredFailure?: (error: unknown) => Promise<void>,
-): Promise<T> {
+interface CleanupAdmissionDeadline {
+  readonly clear: () => void;
+  readonly expire: (error: Error) => void;
+  readonly expired: () => boolean;
+  readonly waitExpired: Promise<never>;
+}
+
+function createCleanupAdmissionDeadline(): CleanupAdmissionDeadline {
   let callerTimedOut = false;
-  let cleanupActionCompleted = false;
   let rejectWaitExpired: ((error: Error) => void) | undefined;
-  let deadlineTimer: NodeJS.Timeout | undefined;
-  const expireCallerWait = (error: Error): void => {
-    if (callerTimedOut) return;
-    callerTimedOut = true;
-    rejectWaitExpired?.(error);
-  };
   const waitExpired = new Promise<never>((_resolve, reject) => {
     rejectWaitExpired = reject;
-    deadlineTimer = setTimeout(
-      () => expireCallerWait(new FileSystemCleanupAdmissionTimeoutError()),
-      FILE_SYSTEM_EFFECT_CLEANUP_TIMEOUT_MS,
-    );
-    deadlineTimer.unref?.();
   });
-  const workflow = (async (): Promise<T> => {
-    const lease = await acquireEffectLease('cleanup', sandboxPolicyKey, expireCallerWait);
-    await lease.bindEffectProcess(
-      cleanupProcess.pid,
-      cleanupProcess.windowsJobContained,
-    );
-    const result = await action();
-    cleanupActionCompleted = true;
-    await finishAndReleaseFileSystemEffectLease(lease);
-    return result;
-  })();
+  const timer = setTimeout(() => {
+    if (callerTimedOut) return;
+    callerTimedOut = true;
+    rejectWaitExpired?.(new FileSystemCleanupAdmissionTimeoutError());
+  }, FILE_SYSTEM_EFFECT_CLEANUP_TIMEOUT_MS);
+  timer.unref?.();
+  return {
+    clear: () => clearTimeout(timer),
+    expire: (error) => {
+      if (callerTimedOut) return;
+      callerTimedOut = true;
+      rejectWaitExpired?.(error);
+    },
+    expired: () => callerTimedOut,
+    waitExpired,
+  };
+}
+
+function observeCleanupLeaseRelease(
+  lease: FileSystemMutationLeaseRelease,
+  onLeaseReleased: ((lease: FileSystemMutationLeaseRelease) => void) | undefined,
+): void {
+  if (onLeaseReleased === undefined) return;
+  void lease.released.then(() => onLeaseReleased(lease)).catch((error: unknown) => {
+    emitKodaXDiagnostic({
+      source: 'coding.filesystem-effect-coordinator',
+      level: 'error',
+      message: 'Filesystem cleanup release observer failed.',
+      detail: error,
+    });
+  });
+}
+
+async function runCleanupLeaseWorkflow<T>(
+  sandboxPolicyKey: string,
+  cleanupProcess: { readonly pid: number; readonly windowsJobContained: boolean },
+  action: () => Promise<T>,
+  deadline: CleanupAdmissionDeadline,
+  markActionCompleted: () => void,
+  onLeaseAcquired?: (lease: FileSystemMutationLeaseRelease) => void,
+  onLeaseReleased?: (lease: FileSystemMutationLeaseRelease) => void,
+): Promise<T> {
+  const lease = await acquireEffectLease('cleanup', sandboxPolicyKey, deadline.expire);
+  // Publish the durable lease before binding, because bind may fail after the
+  // coordinator has recorded an owner that only the Job-backed janitor can settle.
+  onLeaseAcquired?.(lease);
+  observeCleanupLeaseRelease(lease, onLeaseReleased);
+  await lease.bindEffectProcess(cleanupProcess.pid, cleanupProcess.windowsJobContained);
+  const result = await action();
+  markActionCompleted();
+  await finishAndReleaseFileSystemEffectLease(lease);
+  return result;
+}
+
+function observeDeferredCleanupFailure<T>(
+  workflow: Promise<T>,
+  deadline: CleanupAdmissionDeadline,
+  actionCompleted: () => boolean,
+  onDeferredFailure: ((error: unknown) => Promise<void>) | undefined,
+): void {
   void workflow.catch(async (error: unknown) => {
-    if (!callerTimedOut) return;
+    if (!deadline.expired()) return;
     emitKodaXDiagnostic({
       source: 'coding.filesystem-effect-coordinator',
       level: 'warn',
       message: 'Filesystem cleanup failed after its caller deadline; the durable fence remains closed.',
       detail: error,
     });
-    if (cleanupActionCompleted || onDeferredFailure === undefined) return;
+    if (actionCompleted() || onDeferredFailure === undefined) return;
     try {
       await onDeferredFailure(error);
     } catch (handlerError: unknown) {
@@ -1180,9 +1228,37 @@ export function withExclusiveFileSystemCleanupLease<T>(
       });
     }
   });
-  return Promise.race([workflow, waitExpired]).finally(() => {
-    if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
-  });
+}
+
+export function withExclusiveFileSystemCleanupLease<T>(
+  sandboxPolicyKey: string,
+  cleanupProcess: {
+    readonly pid: number;
+    readonly windowsJobContained: boolean;
+  },
+  action: () => Promise<T>,
+  onDeferredFailure?: (error: unknown) => Promise<void>,
+  onLeaseAcquired?: (lease: FileSystemMutationLeaseRelease) => void,
+  onLeaseReleased?: (lease: FileSystemMutationLeaseRelease) => void,
+): Promise<T> {
+  let cleanupActionCompleted = false;
+  const deadline = createCleanupAdmissionDeadline();
+  const workflow = runCleanupLeaseWorkflow(
+    sandboxPolicyKey,
+    cleanupProcess,
+    action,
+    deadline,
+    () => { cleanupActionCompleted = true; },
+    onLeaseAcquired,
+    onLeaseReleased,
+  );
+  observeDeferredCleanupFailure(
+    workflow,
+    deadline,
+    () => cleanupActionCompleted,
+    onDeferredFailure,
+  );
+  return Promise.race([workflow, deadline.waitExpired]).finally(deadline.clear);
 }
 
 /** Degraded host fallback only; sandboxed text mutations do not acquire this lease. */

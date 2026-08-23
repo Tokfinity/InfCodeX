@@ -437,6 +437,8 @@ export {
 
 export {
   containWindowsEffectProcess,
+  terminateWindowsEffectJob,
+  windowsSandboxSidHasActiveProcesses,
   type WindowsEffectJob,
 } from './runtime/windows-effect-job.js';
 

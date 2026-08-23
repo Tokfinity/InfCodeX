@@ -1,10 +1,15 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, watch } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { containWindowsEffectProcess } from './windows-effect-job.js';
+import {
+  containWindowsEffectProcess,
+  terminateWindowsEffectJob,
+  windowsSandboxSidHasActiveProcesses,
+} from './windows-effect-job.js';
 
 const DETACHED_CHILD_GATE = String.raw`
 const { spawn } = require('node:child_process');
@@ -17,6 +22,49 @@ input.once('line', () => {
   process.exit(0);
 });
 `;
+
+const execFileAsync = promisify(execFile);
+const MISSING_GLOBAL_JOB = 'Global\\KodaXEffect-00000000-0000-4000-8000-000000000001';
+
+async function currentWindowsSid(): Promise<string> {
+  const identity = await execFileAsync(
+    path.join(
+      process.env.SystemRoot ?? 'C:\\Windows',
+      'System32',
+      'WindowsPowerShell',
+      'v1.0',
+      'powershell.exe',
+    ),
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      '[Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
+    ],
+    { encoding: 'utf8', windowsHide: true },
+  );
+  return identity.stdout.trim();
+}
+
+async function currentWindowsTokenIsElevatedAdministrator(): Promise<boolean> {
+  const result = await execFileAsync(
+    path.join(
+      process.env.SystemRoot ?? 'C:\\Windows',
+      'System32',
+      'WindowsPowerShell',
+      'v1.0',
+      'powershell.exe',
+    ),
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      "([Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)",
+    ],
+    { encoding: 'utf8', windowsHide: true },
+  );
+  return result.stdout.trim().toLowerCase() === 'true';
+}
 
 describe.runIf(process.platform === 'win32')('Windows effect Job', () => {
   afterEach(() => {
@@ -46,6 +94,9 @@ describe.runIf(process.platform === 'win32')('Windows effect Job', () => {
       await new Promise<void>((resolve) => setTimeout(resolve, 50));
       expect(gate.pid).toBeTypeOf('number');
       const effectJob = await containWindowsEffectProcess(gate.pid!);
+      expect(effectJob.jobName).toMatch(
+        /^Global\\KodaXEffect-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+      );
       gate.kill();
       await effectJob.drained;
       expect(observedControlFiles).toEqual([]);
@@ -109,5 +160,95 @@ describe.runIf(process.platform === 'win32')('Windows effect Job', () => {
       gate.kill();
       rmSync(directory, { recursive: true, force: true });
     }
+  });
+
+  it('lets a later runtime terminate and drain a named Job', async () => {
+    const gate = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    try {
+      expect(gate.pid).toBeTypeOf('number');
+      const effectJob = await containWindowsEffectProcess(gate.pid!);
+      await expect(terminateWindowsEffectJob(effectJob.jobName)).resolves.toBe('drained');
+      await effectJob.drained;
+    } finally {
+      gate.kill();
+    }
+  });
+
+  it('keeps a missing named Job distinguishable from a drained Job', async () => {
+    await expect(terminateWindowsEffectJob(MISSING_GLOBAL_JOB)).resolves.toBe('not_found');
+  });
+
+  it('accepts the exact legacy session-local name for interrupted-owner recovery', async () => {
+    await expect(terminateWindowsEffectJob(
+      'KodaXEffect-00000000-0000-4000-8000-000000000001',
+    )).resolves.toBe('not_found');
+
+    await expect(terminateWindowsEffectJob(
+      'Local\\KodaXEffect-00000000-0000-4000-8000-000000000001',
+    )).rejects.toThrow('invalid Job name');
+  });
+
+  it('does not block the event loop while recovering a named Job', async () => {
+    const order: string[] = [];
+    const timer = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        order.push('timer');
+        resolve();
+      }, 0);
+    });
+
+    const recovery = terminateWindowsEffectJob(MISSING_GLOBAL_JOB).then((result) => {
+      order.push(result);
+    });
+    await Promise.all([timer, recovery]);
+
+    expect(order[0]).toBe('timer');
+  });
+
+  it('detects a process machine-wide by its exact Windows account SID', async () => {
+    const sid = await currentWindowsSid();
+    const order: string[] = [];
+    const timer = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        order.push('timer');
+        resolve();
+      }, 0);
+    });
+    const inspection = windowsSandboxSidHasActiveProcesses(sid).then((active) => {
+      expect(active).toBe(true);
+      order.push('inspection');
+    });
+
+    await Promise.all([timer, inspection]);
+    expect(order[0]).toBe('timer');
+  });
+
+  it('never treats a foreign SID as clear without machine-wide inspection authority', async () => {
+    const inspection = windowsSandboxSidHasActiveProcesses(
+      'S-1-5-21-111111111-222222222-333333333-4444',
+    );
+    if (await currentWindowsTokenIsElevatedAdministrator()) {
+      await expect(inspection).resolves.toBe(false);
+    } else {
+      await expect(inspection).rejects.toThrow(
+        'foreign Windows SID requires an elevated administrator token',
+      );
+    }
+  });
+
+  it('bounds machine-wide SID inspection by the caller deadline', async () => {
+    await expect(windowsSandboxSidHasActiveProcesses(await currentWindowsSid(), 1))
+      .rejects.toThrow('timed out after 1 ms');
+  });
+
+  it('fails closed when machine-wide SID inspection cannot start', async () => {
+    const sid = await currentWindowsSid();
+    vi.stubEnv('SystemRoot', path.join(os.tmpdir(), 'missing-windows-root'));
+
+    await expect(windowsSandboxSidHasActiveProcesses(sid))
+      .rejects.toThrow('inspection failed to start');
   });
 });

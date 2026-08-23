@@ -99,6 +99,104 @@ describe('runtime daemon shutdown verifier', () => {
     })).resolves.toEqual({ status: 'unverified', reason: 'containment_active' });
   });
 
+  it('accepts the exact successful outcome when the supervisor PID was reused', async () => {
+    const configHome = temporaryConfigHome();
+    const owner = {
+      runtimeId: 'rt_reused_supervisor',
+      pid: deadPid(),
+      kind: 'daemon' as const,
+      processContainment: 'windows-job' as const,
+      supervisorPid: process.pid,
+      supervisorProcessStartIdentity: 'not-the-current-process-generation',
+    };
+    const paths = resolveRuntimeDaemonPathsFromConfigHome(configHome, 'coder');
+    writeRuntimeDaemonShutdownOutcome(paths, {
+      version: 1,
+      runtimeId: owner.runtimeId,
+      pid: owner.pid,
+      status: 'succeeded',
+      completedAt: '2026-08-06T00:00:00.000Z',
+    });
+
+    await expect(waitForRuntimeDaemonShutdown({
+      configHome,
+      profile: 'coder',
+      owner,
+      timeoutMs: 100,
+    })).resolves.toMatchObject({ status: 'succeeded' });
+  });
+
+  it('accepts the exact successful outcome when the daemon PID was reused', async () => {
+    const configHome = temporaryConfigHome();
+    const owner = {
+      runtimeId: 'rt_reused_daemon',
+      pid: process.pid,
+      kind: 'daemon' as const,
+      processStartIdentity: 'not-the-current-daemon-generation',
+      processContainment: 'windows-job' as const,
+      supervisorPid: deadPid(),
+      supervisorProcessStartIdentity: 'gone-supervisor-generation',
+    };
+    const paths = resolveRuntimeDaemonPathsFromConfigHome(configHome, 'coder');
+    writeRuntimeDaemonShutdownOutcome(paths, {
+      version: 1,
+      runtimeId: owner.runtimeId,
+      pid: owner.pid,
+      status: 'succeeded',
+      completedAt: '2026-08-06T00:00:00.000Z',
+    });
+
+    await expect(waitForRuntimeDaemonShutdown({
+      configHome,
+      profile: 'coder',
+      owner,
+      timeoutMs: 100,
+    })).resolves.toMatchObject({ status: 'succeeded' });
+  });
+
+  it('keeps a legacy PID-only daemon active until that numeric PID exits', async () => {
+    const configHome = temporaryConfigHome();
+    const owner = {
+      runtimeId: 'rt_legacy_daemon_generation',
+      pid: process.pid,
+      kind: 'daemon' as const,
+      processContainment: 'windows-job' as const,
+      supervisorPid: deadPid(),
+    };
+    const paths = resolveRuntimeDaemonPathsFromConfigHome(configHome, 'coder');
+    writeRuntimeDaemonShutdownOutcome(paths, {
+      version: 1,
+      runtimeId: owner.runtimeId,
+      pid: owner.pid,
+      status: 'succeeded',
+      completedAt: '2026-08-06T00:00:00.000Z',
+    });
+
+    await expect(waitForRuntimeDaemonShutdown({
+      configHome,
+      profile: 'coder',
+      owner,
+      timeoutMs: 25,
+      pollIntervalMs: 5,
+    })).resolves.toEqual({ status: 'unverified', reason: 'daemon_active' });
+  });
+
+  it('rejects an empty supervisor generation instead of treating it as PID reuse', async () => {
+    await expect(waitForRuntimeDaemonShutdown({
+      configHome: temporaryConfigHome(),
+      profile: 'coder',
+      owner: {
+        runtimeId: 'rt_invalid_supervisor_identity',
+        pid: deadPid(),
+        kind: 'daemon',
+        processContainment: 'windows-job',
+        supervisorPid: process.pid,
+        supervisorProcessStartIdentity: '',
+      },
+      timeoutMs: 100,
+    })).rejects.toThrow('A supervisor process identity requires Windows Job containment');
+  });
+
   it('does not let a replacement owner hide the exact old cleanup failure', async () => {
     const configHome = temporaryConfigHome();
     const owner = deadContainedOwner('rt_failed_before_replacement');
