@@ -1575,8 +1575,14 @@ describe('ASRT workspace shell adapter', () => {
         toolInput: { path: target },
         path: target,
       })).resolves.toMatchObject({ status: 'ok' });
-      expect(capturedWorkspaceSessionConfigs).toHaveLength(1);
-      const config = capturedWorkspaceSessionConfigs[0] as {
+      // POSIX constructions pre-warm a baseline workspace session that excludes
+      // the dynamically registered roots, so the scoped shell session is the
+      // last captured config on every platform and the text mutation reuses it
+      // instead of starting a third session.
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(
+        process.platform === 'win32' ? 1 : 2,
+      );
+      const config = capturedWorkspaceSessionConfigs.at(-1) as {
         readonly filesystem: {
           readonly allowRead: readonly string[];
           readonly allowWrite: readonly string[];
@@ -4315,62 +4321,65 @@ describe('ASRT workspace shell adapter', () => {
     },
   );
 
-  it('allows a later replacement after externally recovering a nonzero owner exit', async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-session-retire-unclean-'));
-    tempRoots.push(root);
-    const sandbox = createAsrtShellSandbox({
-      workspaceRoot: root,
-      shouldSandbox: () => true,
-    });
-    const prepare = (toolCallId: string) => sandbox.prepare({
-      toolCallId,
-      toolInput: { command: 'node --version' },
-      command: 'node --version',
-      executable: process.execPath,
-      args: ['--version'],
-      cwd: root,
-      env: process.env,
-    });
+  it.runIf(process.platform === 'win32')(
+    'allows a later replacement after externally recovering a nonzero owner exit',
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-session-retire-unclean-'));
+      tempRoots.push(root);
+      const sandbox = createAsrtShellSandbox({
+        workspaceRoot: root,
+        shouldSandbox: () => true,
+      });
+      const prepare = (toolCallId: string) => sandbox.prepare({
+        toolCallId,
+        toolInput: { command: 'node --version' },
+        command: 'node --version',
+        executable: process.execPath,
+        args: ['--version'],
+        cwd: root,
+        env: process.env,
+      });
 
-    const unattested = await prepare('bash-retire-unclean');
-    if (!unattested) throw new Error('expected workspace invocation');
-    workspaceSessionControl.delayClose = true;
-    workspaceSessionControl.closeExitCode = 1;
-    const cleanup = unattested.cleanup({ execution: 'started_or_unknown' }).then(
-      () => undefined,
-      async (cleanupError: unknown) => {
-        try {
-          await unattested.retire?.();
-          return cleanupError;
-        } catch (retirementError: unknown) {
-          return new AggregateError(
-            [cleanupError, retirementError],
-            'Sandbox cleanup and workspace-session retirement both failed.',
-          );
-        }
-      },
-    );
-    await vi.waitFor(() => expect(workspaceSessionControl.releaseClose).toBeDefined());
-    const replacementPending = prepare('bash-retire-after-unclean');
-    workspaceSessionControl.releaseClose?.();
-    workspaceSessionControl.releaseClose = undefined;
+      const unattested = await prepare('bash-retire-unclean');
+      if (!unattested) throw new Error('expected workspace invocation');
+      workspaceSessionControl.delayClose = true;
+      workspaceSessionControl.closeExitCode = 1;
+      const cleanup = unattested.cleanup({ execution: 'started_or_unknown' }).then(
+        () => undefined,
+        async (cleanupError: unknown) => {
+          try {
+            await unattested.retire?.();
+            return cleanupError;
+          } catch (retirementError: unknown) {
+            return new AggregateError(
+              [cleanupError, retirementError],
+              'Sandbox cleanup and workspace-session retirement both failed.',
+            );
+          }
+        },
+      );
+      await vi.waitFor(() => expect(workspaceSessionControl.releaseClose).toBeDefined());
+      const replacementPending = prepare('bash-retire-after-unclean');
+      workspaceSessionControl.releaseClose?.();
+      workspaceSessionControl.releaseClose = undefined;
 
-    const cleanupFailure = await cleanup;
-    expect(cleanupFailure).toBeInstanceOf(AggregateError);
-    const cleanupMessages = (cleanupFailure as AggregateError).errors.map(String);
-    expect(cleanupMessages).toEqual(expect.arrayContaining([
-      expect.stringContaining('could not be attested'),
-    ]));
-    workspaceSessionControl.delayClose = false;
-    await expect(replacementPending).resolves.toBeUndefined();
-    expect(capturedWorkspaceSessionConfigs).toHaveLength(1);
+      const cleanupFailure = await cleanup;
+      expect(cleanupFailure).toBeInstanceOf(AggregateError);
+      const cleanupMessages = (cleanupFailure as AggregateError).errors.map(String);
+      expect(cleanupMessages).toEqual(expect.arrayContaining([
+        expect.stringContaining('could not be attested'),
+      ]));
+      workspaceSessionControl.delayClose = false;
+      await expect(replacementPending).resolves.toBeUndefined();
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(1);
 
-    workspaceSessionControl.closeExitCode = 0;
-    const replacement = await prepare('bash-retire-after-recovery');
-    if (!replacement) throw new Error('expected replacement after verified ACL recovery');
-    await replacement.cleanup();
-    expect(capturedWorkspaceSessionConfigs).toHaveLength(2);
-  });
+      workspaceSessionControl.closeExitCode = 0;
+      const replacement = await prepare('bash-retire-after-recovery');
+      if (!replacement) throw new Error('expected replacement after verified ACL recovery');
+      await replacement.cleanup();
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(2);
+    },
+  );
 
   it.each(['wrap', 'cleanup'] as const)(
     'retires a workspace session after a %s RPC failure',
@@ -5407,37 +5416,40 @@ describe('ASRT workspace shell adapter', () => {
     expect(capturedWorkspaceSessionConfigs).toHaveLength(2);
   });
 
-  it('recovers a workspace Job automatically when process-tree termination is uncertain', async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-session-unknown-kill-'));
-    tempRoots.push(root);
-    workspaceSessionControl.malformedReady = true;
-    processTreeKillMock.outcome = 'unknown';
-    const sandbox = createAsrtShellSandbox({
-      workspaceRoot: root,
-      shouldSandbox: () => true,
-    });
-    const prepare = (toolCallId: string) => sandbox.prepare({
-      toolCallId,
-      toolInput: { command: 'node --version' },
-      command: 'node --version',
-      executable: process.execPath,
-      args: ['--version'],
-      cwd: root,
-      env: process.env,
-    });
-    await expect(prepare('bash-before-unknown-session-kill')).resolves.toBeUndefined();
-    const startedAt = Date.now();
-    processTreeKillMock.outcome = 'actual';
-    workspaceSessionControl.malformedReady = false;
-    const recovered = await prepare('bash-after-unknown-session-kill');
-    if (!recovered) throw new Error('expected automatic Job recovery to create a replacement session');
-    expect(Date.now() - startedAt).toBeLessThan(1_500);
-    expect(capturedWorkspaceSessionConfigs).toHaveLength(2);
-    await recovered.cleanup();
+  it.runIf(process.platform === 'win32')(
+    'recovers a workspace Job automatically when process-tree termination is uncertain',
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-session-unknown-kill-'));
+      tempRoots.push(root);
+      workspaceSessionControl.malformedReady = true;
+      processTreeKillMock.outcome = 'unknown';
+      const sandbox = createAsrtShellSandbox({
+        workspaceRoot: root,
+        shouldSandbox: () => true,
+      });
+      const prepare = (toolCallId: string) => sandbox.prepare({
+        toolCallId,
+        toolInput: { command: 'node --version' },
+        command: 'node --version',
+        executable: process.execPath,
+        args: ['--version'],
+        cwd: root,
+        env: process.env,
+      });
+      await expect(prepare('bash-before-unknown-session-kill')).resolves.toBeUndefined();
+      const startedAt = Date.now();
+      processTreeKillMock.outcome = 'actual';
+      workspaceSessionControl.malformedReady = false;
+      const recovered = await prepare('bash-after-unknown-session-kill');
+      if (!recovered) throw new Error('expected automatic Job recovery to create a replacement session');
+      expect(Date.now() - startedAt).toBeLessThan(1_500);
+      expect(capturedWorkspaceSessionConfigs).toHaveLength(2);
+      await recovered.cleanup();
 
-    processTreeKillMock.releaseUnknown?.();
-    processTreeKillMock.releaseUnknown = undefined;
-  });
+      processTreeKillMock.releaseUnknown?.();
+      processTreeKillMock.releaseUnknown = undefined;
+    },
+  );
 
   it('observes a failed workspace-session termination after a malformed live response', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-session-live-malformed-'));
