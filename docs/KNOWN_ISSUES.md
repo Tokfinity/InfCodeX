@@ -103,6 +103,7 @@ by the focused sandbox, lineage, REPL, and coding-runtime tests.
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 302 | High | Resolved | Runtime completion fallback could publish an empty A2A answer before the coding result settled | v0.7.79 Runtime completion fallback | Unreleased | 2026-08-23 | 2026-08-23 |
 | 301 | High | Resolved | Stale empty learning lock could stall interactive work and TUI teardown lacked a direct terminal restore fallback | shared learning lock / fullscreen TUI | v0.7.95 | 2026-08-23 | 2026-08-23 |
 | 300 | Medium | Resolved | Sandboxed git `safe.directory` trust set misaligned with authorized roots | v0.7.93 ASRT 0.0.65 git trust | v0.7.94 | 2026-08-20 | 2026-08-21 |
 | 299 | High | Resolved | Previous-boot foreign Windows ACL markers blocked SDK-owned Runtime exit settlement | v0.7.91 Runtime exit settlement | v0.7.93 | 2026-08-19 | 2026-08-19 |
@@ -292,6 +293,68 @@ by the focused sandbox, lineage, REPL, and coding-runtime tests.
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 302: Runtime completion fallback could publish an empty A2A answer before the coding result settled
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.79 Runtime completion fallback
+- **Fixed**: Unreleased
+- **Created**: 2026-08-23
+- **Resolved**: 2026-08-23
+
+#### Original Problem
+
+An Agent started with `kodax a2a serve` could finish successfully while its A2A
+Task contained neither an Agent message nor an artifact. The same request still
+left the actual assistant reply in Session history. v0.7.73 returned the reply,
+while affected releases included v0.7.82 and v0.7.94.
+
+#### Root Cause
+
+The coding substrate emitted `events.onComplete` before awaiting the extension
+`complete` event and asynchronous result finalization. The Runtime completion
+fallback therefore had time to settle the public Run as `completed` without a
+`KodaXResult`. A2A correctly read `result.result?.lastText`, but the prematurely
+settled Runtime result had no nested `result`, so the response body was empty.
+The `lastText` assignment itself was not early or empty.
+
+#### Resolution
+
+All successful substrate terminals now use one completion finalizer. It awaits
+extension completion and managed result finalization before emitting the
+exactly-once `onComplete` signal, while retaining interrupt, cancellation,
+iteration-limit, queued-follow-up, and lost-executor-Promise behavior. Runtime
+therefore receives the real `KodaXResult` before its fallback can publish a
+payload-free terminal record. Completion observers are post-finalization
+notifications: an observer exception emits an unconditional warning diagnostic
+but cannot rewrite the
+already authoritative result or its persisted Memory/learning outcome.
+
+#### Files Changed
+
+- `packages/coding/src/agent-runtime/run-substrate.ts`
+- `packages/coding/src/agent-runtime/catch-terminals.ts`
+- `packages/coding/src/agent-runtime/__contract-tests__/cap-005-events-complete.contract.test.ts`
+- `packages/coding/src/types.ts`
+- `src/sdk-runtime.test.ts`
+- `src/a2a/a2a.test.ts`
+- `docs/test-guides/ISSUE_302_UNRELEASED_REGRESSION_GUIDE.md`
+
+#### Tests Added
+
+- CAP-005 now crosses an event-loop turn inside learned-Skill outcome
+  finalization and proves `onComplete` fires only after that work finishes.
+- CAP-005 also covers AbortError, ordinary errors, and uninspectable thrown
+  values from completion observers; a Runtime public-boundary test preserves
+  `result.lastText` after asynchronous coding finalization.
+- The inbound/outbound A2A plane test now receives its Runtime answer after an
+  event-loop turn and still publishes the non-empty final output.
+- Existing interrupt, cancellation, and error suites cover the surrounding
+  compatibility boundaries.
+
+See
+[`ISSUE_302_UNRELEASED_REGRESSION_GUIDE.md`](test-guides/ISSUE_302_UNRELEASED_REGRESSION_GUIDE.md).
 
 ### 301: Stale empty learning lock could stall interactive work and TUI teardown lacked a direct terminal restore fallback
 
@@ -12927,11 +12990,19 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 180 (27 Open, 153 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 181 (27 Open, 154 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-08-23: Issue 302 resolved (Unreleased)
+- Delayed the coding `onComplete` signal until extension completion and
+  asynchronous result finalization have produced the authoritative result.
+- Preserved the Runtime's lost-executor-Promise fallback and added a CAP-005
+  ordering regression so A2A cannot publish an empty successful answer again.
+- Made completion observers post-finalization notifications whose failures are
+  diagnosed without rewriting persisted terminal facts.
 
 ### 2026-08-21: Issue 300 resolved (v0.7.94)
 - Replaced ASRT wildcard git trust with a bounded authorized-root set, including

@@ -933,11 +933,6 @@ export async function runSubstrate(
   let memoryDecisionBinding: CodingMemoryContext | undefined;
   const handledMemoryOperations: KodaXHandledMemoryOperation[] = [];
   const finalizeManagedProtocolResult = async (result: KodaXResult): Promise<KodaXResult> => {
-    if (result.success) {
-      emitLiveTurnCompletedOnce(result.interrupted ? 'interrupted' : 'completed');
-    } else {
-      emitLiveTurnFailedOnce(new Error(result.errorMetadata?.lastError ?? 'KodaX run failed'));
-    }
     const payload = mergeManagedProtocolPayload(
       result.managedProtocolPayload,
       managedProtocolPayloadRef.current,
@@ -1038,6 +1033,22 @@ export async function runSubstrate(
         });
       });
     }
+    return finalized;
+  };
+  const finalizeCompletedProtocolResult = async (
+    result: KodaXResult,
+  ): Promise<KodaXResult> => {
+    const finalized = await finalizeManagedProtocolResult(result);
+    try {
+      emitComplete(events);
+    } catch {
+      emitKodaXDiagnostic({
+        source: 'coding:completion-observer',
+        level: 'warn',
+        message: 'Completion observer failed after result finalization.',
+      });
+    }
+    emitLiveTurnCompletedOnce(finalized.interrupted ? 'interrupted' : 'completed');
     return finalized;
   };
   // v0.7.42 — wire optional embedder-facing session control. CAP-055 reads
@@ -1275,7 +1286,7 @@ export async function runSubstrate(
     }
     if (error.name === 'AbortError') {
       await applyAbortErrorTerminal({ events, emitActiveExtensionEvent });
-      return finalizeManagedProtocolResult({
+      return finalizeCompletedProtocolResult({
         success: true,
         lastText: turnState.lastText,
         messages: cleanedMessages,
@@ -2113,9 +2124,8 @@ export async function runSubstrate(
           hadToolCalls: false,
           signal: 'COMPLETE',
         });
-        emitComplete(events);
         await emitActiveExtensionEvent('complete', { success: true, signal: 'COMPLETE' });
-        return finalizeManagedProtocolResult({
+        return finalizeCompletedProtocolResult({
           success: true,
           lastText: turnState.lastText,
           signal: 'COMPLETE',
@@ -2261,7 +2271,7 @@ export async function runSubstrate(
             hadToolCalls: false,
             signal: undefined,
           });
-          return finalizeManagedProtocolResult({
+          return finalizeCompletedProtocolResult({
             success: true,
             lastText: turnState.lastText,
             messages,
@@ -2283,7 +2293,6 @@ export async function runSubstrate(
           hadToolCalls: false,
           signal: undefined,
         });
-        emitComplete(events);
         await emitActiveExtensionEvent('complete', { success: true, signal: undefined });
         // CAP-085 (clean-exit variant): natural completion path. We still
         // run the iter-terminal helper so the final snapshot save + signal
@@ -2303,7 +2312,7 @@ export async function runSubstrate(
             runtimeSessionState,
             lastText: turnState.lastText,
           });
-          return finalizeManagedProtocolResult({
+          return finalizeCompletedProtocolResult({
             success: true,
             lastText: turnState.lastText,
             signal: iterTerminal.finalSignal,
@@ -2518,7 +2527,7 @@ export async function runSubstrate(
             hadToolCalls: false,
             signal: undefined,
           });
-          return finalizeManagedProtocolResult({
+          return finalizeCompletedProtocolResult({
             success: true,
             lastText: turnState.lastText,
             messages,
@@ -2536,7 +2545,6 @@ export async function runSubstrate(
           hadToolCalls: false,
           signal: undefined,
         });
-        emitComplete(events);
         await emitActiveExtensionEvent('complete', { success: true, signal: undefined });
         // CAP-085 (clean-exit variant): natural completion path after a
         // tool turn returned no tool_use blocks. Same routing as the
@@ -2556,7 +2564,7 @@ export async function runSubstrate(
             runtimeSessionState,
             lastText: turnState.lastText,
           });
-          return finalizeManagedProtocolResult({
+          return finalizeCompletedProtocolResult({
             success: true,
             lastText: turnState.lastText,
             signal: iterTerminal.finalSignal,
@@ -2587,7 +2595,7 @@ export async function runSubstrate(
           emitIterationEnd,
         });
         contextTokenSnapshot = cancellationTerminal.contextTokenSnapshot;
-        return finalizeManagedProtocolResult({
+        return finalizeCompletedProtocolResult({
           success: true,
           lastText: CANCELLATION_LAST_TEXT,
           messages,
@@ -2649,7 +2657,7 @@ export async function runSubstrate(
           hadToolCalls: true,
           signal: undefined,
         });
-        return finalizeManagedProtocolResult({
+        return finalizeCompletedProtocolResult({
           success: true,
           lastText: turnState.lastText,
           messages,
@@ -2690,13 +2698,13 @@ export async function runSubstrate(
 
   // CAP-085: iteration-limit terminal — natural for-loop exhaustion.
   // Runs the final snapshot save + signal extraction; the caller wraps
-  // with `finalizeManagedProtocolResult` and returns with
+  // with `finalizeCompletedProtocolResult` and returns with
   // `limitReached: true`. This branch is reached ONLY when every iter
   // is consumed without an early `return`. The two model-driven
   // completion paths (text-only turn, tools-with-no-results turn) also
   // call `applyIterationLimitTerminal` to preserve the snapshot+signal
   // side effects byte-for-byte, but return with `limitReached: false`
-  // — see the call sites above guarded by `emitComplete(events)`.
+  // — see the completion call sites above.
   options.context?.interruptInput?.closeInputWindow();
   const iterTerminal = await applyIterationLimitTerminal({
     options,
@@ -2707,7 +2715,6 @@ export async function runSubstrate(
     lastText: turnState.lastText,
   });
   try {
-    emitComplete(events);
     await emitActiveExtensionEvent('complete', {
       success: true,
       signal: iterTerminal.finalSignal || undefined,
@@ -2715,7 +2722,7 @@ export async function runSubstrate(
   } catch (error) {
     return finalizeCaughtError(error);
   }
-  return finalizeManagedProtocolResult({
+  return finalizeCompletedProtocolResult({
     success: true,
     lastText: turnState.lastText,
     signal: iterTerminal.finalSignal,

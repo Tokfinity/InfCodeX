@@ -21,7 +21,8 @@
  *      `error.name === 'AbortError'`. Per Gemini CLI parity, user
  *      interrupts are NOT failures — emits `events.onStreamEnd` +
  *      `stream:end` extension event and signals the caller to assemble
- *      a `success: true, interrupted: true` result. The Issue 072
+ *      and finalize a `success: true, interrupted: true` result before
+ *      emitting `events.onComplete`. The Issue 072
  *      cleanup invariant (orphan tool_use blocks removed) is already
  *      satisfied by CAP-082; this terminal just emits.
  *
@@ -56,7 +57,7 @@ import { saveSessionSnapshot } from './middleware/session-snapshot.js';
 import { createEstimatedContextTokenSnapshot } from '../token-accounting.js';
 import type { RuntimeSessionState } from './runtime-session-state.js';
 import type { ExtensionEventEmitter } from './stream-handler-wiring.js';
-import { emitComplete, emitError, emitStreamEnd } from './event-emitter.js';
+import { emitError, emitStreamEnd } from './event-emitter.js';
 
 // ---------------------------------------------------------------------------
 // CAP-082 — runCatchCleanup
@@ -135,14 +136,14 @@ export interface AbortErrorTerminalInput {
  *
  * Per Gemini CLI parity, an aborted run is NOT a failure — the
  * KodaXResult carries `success: true, interrupted: true` so callers
- * can resume cleanly without surfacing an error to the user.
+ * can resume cleanly without surfacing an error to the user. The caller emits
+ * `onComplete` only after asynchronous result finalization has finished.
  */
 export async function applyAbortErrorTerminal(
   input: AbortErrorTerminalInput,
 ): Promise<void> {
   emitStreamEnd(input.events);
   await input.emitActiveExtensionEvent('stream:end', undefined);
-  emitComplete(input.events);
 }
 
 // ---------------------------------------------------------------------------

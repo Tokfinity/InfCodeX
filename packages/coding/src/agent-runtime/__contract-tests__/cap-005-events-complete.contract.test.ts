@@ -8,6 +8,8 @@
  *   `onComplete`) — these terminal events are mutually exclusive per
  *   CAP-084 contract
  * - CAP-EVENTS-COMPLETE-001d: fires exactly once on iteration-limit success
+ * - CAP-EVENTS-COMPLETE-001e: fires only after asynchronous result finalization
+ * - CAP-EVENTS-COMPLETE-001f: observer errors cannot rewrite a finalized result
  *
  * Risk: HIGH — REPL terminal cleanup relies on exactly-one terminal
  * event per run.
@@ -25,6 +27,7 @@ import {
   KodaXBaseProvider,
   clearRuntimeModelProviders,
   registerModelProvider,
+  runWithProviderCredential,
 } from '@kodax-ai/llm';
 import type {
   KodaXMessage,
@@ -34,6 +37,10 @@ import type {
   KodaXStreamResult,
   KodaXToolDefinition,
 } from '@kodax-ai/llm';
+import {
+  setKodaXDiagnosticSink,
+  type KodaXDiagnostic,
+} from '@kodax-ai/agent';
 
 import { runKodaX } from '../../agent.js';
 
@@ -129,7 +136,7 @@ describe('CAP-005: onComplete event contract', { timeout: 30_000 }, () => {
     expect(onComplete).toHaveBeenCalled();
   });
 
-  it('CAP-EVENTS-COMPLETE-001b: does not re-fire when the completion observer throws AbortError', async () => {
+  it('CAP-EVENTS-COMPLETE-001f: isolates a completion observer AbortError after finalization', async () => {
     registerModelProvider(PROVIDER_NAME, () => new CompleteEventProvider('success'));
     const onComplete = vi.fn(() => {
       const error = new Error('observer interrupted');
@@ -150,9 +157,78 @@ describe('CAP-005: onComplete event contract', { timeout: 30_000 }, () => {
       'do thing',
     );
 
-    expect(result.interrupted).toBe(true);
+    expect(result.success).toBe(true);
+    expect(result.interrupted).not.toBe(true);
     expect(onComplete).toHaveBeenCalledOnce();
-    expect(completedStatuses).toEqual(['interrupted']);
+    expect(completedStatuses).toEqual(['completed']);
+  });
+
+  it('CAP-EVENTS-COMPLETE-001f: isolates a non-abort completion observer error', async () => {
+    registerModelProvider(PROVIDER_NAME, () => new CompleteEventProvider('success'));
+    const onComplete = vi.fn(() => {
+      throw new Error('observer failed');
+    });
+    const onError = vi.fn();
+    const diagnostics: KodaXDiagnostic[] = [];
+    const restoreDiagnostics = setKodaXDiagnosticSink((diagnostic) => {
+      diagnostics.push(diagnostic);
+    });
+
+    try {
+      const result = await runKodaX(
+        {
+          provider: PROVIDER_NAME,
+          model: 'baseline-model',
+          events: { onComplete, onError },
+        },
+        'do thing',
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.interrupted).not.toBe(true);
+      expect(onComplete).toHaveBeenCalledOnce();
+      expect(onError).not.toHaveBeenCalled();
+      expect(diagnostics).toContainEqual(expect.objectContaining({
+        source: 'coding:completion-observer',
+        level: 'warn',
+        message: 'Completion observer failed after result finalization.',
+      }));
+    } finally {
+      restoreDiagnostics();
+    }
+  });
+
+  it('CAP-EVENTS-COMPLETE-001f: isolates an uninspectable observer failure', async () => {
+    registerModelProvider(PROVIDER_NAME, () => new CompleteEventProvider('success'));
+    const hostileFailure = new Proxy({}, {
+      ownKeys: () => {
+        throw new Error('observer failure must not be inspected');
+      },
+    });
+    const onComplete = vi.fn(() => {
+      throw hostileFailure;
+    });
+    const completedStatuses: string[] = [];
+
+    const result = await runWithProviderCredential(
+      PROVIDER_NAME,
+      'scoped-test-key',
+      () => runKodaX(
+        {
+          provider: PROVIDER_NAME,
+          model: 'baseline-model',
+          events: {
+            onComplete,
+            onTurnCompleted: (event) => completedStatuses.push(event.status),
+          },
+        },
+        'do thing',
+      ),
+    );
+
+    expect(result.success).toBe(true);
+    expect(onComplete).toHaveBeenCalledOnce();
+    expect(completedStatuses).toEqual(['completed']);
   });
 
   it('CAP-EVENTS-COMPLETE-001d: iteration-limit success fires onComplete exactly once', async () => {
@@ -171,6 +247,38 @@ describe('CAP-005: onComplete event contract', { timeout: 30_000 }, () => {
 
     expect(result.success).toBe(true);
     expect(result.limitReached).toBe(true);
+    expect(onComplete).toHaveBeenCalledOnce();
+  });
+
+  it('CAP-EVENTS-COMPLETE-001e: waits for asynchronous result finalization', async () => {
+    registerModelProvider(PROVIDER_NAME, () => new CompleteEventProvider('success'));
+    const order: string[] = [];
+    const onComplete = vi.fn(() => order.push('complete'));
+
+    const resultPromise = runKodaX(
+      {
+        provider: PROVIDER_NAME,
+        model: 'baseline-model',
+        events: { onComplete },
+        context: {
+          // Keep this injected finalizer authoritative instead of installing
+          // the root run's learned-Skill binding callback.
+          currentAgentId: 'cap-005-finalization-child',
+          completeLearnedSkillOutcomes: async () => {
+            order.push('finalization:start');
+            await new Promise<void>((resolve) => setImmediate(resolve));
+            order.push('finalization:end');
+          },
+        },
+      },
+      'do thing',
+    );
+
+    await expect(resultPromise).resolves.toMatchObject({
+      success: true,
+      lastText: 'done',
+    });
+    expect(order).toEqual(['finalization:start', 'finalization:end', 'complete']);
     expect(onComplete).toHaveBeenCalledOnce();
   });
 

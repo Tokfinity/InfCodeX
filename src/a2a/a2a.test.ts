@@ -52,6 +52,7 @@ function fakeRuntime(
     readonly sourceTool?: string;
     readonly action?: string;
   }[],
+  deferResult = false,
 ): KodaXRuntime {
   let sessionCounter = 0;
   let runCounter = 0;
@@ -76,7 +77,7 @@ function fakeRuntime(
         runCounter += 1;
         const runId = `run-${runCounter}`;
         phases.set(runId, 'running');
-        const result = Promise.resolve({
+        const completedResult = {
           runId,
           sessionId: input.sessionId,
           phase: 'completed' as const,
@@ -87,7 +88,12 @@ function fakeRuntime(
             sessionId: input.sessionId,
             ...(artifactLedger ? { artifactLedger } : {}),
           },
-        }).then((value) => {
+        };
+        const result = (deferResult
+          ? new Promise<typeof completedResult>((resolve) => {
+              setImmediate(() => resolve(completedResult));
+            })
+          : Promise.resolve(completedResult)).then((value) => {
           phases.set(runId, 'completed');
           for (const entry of listeners) {
             if (entry.filter.runId === undefined || entry.filter.runId === runId) {
@@ -845,8 +851,8 @@ describe('FEATURE_267 bidirectional A2A', () => {
     expect(closed).toBe(true);
   });
 
-  it('serves KodaX inbound and dispatches it through the F258 outbound plane', async () => {
-    const runtime = fakeRuntime('A2A completed');
+  it('serves an asynchronously finalized KodaX answer through the F258 outbound plane', async () => {
+    const runtime = fakeRuntime('A2A completed', undefined, true);
     const server = createKodaXA2AServer(serverOptions(runtime, temporaryRoot()));
     const baseUrl = await server.listen({ hostname: '127.0.0.1', port: 0 });
     const cardUrl = `${baseUrl}/.well-known/agent-card.json`;

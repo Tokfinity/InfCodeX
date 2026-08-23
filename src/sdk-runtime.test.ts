@@ -12707,6 +12707,47 @@ describe("createKodaXRuntime", () => {
     await runtime.close();
   });
 
+  it("preserves an asynchronously finalized coding payload at the completion boundary", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "sessions"),
+      defaultProvider: "mock-provider",
+    });
+    const session = await runtime.sessions.create({
+      title: "Asynchronous Coding Finalization",
+    });
+    codingMock.startKodaX.mockImplementation(
+      (options: KodaXOptions): RunningSession => fakeRunningSession(
+        options,
+        (async (): Promise<KodaXResult> => {
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          options.events?.onComplete?.();
+          return {
+            success: true,
+            lastText: "finalized answer",
+            messages: [{ role: "assistant", content: "finalized answer" }],
+            sessionId: session.id,
+          };
+        })(),
+      ),
+    );
+
+    const run = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "preserve the finalized answer",
+    });
+
+    await expect(run.result).resolves.toMatchObject({
+      phase: "completed",
+      result: expect.objectContaining({
+        success: true,
+        lastText: "finalized answer",
+      }),
+    });
+    await runtime.close();
+  });
+
   it("keeps a latched executor completion authoritative when Stop races before fallback settlement", async () => {
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
     const runtime = await createKodaXRuntime({

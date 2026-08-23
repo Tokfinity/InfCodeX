@@ -740,6 +740,7 @@ export interface KodaXEvents {
     event: ProviderRecoveryEvent,
     meta?: KodaXActivityEventMeta,
   ) => void;
+  /** Post-finalization notification. Observer failures cannot rewrite the terminal result. */
   onComplete?: (meta?: KodaXActivityEventMeta) => void;
   onError?: (error: Error, meta?: KodaXActivityEventMeta) => void;
   onManagedTaskStatus?: (status: KodaXManagedTaskStatusEvent & Partial<KodaXLiveEventMeta>) => void;
