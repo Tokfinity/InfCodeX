@@ -374,7 +374,8 @@ async function observeStaleLock(lockPath: string): Promise<ObservedStaleLock | u
     const explicitlyReleased = owner?.token !== undefined
       && await hasReleaseMarker(lockPath, owner.token);
     if (!explicitlyReleased && Date.now() - snapshot.mtimeMs <= LOCK_STALE_MS) return undefined;
-    return explicitlyReleased || (owner !== undefined && !isRecordedOwnerAlive(owner))
+    const abandonedEmptyOwner = owner === undefined && snapshot.size === 0;
+    return explicitlyReleased || abandonedEmptyOwner || (owner !== undefined && !isRecordedOwnerAlive(owner))
       ? { raw, mtimeMs: snapshot.mtimeMs, size: snapshot.size }
       : undefined;
   } catch (error) {

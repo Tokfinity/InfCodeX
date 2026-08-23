@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { writeSync } from 'node:fs';
 import process from 'node:process';
 import React from 'react';
 import throttle from 'es-toolkit/compat/throttle';
@@ -57,6 +58,7 @@ import { applyCellFrame as applyCellFrameHelper } from '../substrate/ink/apply-c
 import { applyDiff } from '../substrate/ink/apply-diff.js';
 import { emptyFrame } from '../substrate/ink/frame.js';
 import { bsu, esu, shouldSynchronize } from './write-synchronized.js';
+import { buildAlternateScreenExitSequence } from './termio.js';
 import instances from './instances.js';
 import App from './components/App.js';
 import { accessibilityContext as AccessibilityContext } from './contexts/AccessibilityContext.js';
@@ -164,6 +166,7 @@ const Ink = class Ink {
     hasPendingThrottledRender = false;
     kittyProtocolEnabled = false;
     cancelKittyDetection;
+    terminalExitGuard;
     altScreenActive = false;
     shellMode;
     mouseTrackingActive = false;
@@ -371,6 +374,14 @@ const Ink = class Ink {
         }
     }
     clearTextSelection() {
+    }
+    registerTerminalExitGuard(guard) {
+        this.terminalExitGuard = guard;
+        return () => {
+            if (this.terminalExitGuard === guard) {
+                this.terminalExitGuard = undefined;
+            }
+        };
     }
     installExternalStreamWriteGuard() {
         if (this.options.debug || isInCi) {
@@ -1052,7 +1063,77 @@ const Ink = class Ink {
             this.writeStdout(esu);
         }
     }
+    restoreTrackedTerminalMode() {
+        if (!this.altScreenActive) {
+            return;
+        }
+        const sequence = buildAlternateScreenExitSequence({
+            mouseTracking: this.mouseTrackingActive,
+        });
+        try {
+            if (typeof this.options.stdout.fd === 'number') {
+                writeSync(this.options.stdout.fd, sequence);
+            }
+            else {
+                this.rawStdoutWrite(sequence);
+            }
+        }
+        finally {
+            this.altScreenActive = false;
+            this.mouseTrackingActive = false;
+            this.shellTransitionPhase = undefined;
+        }
+    }
+    restoreManagedTerminal() {
+        const errors = [];
+        const guard = this.terminalExitGuard;
+        this.terminalExitGuard = undefined;
+        try {
+            guard?.();
+        }
+        catch (error) {
+            errors.push(error);
+        }
+        try {
+            this.restoreTrackedTerminalMode();
+        }
+        catch (error) {
+            errors.push(error);
+        }
+        if (errors.length === 1) {
+            throw errors[0];
+        }
+        if (errors.length > 1) {
+            throw new AggregateError(errors, 'Terminal restoration failed');
+        }
+    }
+    fenceRendererAfterUnmountFailure() {
+        this.isUnmounted = true;
+        this.hasPendingThrottledRender = false;
+        if (typeof this.throttledOnRender?.cancel === 'function') {
+            this.throttledOnRender.cancel();
+        }
+    }
     unmount(error) {
+        try {
+            this.unmountUnsafe(error);
+        }
+        catch (unmountError) {
+            this.fenceRendererAfterUnmountFailure();
+            try {
+                this.restoreManagedTerminal();
+            }
+            catch (restoreError) {
+                throw new AggregateError(
+                    [unmountError, restoreError],
+                    'Renderer unmount and terminal restoration both failed',
+                );
+            }
+            throw unmountError;
+        }
+        this.restoreManagedTerminal();
+    }
+    unmountUnsafe(error) {
         if (this.isUnmounted || this.isUnmounting) {
             return;
         }

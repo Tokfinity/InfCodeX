@@ -11,6 +11,7 @@ interface EngineInstance extends InstanceType<typeof Engine> {
     phase: "enter-alt-screen" | "exit-alt-screen",
   ) => void;
   clearTextSelection?: () => void;
+  registerTerminalExitGuard?: (guard: () => void) => () => void;
   commitInlineScrollback?: (options: {
     mode: "append" | "rebuild";
     text: string;
@@ -29,6 +30,7 @@ export interface RendererInstanceHandle {
   setShellMode?: (mode: "virtual" | "main-screen", mouseTracking?: boolean) => void;
   beginShellTransition?: (phase: "enter-alt-screen" | "exit-alt-screen") => void;
   clearTextSelection?: () => void;
+  registerTerminalExitGuard?: (guard: () => void) => () => void;
   commitInlineScrollback?: (options: {
     mode: "append" | "rebuild";
     text: string;
@@ -74,6 +76,9 @@ export default class KodaXRenderer implements RendererInstanceHandle {
   clearTextSelection = () => {
     this.engineInstance.clearTextSelection?.();
   };
+
+  registerTerminalExitGuard = (guard: () => void) =>
+    this.engineInstance.registerTerminalExitGuard?.(guard) ?? (() => undefined);
 
   commitInlineScrollback = (options: {
     mode: "append" | "rebuild";

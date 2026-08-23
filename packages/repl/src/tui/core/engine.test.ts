@@ -6,7 +6,9 @@ const mocks = vi.hoisted(() => {
   const stderrWrite = vi.fn();
   const stdoutOn = vi.fn();
   const stdoutOff = vi.fn();
+  const writeSync = vi.fn();
   const stdout = {
+    fd: 1,
     isTTY: true,
     rows: 4,
     columns: 80,
@@ -38,8 +40,14 @@ const mocks = vi.hoisted(() => {
     stderrWrite,
     stdoutOn,
     stdoutOff,
+    writeSync,
   };
 });
+
+vi.mock("node:fs", async (importOriginal) => ({
+  ...await importOriginal<typeof import("node:fs")>(),
+  writeSync: mocks.writeSync,
+}));
 
 vi.mock("is-in-ci", () => ({
   default: false,
@@ -117,6 +125,7 @@ import {
 } from "../substrate/ink/terminal-emulator.js";
 import ansiEscapes from "ansi-escapes";
 import { shouldSynchronize } from "./write-synchronized.js";
+import { buildAlternateScreenExitSequence } from "./termio.js";
 
 /**
  * Build the renderer.js return shape with a fully-populated `frame` so the
@@ -173,6 +182,62 @@ describe("tui engine (Phase 6: cell renderer is sole render path)", () => {
     mocks.stderrWrite.mockClear();
     mocks.stdoutOn.mockClear();
     mocks.stdoutOff.mockClear();
+    mocks.writeSync.mockClear();
+  });
+
+  it("restores the managed terminal when final rendering throws during unmount", () => {
+    const engine = new Engine({
+      stdout: mocks.stdout,
+      stdin: mocks.stdin,
+      stderr: mocks.stderr,
+      shellMode: "virtual",
+      exitOnCtrlC: false,
+      patchConsole: false,
+      debug: true,
+      kittyKeyboard: { mode: "disabled" },
+    } as ConstructorParameters<typeof Engine>[0]) as unknown as {
+      setAltScreenActive: (active: boolean, mouseTracking?: boolean) => void;
+      onRender: () => void;
+      unmount: () => void;
+    };
+    engine.setAltScreenActive(true, true);
+    mocks.renderTree.mockImplementation(() => {
+      throw new Error("final render failed");
+    });
+
+    expect(() => engine.unmount()).toThrow("final render failed");
+    expect(mocks.writeSync).toHaveBeenCalledWith(
+      1,
+      buildAlternateScreenExitSequence({ mouseTracking: true }),
+    );
+    expect(() => engine.onRender()).not.toThrow();
+  });
+
+  it("shares one terminal exit guard with an asynchronously unmounted component", () => {
+    const engine = new Engine({
+      stdout: mocks.stdout,
+      stdin: mocks.stdin,
+      stderr: mocks.stderr,
+      shellMode: "virtual",
+      exitOnCtrlC: false,
+      patchConsole: false,
+      debug: true,
+      kittyKeyboard: { mode: "disabled" },
+    } as ConstructorParameters<typeof Engine>[0]) as unknown as {
+      registerTerminalExitGuard: (guard: () => void) => () => void;
+      setAltScreenActive: (active: boolean, mouseTracking?: boolean) => void;
+      unmount: () => void;
+    };
+    const guard = vi.fn(() => engine.setAltScreenActive(false));
+    const removeGuard = engine.registerTerminalExitGuard(guard);
+    engine.setAltScreenActive(true, true);
+    mocks.renderTree.mockReturnValue(fakeRenderResult(80, 1, "final"));
+
+    engine.unmount();
+    removeGuard();
+
+    expect(guard).toHaveBeenCalledTimes(1);
+    expect(mocks.writeSync).not.toHaveBeenCalled();
   });
 
   it("main-screen: onRender writes through cell renderer (stdout receives bytes)", () => {

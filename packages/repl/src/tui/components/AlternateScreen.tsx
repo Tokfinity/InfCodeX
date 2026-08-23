@@ -1,4 +1,6 @@
+import { writeSync } from "node:fs";
 import React, { useInsertionEffect, useMemo } from "react";
+import { onExit as onProcessExit } from "signal-exit";
 // FEATURE_093 (v0.7.24): import Box + terminal hooks directly from
 // renderer-runtime to avoid the `tui/index.ts ↔
 // components/AlternateScreen.tsx` barrel cycle.
@@ -19,6 +21,22 @@ export interface AlternateScreenProps {
   mouseTracking?: boolean;
   enabled?: boolean;
   clearOnEnter?: boolean;
+}
+
+function writeExitSequence(
+  output: NodeJS.WriteStream,
+  writeRaw: (chunk: string) => boolean,
+  sequence: string,
+): void {
+  if (!("fd" in output) || typeof output.fd !== "number") {
+    writeRaw(sequence);
+    return;
+  }
+  try {
+    writeSync(output.fd, sequence);
+  } catch {
+    writeRaw(sequence);
+  }
 }
 
 export const AlternateScreen: React.FC<AlternateScreenProps> = ({
@@ -42,22 +60,40 @@ export const AlternateScreen: React.FC<AlternateScreenProps> = ({
 
     const rendererInstance = getRendererInstance(output);
     rendererInstance?.setShellMode?.("virtual", mouseTracking);
+    let restored = false;
+    const restoreTerminal = () => {
+      if (restored) return;
+      restored = true;
+      rendererInstance?.beginShellTransition?.("exit-alt-screen");
+      rendererInstance?.clearTextSelection?.();
+      writeExitSequence(
+        output,
+        writeRaw,
+        buildAlternateScreenExitSequence({ mouseTracking }),
+      );
+      rendererInstance?.setAltScreenActive?.(false);
+    };
+    const removeRendererExitGuard =
+      rendererInstance?.registerTerminalExitGuard?.(restoreTerminal)
+      ?? (() => undefined);
+    const removeExitGuard = onProcessExit(restoreTerminal, { alwaysLast: true });
+
     rendererInstance?.beginShellTransition?.("enter-alt-screen");
-    if (!writeRaw(
+    writeRaw(
       buildAlternateScreenEnterSequence({
         mouseTracking,
         clearOnEnter,
       }),
-    )) {
-      return;
-    }
+    );
     rendererInstance?.setAltScreenActive?.(true, mouseTracking);
 
     return () => {
-      rendererInstance?.beginShellTransition?.("exit-alt-screen");
-      rendererInstance?.clearTextSelection?.();
-      rendererInstance?.setAltScreenActive?.(false);
-      writeRaw(buildAlternateScreenExitSequence({ mouseTracking }));
+      removeExitGuard();
+      try {
+        restoreTerminal();
+      } finally {
+        removeRendererExitGuard();
+      }
     };
   }, [clearOnEnter, isInteractiveStdout, mouseTracking, output, writeRaw]);
 

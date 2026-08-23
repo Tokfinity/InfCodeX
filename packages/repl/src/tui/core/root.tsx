@@ -104,6 +104,7 @@ export interface TuiRendererInstance {
     phase: "enter-alt-screen" | "exit-alt-screen",
   ) => void;
   clearTextSelection?: () => void;
+  registerTerminalExitGuard?: (guard: () => void) => () => void;
   /**
    * FEATURE_214 — commit finalized inline history to native scrollback through the
    * engine (never raw writes, which leave prevFrame/lastOutputHeight stale). The

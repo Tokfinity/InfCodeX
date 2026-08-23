@@ -14,6 +14,12 @@ All notable changes to this project will be documented in this file.
   release in the background without blocking unrelated work. Runtime shutdown
   also verifies exact daemon and supervisor process generations, so PID reuse or
   an interrupted exit cannot strand a manual-recovery requirement.
+- Learning-store coordination now reclaims a stale zero-byte owner lock left by
+  a crash between exclusive creation and owner-record publication, while valid
+  live owners and non-empty malformed records remain fail-closed. Fullscreen TUI
+  teardown also performs an exit-safe terminal restore from the renderer's
+  guaranteed unmount boundary, including when final rendering or React cleanup
+  throws; terminal write backpressure no longer disables cleanup (Issue 301).
 
 ---
 

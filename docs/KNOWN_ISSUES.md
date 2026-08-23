@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-08-21_
+_Last Updated: 2026-08-23_
 
 ---
 
@@ -103,6 +103,7 @@ by the focused sandbox, lineage, REPL, and coding-runtime tests.
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 301 | High | Resolved | Stale empty learning lock could stall interactive work and TUI teardown lacked a direct terminal restore fallback | shared learning lock / fullscreen TUI | v0.7.95 | 2026-08-23 | 2026-08-23 |
 | 300 | Medium | Resolved | Sandboxed git `safe.directory` trust set misaligned with authorized roots | v0.7.93 ASRT 0.0.65 git trust | v0.7.94 | 2026-08-20 | 2026-08-21 |
 | 299 | High | Resolved | Previous-boot foreign Windows ACL markers blocked SDK-owned Runtime exit settlement | v0.7.91 Runtime exit settlement | v0.7.93 | 2026-08-19 | 2026-08-19 |
 | 298 | High | Resolved | Provider SDK abort wrapper bypasses managed Stop classification and becomes a credential failure | v0.7.69 managed run-scoped credentials | v0.7.93 | 2026-08-19 | 2026-08-19 |
@@ -291,6 +292,56 @@ by the focused sandbox, lineage, REPL, and coding-runtime tests.
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 301: Stale empty learning lock could stall interactive work and TUI teardown lacked a direct terminal restore fallback
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: shared learning lock / fullscreen TUI
+- **Fixed**: v0.7.95
+- **Created**: 2026-08-23
+- **Resolved**: 2026-08-23
+
+#### Original Problem
+
+A process crash between exclusive lock-file creation and publication of its
+owner record can leave a zero-byte learning or Memory review authority lock.
+After the 30-second stale threshold, the shared lock helper still treated the
+missing owner as permanently unverifiable. Review work using the five-minute
+authority timeout could therefore stall or repeatedly defer until the file was
+removed outside the application.
+
+The fullscreen TUI paired alternate-screen and mouse-tracking setup only with
+the React effect cleanup. If process teardown reached an exit boundary before
+that cleanup ran, the parent shell could inherit SGR mouse tracking and display
+clicks as escape sequences such as `[<...M`.
+
+#### Root Cause
+
+The stale-owner predicate required a parseable dead owner even for an empty
+file that never published ownership. Terminal restoration also relied on a
+successful React effect cleanup. A later process-exit callback alone is not a
+guarantee because an earlier renderer-exit listener can throw and stop the
+listener chain. The enter write's `false` return was also treated as failure,
+although Node streams use it to report accepted data plus backpressure; that
+path returned without arming cleanup.
+
+#### Resolution
+
+An unchanged zero-byte owner file older than 30 seconds is now reclaimable.
+Removal remains fenced by a second stat and byte comparison, valid live owners
+are never stolen, and non-empty malformed records remain fail-closed. The
+alternate-screen component registers one idempotent restore guard with both
+the renderer and the process-exit fallback before entering fullscreen. The
+renderer invokes that shared guard from its guaranteed `unmount()` boundary,
+using a synchronous descriptor write where available; an exception first
+fences and cancels later renders. Final rendering happens before the restore
+on the healthy path, while a render or React-cleanup exception still disables
+mouse tracking and leaves the alternate screen before it propagates. Stream
+backpressure no longer bypasses guard registration.
+
+See
+[`ISSUE_301_v0.7.95_REGRESSION_GUIDE.md`](test-guides/ISSUE_301_v0.7.95_REGRESSION_GUIDE.md).
 
 ### 300: Sandboxed git `safe.directory` trust set misaligned with authorized roots
 
@@ -12876,7 +12927,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 179 (27 Open, 152 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 180 (27 Open, 153 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
