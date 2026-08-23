@@ -2,10 +2,10 @@
 
 > Last updated: 2026-08-23
 >
-> Current implementation baseline: `@kodax-ai/kodax@0.7.94`
-> (`v0.7.94` Git tag / GitHub Release; npm publication remains manual)
-> Current Unreleased source advances Windows `sandboxRuntime` to `5` and local
-> `runtimeExitSettlement` to `2`; version assignment remains a maintainer step.
+> Current implementation baseline: `@kodax-ai/kodax@0.7.95`
+> (`v0.7.95` Git tag / GitHub Release; npm publication remains manual)
+> This baseline advertises Windows `sandboxRuntime:5` and
+> `runtimeExitSettlement:2`; `crashOutcomeModel:2` is unchanged.
 >
 > This document describes the current product. Historical pre-v0.7.43
 > chain/harness designs have been removed from this current PRD because they no
@@ -149,7 +149,7 @@ receives `runId`, reconnect recovery must query and await that same Run and
 must never replay `runs.start()` or its provider/tool effects. Safe failure
 categories remain bounded and credential-redacted.
 
-The current Unreleased maintenance source closes the remaining automatic-
+The v0.7.95 maintenance release closes the remaining automatic-
 recovery and explicit-Skill gaps without introducing a new feature slot. Stale
 zero-byte, malformed, or truncated learning locks are reclaimed only after the
 stale boundary and an unchanged bytes/stat check. Same-boot Windows
@@ -159,7 +159,11 @@ does not require manual marker deletion. Explicit Skill execution stores the
 exact user query as canonical history, rejects multiple active references, and
 denies tools when `PreToolUse` fails or returns malformed JSON. A terminal Run
 whose status cannot be persisted publishes `unknown`, or invalidates live
-Session observers if the event journal is fenced too.
+Session observers if the event journal is fenced too. The coding runtime
+finalizes its authoritative result before emitting the public completion
+signal so A2A cannot publish an empty successful answer, and Windows sandbox
+cleanup keeps ACL-mutating owners recoverable through background retries
+instead of manual marker deletion.
 
 ## 2. Target Users
 

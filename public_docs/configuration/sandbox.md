@@ -70,8 +70,14 @@ toolchain, and network policy can share one Windows policy group across KodaX
 processes. An incompatible policy or sandbox infrastructure failure before
 target start returns the already-authorized command to normal permission
 execution. Runtime sandbox capability v3 first fenced older daemon policy
-revisions in v0.7.86. The current contract is `sandboxRuntime:4`: auto-start
-replaces an idle v3-or-older daemon and fails closed while it is busy. Do not
+revisions in v0.7.86. The current contract is `sandboxRuntime:5`: auto-start
+replaces an idle v4-or-older Windows daemon and fails closed while it is busy.
+The v5 advance marks self-healing Windows cleanup
+(`delayedEffectDrainRecovery: 'automatic'`,
+`sameBootAclRecovery: 'sandbox-user-process-probe'`): the machine-global
+cleanup Job is recoverable across reboots, recovery tickets repair without
+operator input, and background retries observe the exact daemon and supervisor
+process generations. Do not
 delete `model-filesystem-effects.lock` by hand; on Windows the coordinator
 state lives under `C:\ProgramData\KodaX\sandbox-runtime\runtime\`.
 

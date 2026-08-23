@@ -77,7 +77,7 @@ Required assertions:
 
 Windows manual acceptance:
 
-1. With a current Unreleased build, create a linked worktree through the KodaX
+1. With a current v0.7.94+ build, create a linked worktree through the KodaX
    worktree tool and start a background service inside it.
 2. In the same and then a later turn, edit an existing file and create a new
    file in that worktree. Neither operation may report an active model

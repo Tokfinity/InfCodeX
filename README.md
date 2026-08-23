@@ -726,23 +726,29 @@ permission UI, and recovers stale prepared Session tails through an
 authoritative merge. Background persistence failures are surfaced as
 diagnostics rather than hidden.
 
-**Current Unreleased maintenance:** stale learning locks with zero-byte,
+**v0.7.95 release:** stale learning locks with zero-byte,
 malformed, or truncated owner records self-recover after an unchanged
 bytes/stat check. Same-boot Windows `unconfirmed-owner` cleanup retries until
 the sandbox-user SID is proven idle, without requiring marker deletion.
-Text cleanup retains its execution attestation and retries transient
-workspace cleanup, policy reset, and effect-lease release automatically.
+Windows sandbox cleanup keeps every ACL-mutating helper and command owner in a
+recoverable machine-global Job and retries process drain, ACL reset, and
+effect-fence release in the background; Runtime shutdown verifies exact daemon
+and supervisor process generations. Text cleanup retains its execution
+attestation and retries transient workspace cleanup, policy reset, and
+effect-lease release automatically.
 Canonical history stores the exact explicit-Skill query, multiple Skill
 references are rejected, and failed/malformed `PreToolUse` hooks deny the tool.
 Terminal persistence uncertainty publishes `unknown` or invalidates live
 Session observers for resnapshot. A status-lock cleanup failure after a
 committed terminal is reconciled only when the reread status exactly matches
 the local proposal, then publishes one terminal event; different authority
-still wins. Current source advertises Windows
-`sandboxRuntime:5` and local `runtimeExitSettlement:2`; version assignment and
-publication remain maintainer steps.
+still wins. The coding runtime finalizes its authoritative result before
+emitting the public completion signal, so A2A cannot publish an empty
+successful answer (Issue 302). This release advertises Windows
+`sandboxRuntime:5` and `runtimeExitSettlement:2`. See the
+[v0.7.95 release checklist](docs/release.md#v0795-release-preparation).
 
-**Current Unreleased dynamic-worktree correction:** KodaX-created linked
+**v0.7.95 dynamic-worktree correction:** KodaX-created linked
 worktrees join the exact Session shell/text sandbox policy before their paths
 are returned, persist across later Runs, and are revalidated against the same
 Git common directory. Removal revokes the root; unrelated siblings remain

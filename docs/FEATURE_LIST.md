@@ -11,8 +11,8 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.94` (Git tag / GitHub Release) |
-| Current package version | `@kodax-ai/kodax@0.7.94` release (npm publication remains manual) |
+| Current released version | `v0.7.95` (Git tag / GitHub Release) |
+| Current package version | `@kodax-ai/kodax@0.7.95` release (npm publication remains manual) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `78` |
 | InProgress | `1` |
@@ -28,7 +28,7 @@
 |---|---:|---|---|
 | Completed | 55 | `294, 293, 292, 291, 290, 289, 286, 284, 281, 277, 276, 263, 275, 274, 273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `293` and `294` are complete in the v0.7.89 release; `292`, `291`, `290`, and `289` shipped in v0.7.85. npm publication remains manual. |
 | InProgress | 1 | `225` | `225` remains the bounded v0.8.25 cleanup (moved from v0.7.105 on 2026-08-08; slid v0.8.15 -> v0.8.25 on 2026-08-20). |
-| Planned, near-term | 0 | `-` | `v0.7.94` released concurrent sandboxed text mutations, Issue 300 git trust, Skill invocation, Runtime recovery, and sandbox/skill lifecycle hardening; Issue 256 descendant-closure remains open and npm publication remains manual. |
+| Planned, near-term | 0 | `-` | `v0.7.95` released self-healing Windows sandbox cleanup plus Issue 301 lock/terminal/Skill recovery and Issue 302 completion finalization; Issue 256 descendant-closure remains open and npm publication remains manual. |
 | Planned, 0.8.x | 10 | `278, 279, 282, 283, 285, 280, 287, 288, 265, 105` | `v0.8.10` -> `v0.8.11` -> `v0.8.13` -> `v0.8.14` -> `v0.8.15` -> `v0.8.20` -> `v0.8.25` |
 | Planned, 0.9.x | 6 | `007, 030, 093, 113, 139, 262` | `v0.9.0` -> `v0.9.5` -> `v0.9.7` -> `v0.9.25` |
 | Reviewed out, 2026-07-12 | 6 | `244, 231, 235, 238, 232, 108` | Shelved, deferred, absorbed, or cancelled after the post-v0.7.70 roadmap review; F105 was restored by the 2026-07-29 MoA redesign. |
@@ -556,6 +556,44 @@ Agent lineage, Coding runtime, and REPL persistence system-code fixes; no
 fail-closed safety boundary is weakened.
 
 The release checklist is [docs/release.md](release.md#v0790-release-preparation).
+
+---
+
+## v0.7.95 Release Record
+
+`v0.7.95` is a non-Feature maintenance release. It closes Issues 301 and 302
+plus the Windows sandbox recovery layer, and advances Windows
+`sandboxRuntime` to `5` and `runtimeExitSettlement` to `2`
+(`crashOutcomeModel:2` unchanged).
+
+Windows sandbox cleanup is self-healing: the machine-global cleanup Job is
+recoverable across reboots, recovery tickets repair without operator input,
+background retries observe the exact daemon and supervisor process
+generations, and dynamic worktrees register their cleanup policy at creation.
+Same-boot `unconfirmed-owner` recovery retries automatically and clears only
+after an exact sandbox-user SID-idle proof.
+
+Issue 301 reclaims learning locks whose owner data is stale zero-byte,
+malformed, or truncated through unchanged bytes/stat verification, and
+restores the terminal after fullscreen TUI teardown. Explicit Skill execution
+separates exact canonical user input from execution overlays, rejects
+multiple active references, and treats `PreToolUse` failure as a denial.
+Terminal Run persistence failure publishes `unknown` (or
+`run_settlement_not_persisted`) and invalidates live Session observations
+when no durable event can be committed; a terminal status rename that
+commits before later cleanup throws is reread once and emitted exactly once.
+
+Issue 302 delays the coding runtime's public `onComplete` completion signal
+until extension completion and asynchronous result finalization have produced
+the authoritative `KodaXResult`, including the lost-executor-Promise fallback
+path. A2A responses and other completion subscribers can no longer observe an
+empty successful answer before the coding result settles.
+
+Issue 256 remains Open: this slice does not prove descendant closure after an
+intermediate parent exits. FEATURE_287 remains planned for a later 0.8.x slot
+and is not shipped here.
+
+The release checklist is [docs/release.md](release.md#v0795-release-preparation).
 
 ---
 
@@ -1567,7 +1605,7 @@ archived staging, `v0.8.15` cancelled FEATURE_125 design) were preserved verbati
 
 ## 2026-08-16: FEATURE_294 — Host Tools first-class visibility
 
-- Status: Implemented (Unreleased, targets `v0.7.89`)
+- Status: Implemented (released in `v0.7.89`)
 - Design: [v0.7.89.md](features/v0.7.89.md)
 - Summary: run-bound host tools materialize into the agent tool table as
   run-scoped definitions (never in `TOOL_REGISTRY`), the cached capability

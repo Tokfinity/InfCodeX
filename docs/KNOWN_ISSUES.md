@@ -795,7 +795,7 @@ See
 - **Priority**: High
 - **Status**: Resolved
 - **Introduced**: v0.7.80 managed-run-context stripping
-- **Fixed**: Unreleased
+- **Fixed**: v0.7.89 release
 - **Created**: 2026-08-16
 - **Resolved**: 2026-08-16
 
@@ -956,7 +956,7 @@ nested Session-file write, so it does not duplicate temp-write/fsync/rename.
 - Priority: High
 - Status: Resolved
 - Introduced: v0.7.69 owner-policy fencing
-- Fixed: Unreleased
+- Fixed: v0.7.86 release
 - Created: 2026-08-11
 - Resolved: 2026-08-11
 

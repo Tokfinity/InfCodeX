@@ -2,11 +2,10 @@
 
 > Last updated: 2026-08-23
 >
-> Current published baseline: `v0.7.94`
-> (`@kodax-ai/kodax@0.7.94`; `sandboxRuntime:4`, `crashOutcomeModel:2`;
+> Current published baseline: `v0.7.95`
+> (`@kodax-ai/kodax@0.7.95`; Windows `sandboxRuntime:5`,
+> `runtimeExitSettlement:2`, `crashOutcomeModel:2`;
 > npm publication remains manual)
-> Current Unreleased source advertises Windows `sandboxRuntime:5` and local
-> `runtimeExitSettlement:2`; release/version assignment remains manual.
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -23,7 +22,15 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The published package is `@kodax-ai/kodax@0.7.94`. The v0.7.94 maintenance
+The published package is `@kodax-ai/kodax@0.7.95`. The v0.7.95 maintenance
+release makes Windows sandbox cleanup self-healing: the machine-global cleanup
+Job is recoverable across reboots, recovery tickets repair without operator
+input, background retries observe the exact daemon and supervisor process
+generations, and dynamic worktrees register their cleanup policy at creation.
+Stale learning locks and fullscreen terminal teardown are reclaimed safely
+(Issue 301), and the coding runtime defers its completion signal until the
+authoritative `KodaXResult` is finalized so A2A answers can no longer publish
+an empty success (Issue 302). The v0.7.94 maintenance
 slice lets Runtime text tools overlap a compatible live Bash lease through
 the same ASRT workspace policy, rejects hard-linked sandboxed targets, trusts
 Windows git `safe.directory` for authorized repo roots only (Issue 300), reads
@@ -35,7 +42,7 @@ omits the concurrent text sandbox at Run start. Runtime advertises
 discovery. Invalid `allowed-tools` and malformed hook JSON are diagnosed;
 `PostToolUse` still runs if an embedder result observer throws. Run settlement
 observes finalization rejections and recovers an admitted `runId` without
-replaying `runs.start()`. The current Unreleased maintenance layer
+replaying `runs.start()`. The v0.7.95 maintenance release
 automatically retries same-boot Windows `unconfirmed-owner` recovery and clears
 it only after an exact sandbox-user SID-idle proof. Learning locks with stale
 zero-byte, malformed, or truncated owner data are reclaimed through unchanged
@@ -86,8 +93,8 @@ The v0.7.94 source hardening keeps Run convergence inside
 `src/sdk-runtime.ts`: successful and failed executor callbacks feed one
 observed settlement chain, durable status outranks event-publication failure,
 and total terminal persistence failure records
-`run_settlement_not_persisted` while retaining the Session fence. Current
-Unreleased source additionally handles a terminal status rename that commits
+`run_settlement_not_persisted` while retaining the Session fence. The
+v0.7.95 source additionally handles a terminal status rename that commits
 before later status-lock cleanup throws: one retry may treat the reread record
 as the local commit only when the complete public status is deeply equal; it
 then emits the terminal event exactly once. A different terminal record
@@ -147,7 +154,7 @@ ordering is owned by `packages/coding/src/task-engine/runner-driven.ts`:
 `saveManagedRunBoundary` precedes `observer.completed`, and
 `scheduleManagedTaskMaintenance` projects repo-intelligence and task artifacts
 after the Run is no longer active. `src/sdk-runtime.ts` keeps managed
-`onComplete` non-authoritative and requires `sandboxRuntime:4` plus
+`onComplete` non-authoritative and requires `sandboxRuntime:5` plus
 `crashOutcomeModel:2` so idle older daemons are replaced.
 
 The v0.7.94 direct-text path narrows this coordinator without deleting it.

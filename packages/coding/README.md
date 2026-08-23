@@ -182,14 +182,23 @@ observes finalization rejections and recovers an admitted `runId` through
 [SDK Embedder Guide](../../public_docs/sdk/embedder-guide.md)
 for host capability requirements.
 
-Current Unreleased source advances Windows `sandboxRuntime` to `5` and local
-`runtimeExitSettlement` to `2`. Same-boot ACL recovery automatically retries a
-sandbox-user SID probe before clearing an `unconfirmed-owner` ticket. Terminal
+The v0.7.95 release advances Windows `sandboxRuntime` to `5` and local
+`runtimeExitSettlement` to `2`. Windows sandbox cleanup is self-healing: the
+machine-global cleanup Job is recoverable across reboots, recovery tickets
+repair without operator input, background retries observe the exact daemon and
+supervisor process generations, and dynamic worktrees register their cleanup
+policy at creation. Same-boot ACL recovery automatically retries a
+sandbox-user SID probe before clearing an `unconfirmed-owner` ticket. Learning
+locks with stale zero-byte, malformed, or truncated owner data are reclaimed
+through unchanged bytes/stat verification, and fullscreen TUI teardown restores
+the terminal (Issue 301). Terminal
 status persistence failure converges to `unknown`; if the event journal is also
 fenced, active Session observations are invalidated for a mandatory resnapshot.
 Explicit Skill execution keeps exact `rawUserInput` in canonical history,
 rejects multiple active Skill references, and fails closed when a `PreToolUse`
-hook crashes or returns malformed JSON.
+hook crashes or returns malformed JSON. The coding runtime finalizes its
+authoritative `KodaXResult` before emitting the public completion signal, so
+A2A responses cannot publish an empty successful answer (Issue 302).
 
 ## 安装 / 导入
 

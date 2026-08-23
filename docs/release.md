@@ -127,6 +127,74 @@ Before tagging, all of the following must be true:
 
 Only after these gates pass may the exact commit be tagged `v0.7.90`.
 
+## v0.7.95 release preparation
+
+Release state: the root package, all four workspace packages, and every
+`package-lock.json` workspace entry must be version `0.7.95`. This maintenance
+release is prepared for the `v0.7.95` tag and GitHub Release; npm publication
+remains a separate manual operator step. It includes every commit after
+`v0.7.94`:
+
+- Windows sandbox cleanup is self-healing: the machine-global cleanup Job is
+  recoverable across reboots, recovery tickets repair without operator input,
+  and background retries observe the exact daemon and supervisor process
+  generations before acting;
+- same-boot `unconfirmed-owner` recovery retries automatically and clears only
+  after an exact sandbox-user SID-idle proof, with text cleanup attestations
+  retained across the retry;
+- dynamic worktrees register their cleanup policy at creation instead of
+  inheriting an implicit one;
+- Issue 301: learning locks whose owner data is stale zero-byte, malformed, or
+  truncated are reclaimed through unchanged bytes/stat verification; fullscreen
+  TUI teardown restores the terminal; Explicit Skill execution separates exact
+  canonical user input from execution overlays, rejects multiple active
+  references, and treats `PreToolUse` failure as a denial; terminal Run
+  persistence failure publishes `unknown` (or `run_settlement_not_persisted`)
+  and invalidates live Session observations when no durable event can be
+  committed, while a terminal status rename that commits before later cleanup
+  throws is reread once and emitted exactly once;
+- Issue 302: the coding runtime delays its public `onComplete` completion
+  signal until extension completion and asynchronous result finalization have
+  produced the authoritative `KodaXResult`, including the lost-executor-Promise
+  fallback path, so A2A responses can no longer publish an empty successful
+  answer;
+- Windows `sandboxRuntime` advances `4 -> 5` and `runtimeExitSettlement`
+  advances `1 -> 2`; `crashOutcomeModel:2` is unchanged;
+- synchronized product, architecture, detailed-design, public SDK, release
+  checklist, feature index, known-issue, regression-guide, and `kodax_manual`
+  content.
+
+The release does not add a Feature slot and does not close Issue 256's
+lost-ancestor descendant-closure boundary. No system implementation is
+silently changed by the release-documentation pass.
+
+Before tagging, all of the following must be true:
+
+1. all package versions, `CHANGELOG.md`, README/README_CN, PRD/HLD/DD/ADR,
+   feature tracker, known-issue record, public SDK guide, this checklist,
+   `docs/features`, and `kodax_manual` agree on v0.7.95;
+2. focused tests cover the recoverable cleanup Job, self-healing recovery
+   tickets, generation-checked background retries, dynamic-worktree policy
+   registration, same-boot SID-idle clearing, stale learning-lock reclamation,
+   fullscreen TUI teardown, Explicit Skill exact-input / multi-reference /
+   `PreToolUse` denial, terminal `unknown` / rename-reread settlement, the
+   delayed `onComplete` finalization contract, and the existing v0.7.94
+   regression contracts;
+3. TypeScript, config-template checks, bundled SDK/Worker/sidecar builds, fast,
+   unit, contract, and system suites pass, with any host-only Windows sandbox
+   limitation documented rather than silently changing system code;
+4. the packed `kodax-ai-kodax-0.7.95.tgz` is inspected and smoke-installed into
+   an empty consumer for the root package and all 12 SDK subpaths;
+5. root and `docs/features` are clean, with the submodule commit reachable from
+   its remote; `.codex*` local artifacts and alternate pnpm metadata are ignored
+   and not tracked;
+6. GitHub CI is green for the exact commit on Node 20/22, Unix Runtime,
+   Windows Shell, and packaged Electron gates; the tag-triggered Release job
+   produces all platform archives, sidecars, and `SHA256SUMS`. npm publication is
+   left to the maintainer.
+
+Only after these gates pass may the exact commit be tagged `v0.7.95`.
+
 ## v0.7.94 release preparation
 
 Release state: the root package, all four workspace packages, and every

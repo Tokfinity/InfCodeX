@@ -2,11 +2,10 @@
 
 > Last updated: 2026-08-23
 >
-> Current published baseline: `v0.7.94`
-> (`@kodax-ai/kodax@0.7.94`; `sandboxRuntime:4`, `crashOutcomeModel:2`;
+> Current published baseline: `v0.7.95`
+> (`@kodax-ai/kodax@0.7.95`; Windows `sandboxRuntime:5`,
+> `runtimeExitSettlement:2`, `crashOutcomeModel:2`;
 > npm publication remains manual)
-> Current Unreleased source advertises Windows `sandboxRuntime:5` and local
-> `runtimeExitSettlement:2`; release/version assignment remains manual.
 >
 > This HLD is intentionally current-state only. The old pre-v0.7.43
 > chain/harness model has been removed from this active design document because
@@ -124,7 +123,7 @@ event append; failure to persist either authority produces an explicit
 managed-child cleanup errors are observed and recorded instead of escaping as
 process-global Promise rejections. Invalid Skill `allowed-tools` entries and
 malformed hook JSON are diagnosed; `PostToolUse` still runs if an embedder
-result observer throws. Current Unreleased source additionally reconciles a
+result observer throws. The v0.7.95 release additionally reconciles a
 status-lock cleanup error after a terminal commit only when the reread status
 exactly equals the local proposal; that path still emits one terminal event,
 while any different authority wins.

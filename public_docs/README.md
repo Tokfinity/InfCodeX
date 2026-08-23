@@ -2,10 +2,14 @@
 
 Public documentation for KodaX users and SDK integrators.
 
-The current release is `v0.7.94`. Its SDK guidance carries concurrent
+The current release is `v0.7.95`. Its SDK guidance carries self-healing
+Windows sandbox cleanup (Windows `sandboxRuntime:5`, `runtimeExitSettlement:2`),
+Issue 301 learning-lock / fullscreen-terminal / Explicit-Skill recovery, and
+Issue 302 coding-result finalization before the public completion signal, on
+top of the v0.7.94 concurrent
 sandboxed text mutations, Issue 300 authorized-root git trust, scheduled
 shutdown failure reporting, missing-workspace Run start, and
-`conversationHistory:2` on top of the
+`conversationHistory:2`, the
 v0.7.93 failed-exit fast settlement, previous-boot ACL recovery, and isolated
 provider abort classification, plus the v0.7.92 filesystem-effect
 operation-token coordinator, recorded-release owners, managed Session-before-

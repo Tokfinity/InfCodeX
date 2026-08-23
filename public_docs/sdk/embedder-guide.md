@@ -5,10 +5,15 @@
 > extensions, custom CLIs. If you are an end-user running the `kodax`
 > command-line tool, see the root [README.md](../../README.md) instead.
 
-This guide reflects the released `v0.7.94` SDK plus the current Unreleased
-maintenance contract. npm publication and version assignment remain manual
-maintainer steps. Current source advertises Windows `sandboxRuntime:5`,
-`runtimeExitSettlement:2`, and `crashOutcomeModel:2`, and adds concurrent sandboxed text mutations,
+This guide reflects the released `v0.7.95` SDK. npm publication and version
+assignment remain manual maintainer steps. The SDK advertises Windows
+`sandboxRuntime:5`, `runtimeExitSettlement:2`, and `crashOutcomeModel:2`, and
+adds self-healing Windows sandbox cleanup (a recoverable machine-global
+cleanup Job, unattended recovery tickets, generation-checked background
+retries, dynamic-worktree policy registration), stale learning-lock
+reclamation with fullscreen terminal teardown, exact-input Explicit Skill
+execution, and coding-result finalization before the public completion
+signal, on top of concurrent sandboxed text mutations,
 Session-persisted and Git-backlink-validated KodaX worktree roots (including
 strict `core.worktree` identity for a real submodule Session root),
 authorized-root git trust (`gitSafeDirectory: authorized-repo-roots`),
