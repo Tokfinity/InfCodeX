@@ -682,7 +682,7 @@ describe('learning proposal store', () => {
     await rm(lockPath, { force: true });
   });
 
-  it('does not reclaim a malformed stale proposal-store lock', async () => {
+  it('reclaims a malformed stale proposal-store lock without manual cleanup', async () => {
     const dir = await createTempDir('kodax-learning-store-malformed-lock-');
     const storePath = join(dir, 'proposals.json');
     const lockPath = `${storePath}.lock`;
@@ -699,21 +699,18 @@ describe('learning proposal store', () => {
         skillName: 'malformed-lock',
         whyDurable: 'Unparseable ownership must not be guessed.',
         trigger: 'When a store lock is damaged.',
-        changeSummary: 'Fail closed on malformed lock ownership.',
+        changeSummary: 'Reclaim only after an unchanged bytes/stat check.',
       },
     });
     if (proposal.destination === 'discard' || proposal.destination === 'trace_only') {
       throw new Error('test setup expected a reviewable proposal');
     }
 
-    const update = upsertLearningProposal(storePath, proposal);
-    const settledEarly = await Promise.race([
-      update.then(() => true),
-      new Promise<false>((resolve) => setTimeout(() => resolve(false), 100)),
-    ]);
-    expect(settledEarly).toBe(false);
-    await rm(lockPath, { force: true });
-    await expect(update).resolves.toMatchObject({ proposalId: 'p-malformed-lock' });
+    await expect(upsertLearningProposal(storePath, proposal))
+      .resolves.toMatchObject({ proposalId: 'p-malformed-lock' });
+    await expect(stat(lockPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await readLearningProposalStore(storePath)).proposals
+      .map((entry) => entry.proposalId)).toEqual(['p-malformed-lock']);
   });
 
   it('stores reviewable proposals and records rejection feedback', async () => {
